@@ -26,6 +26,9 @@ import {
   Lightbulb,
   Play,
   Pause,
+  RotateCcw,
+  ZoomIn,
+  Move,
 } from "lucide-react";
 import type { Product, ProductConfig, LeatherColor, LeatherTextureType } from "@/types/product";
 import { DEFAULT_PRODUCT_CONFIG, configToSettingsJson } from "@/types/product";
@@ -52,6 +55,8 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
   const [hasChanges, setHasChanges] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isAutoRotating, setIsAutoRotating] = useState(true);
+  const [mobileControlsExpanded, setMobileControlsExpanded] = useState(false);
+  const [sheetDragStart, setSheetDragStart] = useState<number | null>(null);
   const [pendingFiles, setPendingFiles] = useState<PendingFiles>({
     surface: null,
     customTexture: null,
@@ -294,64 +299,303 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
   return (
     <div className="h-screen flex flex-col bg-background">
       {/* Header */}
-      <header className="bg-card/80 backdrop-blur-sm border-b px-4 py-3 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-3">
+      <header className="bg-card/80 backdrop-blur-sm border-b px-2 sm:px-4 py-2 sm:py-3 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
           <Link href="/dashboard" onClick={handleBackClick}>
-            <Button variant="ghost" size="icon" className="shrink-0">
-              <ArrowLeft className="h-5 w-5" />
+            <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8 sm:h-10 sm:w-10">
+              <ArrowLeft className="h-4 w-4 sm:h-5 sm:w-5" />
             </Button>
           </Link>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <Input
               value={product.name}
               onChange={(e) => updateProduct({ name: e.target.value })}
-              className="font-semibold text-lg border-none shadow-none px-0 h-auto focus-visible:ring-0 bg-transparent truncate"
+              className="font-semibold text-base sm:text-lg border-none shadow-none px-0 h-auto focus-visible:ring-0 bg-transparent truncate"
             />
-            <p className="text-sm text-muted-foreground capitalize">
+            <p className="text-xs sm:text-sm text-muted-foreground capitalize">
               {product.type} cue
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 sm:gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleAutoRotate}
+            title={isAutoRotating ? "Pause auto-rotation" : "Start auto-rotation"}
+            className="h-8 w-8 sm:h-10 sm:w-10"
+          >
+            {isAutoRotating ? (
+              <Pause className="h-4 w-4 sm:h-5 sm:w-5" />
+            ) : (
+              <Play className="h-4 w-4 sm:h-5 sm:w-5" />
+            )}
+          </Button>
           <Button
             variant="ghost"
             size="icon"
             onClick={toggleBackground}
             title={isDarkBg ? "Light background" : "Dark background"}
+            className="h-8 w-8 sm:h-10 sm:w-10"
           >
             {isDarkBg ? (
-              <Sun className="h-5 w-5" />
+              <Sun className="h-4 w-4 sm:h-5 sm:w-5" />
             ) : (
-              <Moon className="h-5 w-5" />
+              <Moon className="h-4 w-4 sm:h-5 sm:w-5" />
             )}
           </Button>
-          <Button onClick={handleSave} disabled={saving || !hasChanges}>
+          <Button 
+            onClick={handleSave} 
+            disabled={saving || !hasChanges}
+            size="sm"
+            className="h-8 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm"
+          >
             {saving ? (
               <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                {uploading ? "Uploading..." : "Saving..."}
+                <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
+                <span className="hidden sm:inline ml-1">{uploading ? "Uploading..." : "Saving..."}</span>
               </>
             ) : (
               <>
-                <Save className="h-4 w-4" />
-                Save
+                <Save className="h-3 w-3 sm:h-4 sm:w-4" />
+                <span className="hidden sm:inline ml-1">Save</span>
               </>
             )}
           </Button>
         </div>
       </header>
 
-      {/* Main content */}
-      <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* 3D Preview */}
-        <div className="flex-1 relative min-w-0">
+      {/* Main content - stack vertically on mobile, side-by-side on larger screens */}
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0 relative">
+        {/* 3D Preview - full height on mobile */}
+        <div className="flex-1 relative min-w-0 h-full">
           <CuePreview key={product.id} product={product} config={config} onSceneReady={handleSceneReady} />
         </div>
 
-        {/* Sidebar */}
-        <div className="w-80 shrink-0 bg-card border-l overflow-y-auto">
+        {/* Mobile Bottom Sheet Overlay */}
+        {mobileControlsExpanded && (
+          <div 
+            className="lg:hidden fixed inset-0 bg-black/40 z-40 transition-opacity duration-300"
+            onClick={() => setMobileControlsExpanded(false)}
+            aria-hidden="true"
+          />
+        )}
+
+        {/* Mobile Bottom Sheet */}
+        <div 
+          className={`lg:hidden fixed bottom-0 left-0 right-0 bg-card border-t border-border rounded-t-2xl shadow-2xl transition-transform duration-300 ease-out z-50 ${
+            mobileControlsExpanded ? '' : 'translate-y-[calc(100%-56px)]'
+          }`}
+          style={{ height: '40vh' }}
+        >
+          {/* Drag handle */}
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => setMobileControlsExpanded(!mobileControlsExpanded)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setMobileControlsExpanded(!mobileControlsExpanded); }}
+            onTouchStart={(e) => {
+              setSheetDragStart(e.touches[0].clientY);
+            }}
+            onTouchMove={(e) => {
+              if (sheetDragStart === null) return;
+              const currentY = e.touches[0].clientY;
+              const diff = currentY - sheetDragStart;
+              // Swipe down to close (diff > 0), swipe up to open (diff < 0)
+              if (diff > 50 && mobileControlsExpanded) {
+                setMobileControlsExpanded(false);
+                setSheetDragStart(null);
+              } else if (diff < -50 && !mobileControlsExpanded) {
+                setMobileControlsExpanded(true);
+                setSheetDragStart(null);
+              }
+            }}
+            onTouchEnd={() => setSheetDragStart(null)}
+            className="w-full flex items-center justify-center py-4 active:bg-muted/30 transition-colors rounded-t-2xl cursor-pointer touch-none"
+            aria-label={mobileControlsExpanded ? "Collapse settings" : "Expand settings"}
+          >
+            <div className="w-12 h-1.5 rounded-full bg-muted-foreground/50" />
+          </div>
+          
+          {/* Scrollable content */}
+          <div className="overflow-y-auto px-4 pb-6" style={{ height: 'calc(40vh - 56px)' }}>
+            {/* Touch control hints */}
+            <div className="flex justify-center gap-4 text-xs text-muted-foreground mb-3 pb-3 border-b border-border">
+              <span className="flex items-center gap-1"><RotateCcw className="h-3 w-3" /> Drag to rotate</span>
+              <span className="flex items-center gap-1"><ZoomIn className="h-3 w-3" /> Pinch to zoom</span>
+              <span className="flex items-center gap-1"><Move className="h-3 w-3" /> Two-finger pan</span>
+            </div>
+            <div className="flex flex-col gap-3">
+              {/* Surface Upload */}
+              <CollapsibleCard
+                title="Surface"
+                icon={<Image className="h-4 w-4 text-primary" />}
+              >
+                <SurfaceUploader
+                  productId={product.id}
+                  currentUrl={product.surface_url}
+                  onFileSelect={handleSurfaceFileSelect}
+                  pendingFile={pendingFiles.surface?.file}
+                  pendingPreview={pendingFiles.surface?.preview}
+                  uploading={uploading && !!pendingFiles.surface}
+                />
+              </CollapsibleCard>
+
+              {/* Lighting Configuration */}
+              <CollapsibleCard
+                title="Lighting & Environment"
+                icon={<Lightbulb className="h-4 w-4 text-primary" />}
+              >
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="ambientLight-mobile">Ambient Light</Label>
+                    <Input
+                      id="ambientLight-mobile"
+                      type="number"
+                      min={0}
+                      max={2}
+                      step={0.05}
+                      value={config.ambientLight}
+                      onChange={(e) =>
+                        updateConfig({
+                          ambientLight: Math.min(2, Math.max(0, parseFloat(e.target.value) || 0)),
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="hemisphereLight-mobile">Hemisphere Light</Label>
+                    <Input
+                      id="hemisphereLight-mobile"
+                      type="number"
+                      min={0}
+                      max={2}
+                      step={0.05}
+                      value={config.hemisphereLight}
+                      onChange={(e) =>
+                        updateConfig({
+                          hemisphereLight: Math.min(2, Math.max(0, parseFloat(e.target.value) || 0)),
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="clearcoat-mobile">Clearcoat</Label>
+                    <Input
+                      id="clearcoat-mobile"
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={config.clearcoat}
+                      onChange={(e) =>
+                        updateConfig({
+                          clearcoat: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="bodyRoughness-mobile">Body Roughness</Label>
+                    <Input
+                      id="bodyRoughness-mobile"
+                      type="number"
+                      min={0}
+                      max={255}
+                      value={config.bodyRoughness}
+                      onChange={(e) =>
+                        updateConfig({
+                          bodyRoughness: Math.min(255, Math.max(0, parseInt(e.target.value) || 0)),
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+              </CollapsibleCard>
+
+              {/* Leather Options (only for leather type) */}
+              {product.type === "leather" && (
+                <>
+                  <CollapsibleCard
+                    title="Leather Options"
+                    icon={<Palette className="h-4 w-4 text-primary" />}
+                  >
+                    <LeatherPicker
+                      textureType={product.texture_type || "crocodile"}
+                      color={product.color || "black"}
+                      onTextureChange={(texture) =>
+                        updateProduct({ texture_type: texture })
+                      }
+                      onColorChange={(color) => updateProduct({ color })}
+                      onCustomTextureSelect={handleCustomTextureSelect}
+                      customTexturePending={pendingFiles.customTexture?.file}
+                      customTexturePreview={pendingFiles.customTexture?.preview}
+                      uploading={uploading && !!pendingFiles.customTexture}
+                    />
+                  </CollapsibleCard>
+
+                  <CollapsibleCard
+                    title="Material Settings"
+                    icon={<Settings className="h-4 w-4 text-primary" />}
+                  >
+                    <div className="flex flex-col gap-4">
+                      <div className="flex flex-col gap-2">
+                        <Label htmlFor="leatherRoughness-mobile">Roughness</Label>
+                        <Input
+                          id="leatherRoughness-mobile"
+                          type="number"
+                          min={0}
+                          max={255}
+                          value={config.leatherRoughness}
+                          onChange={(e) =>
+                            updateConfig({
+                              leatherRoughness: Math.min(255, Math.max(0, parseInt(e.target.value) || 0)),
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <Label htmlFor="normalStrength-mobile">Normal Strength</Label>
+                        <Input
+                          id="normalStrength-mobile"
+                          type="number"
+                          min={0}
+                          max={10}
+                          step={0.1}
+                          value={config.normalStrength}
+                          onChange={(e) =>
+                            updateConfig({
+                              normalStrength: Math.min(10, Math.max(0, parseFloat(e.target.value) || 0)),
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <Label htmlFor="textureScale-mobile">Texture Scale</Label>
+                        <Input
+                          id="textureScale-mobile"
+                          type="number"
+                          min={1}
+                          max={8}
+                          value={config.textureScale}
+                          onChange={(e) =>
+                            updateConfig({
+                              textureScale: Math.min(8, Math.max(1, parseInt(e.target.value) || 1)),
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+                  </CollapsibleCard>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Desktop Sidebar */}
+        <div className="hidden lg:flex lg:w-80 shrink-0 bg-card border-l overflow-y-auto flex-col">
           <div className="p-4 flex flex-col gap-4">
-            {/* 3D Controls - Moved to top */}
+            {/* 3D Controls */}
             <CollapsibleCard
               title="3D Controls"
               icon={<Info className="h-4 w-4 text-primary" />}

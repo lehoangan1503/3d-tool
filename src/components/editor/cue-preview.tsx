@@ -169,11 +169,11 @@ export function CuePreview({ product, config, settings, onSceneReady }: CuePrevi
   };
 
   return (
-    <div className="relative w-full h-full">
+    <div className="relative w-full h-full touch-none">
       <div
         ref={containerRef}
         className="w-full h-full"
-        style={{ minHeight: "400px" }}
+        style={{ minHeight: "250px" }}
       />
 
       {/* Loading overlay */}

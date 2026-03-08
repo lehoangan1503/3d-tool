@@ -1,0 +1,117 @@
+# Fixing `ERR_TOO_MANY_REDIRECTS` for 3d.next.lc
+
+Your `curl` output already shows the problem clearly.
+
+Both requests return:
+
+    location: https://3d.next.lc/
+    server: cloudflare
+
+That means **Cloudflare is doing the redirect**, not your nginx proxy
+and not your container.
+
+And the redirect is:
+
+    https://3d.next.lc  →  https://3d.next.lc
+
+which creates an infinite loop → `ERR_TOO_MANY_REDIRECTS`.
+
+------------------------------------------------------------------------
+
+# Root Cause
+
+Your **Cloudflare SSL mode is incorrect**.
+
+When Cloudflare is set to **Flexible SSL**, the request flow becomes:
+
+    Browser
+       ↓ HTTPS
+    Cloudflare
+       ↓ HTTP (because Flexible)
+    Your nginx-proxy
+       ↓ redirect to HTTPS
+    Cloudflare
+       ↓ HTTP again
+    repeat forever
+
+This produces a redirect loop.
+
+------------------------------------------------------------------------
+
+# Fix (Takes \~10 Seconds)
+
+Go to **Cloudflare Dashboard**
+
+    SSL/TLS → Overview
+
+Change the SSL mode from:
+
+    Flexible
+
+to:
+
+    Full
+
+or preferably:
+
+    Full (Strict)
+
+------------------------------------------------------------------------
+
+# Correct Architecture
+
+With proper configuration the request flow should look like:
+
+    Browser
+       ↓ HTTPS
+    Cloudflare
+       ↓ HTTPS
+    nginx-proxy (LetsEncrypt)
+       ↓ HTTP
+    Next.js container
+
+This avoids any redirect loop.
+
+------------------------------------------------------------------------
+
+# After Changing SSL Mode
+
+Clear Cloudflare cache:
+
+    Cloudflare → Caching → Purge Everything
+
+Then test again:
+
+    curl -I https://3d.next.lc
+
+Expected result:
+
+    200 OK
+    server: cloudflare
+
+You should **not** see another `301` redirect.
+
+------------------------------------------------------------------------
+
+# Optional (Recommended)
+
+Since you are already using **LetsEncrypt on your VPS**, you can disable
+Cloudflare proxying.
+
+In **Cloudflare DNS settings**:
+
+Turn the orange cloud **OFF** so it becomes:
+
+    DNS Only (grey cloud)
+
+Then traffic will go directly:
+
+    Browser → nginx-proxy → container
+
+This reduces complexity and prevents many SSL / redirect issues.
+
+------------------------------------------------------------------------
+
+# Most Likely Fix
+
+**Change Cloudflare SSL mode → Full (Strict).**

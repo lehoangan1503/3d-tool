@@ -45,3 +45,8 @@ coverage/
 *.pem
 *.key
 *.cert
+
+# Docker
+Dockerfile
+docker-compose.yml
+docker-compose*.yml

@@ -14,6 +14,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Preload 3D model for parallel loading with other assets */}
+        <link
+          rel="preload"
+          href="/models/cue-butt-leather.glb"
+          as="fetch"
+          crossOrigin="anonymous"
+        />
+      </head>
       <body className="antialiased min-h-screen">
         <ThemeProvider
           attribute="class"

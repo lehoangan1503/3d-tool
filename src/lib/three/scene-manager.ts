@@ -438,29 +438,29 @@ export class SceneManager {
     // Clear old textures
     this.disposeTextures();
 
-    // Load all logos for bumper and top cap
-    await loadAllLogos();
+    // Load assets in parallel for better performance
+    const baseSurfaceUrl = surfaceUrl || "/textures/defaults/surface-leather6.jpg";
 
     let surfaceImage: HTMLImageElement;
 
     if (productType === "leather") {
-      // Create leather surface with color overlay
-      const baseSurfaceUrl = surfaceUrl || "/textures/defaults/surface-leather6.jpg";
       const colorHex = getLeatherColorHex(leatherColor || "black");
 
-      // Load leather normal map
-      await loadLeatherNormal(leatherTexture || "crocodile");
+      // Load logos, leather normal, and create leather surface IN PARALLEL
+      const [, , leatherCanvas] = await Promise.all([
+        loadAllLogos(),
+        loadLeatherNormal(leatherTexture || "crocodile"),
+        createLeatherSurface(baseSurfaceUrl, colorHex),
+      ]);
 
-      const leatherCanvas = await createLeatherSurface(baseSurfaceUrl, colorHex);
       surfaceImage = await this.canvasToImage(leatherCanvas);
-    } else if (surfaceUrl) {
-      // Smooth product with surface URL
-      surfaceImage = await this.loadImage(surfaceUrl);
     } else {
-      // Smooth product with no surface - use default
-      console.log("[SceneManager] No surface URL provided for smooth product, using default");
-      const defaultSurface = "/textures/defaults/surface-leather6.jpg";
-      surfaceImage = await this.loadImage(defaultSurface);
+      // Smooth product: load logos and surface image in parallel
+      const [, loadedImage] = await Promise.all([
+        loadAllLogos(),
+        this.loadImage(baseSurfaceUrl),
+      ]);
+      surfaceImage = loadedImage;
     }
 
     console.log("[SceneManager] Surface loaded:", surfaceImage.width, "x", surfaceImage.height);

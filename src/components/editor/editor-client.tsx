@@ -33,6 +33,7 @@ import {
 import type { Product, ProductConfig, LeatherColor, LeatherTextureType } from "@/types/product";
 import { DEFAULT_PRODUCT_CONFIG, configToSettingsJson } from "@/types/product";
 import type { SceneManager } from "@/lib/three/scene-manager";
+import { uploadToStorage } from "@/lib/supabase/upload";
 
 interface EditorClientProps {
   product: Product;
@@ -163,29 +164,6 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
     []
   );
 
-  const uploadFile = async (
-    file: File,
-    fileType: "surface" | "texture"
-  ): Promise<string> => {
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("productId", product.id);
-    formData.append("fileType", fileType);
-
-    const res = await fetch("/api/upload", {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!res.ok) {
-      const error = await res.json();
-      throw new Error(error.error || "Upload failed");
-    }
-
-    const { url } = await res.json();
-    return url;
-  };
-
   const handleSave = async () => {
     setSaving(true);
     setUploading(true);
@@ -194,14 +172,41 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
       let surfaceUrl = product.surface_url;
       let textureUrl = product.texture_url;
 
-      // Upload pending surface file
+      // Prepare parallel upload tasks
+      const uploadTasks: Promise<{ type: "surface" | "texture"; url: string }>[] = [];
+
       if (pendingFiles.surface) {
-        surfaceUrl = await uploadFile(pendingFiles.surface.file, "surface");
+        uploadTasks.push(
+          uploadToStorage(
+            pendingFiles.surface.file,
+            product.id,
+            "surface",
+            product.user_id
+          ).then((url) => ({ type: "surface" as const, url }))
+        );
       }
 
-      // Upload pending custom texture file
       if (pendingFiles.customTexture) {
-        textureUrl = await uploadFile(pendingFiles.customTexture.file, "texture");
+        uploadTasks.push(
+          uploadToStorage(
+            pendingFiles.customTexture.file,
+            product.id,
+            "texture",
+            product.user_id
+          ).then((url) => ({ type: "texture" as const, url }))
+        );
+      }
+
+      // Upload files in parallel (direct to Supabase - no Next.js proxy)
+      if (uploadTasks.length > 0) {
+        const results = await Promise.all(uploadTasks);
+        for (const result of results) {
+          if (result.type === "surface") {
+            surfaceUrl = result.url;
+          } else {
+            textureUrl = result.url;
+          }
+        }
       }
 
       setUploading(false);

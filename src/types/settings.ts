@@ -46,7 +46,7 @@ export const DEFAULT_THREEJS_SETTINGS: ThreeJSSettings = {
   controls: {
     enableDamping: true,
     dampingFactor: 0.05,
-    minDistance: 0.5,
+    minDistance: 0.2,
     maxDistance: 10,
   },
   lighting: {

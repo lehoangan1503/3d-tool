@@ -5,9 +5,8 @@ const nextConfig: NextConfig = {
   images: {
     remotePatterns: [
       {
-        protocol: "http",
-        hostname: "5.223.48.44",
-        port: "8000",
+        protocol: "https",
+        hostname: "supa-api.top",
         pathname: "/storage/v1/object/public/**",
       },
     ],

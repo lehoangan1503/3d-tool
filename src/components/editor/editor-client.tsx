@@ -96,6 +96,9 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
       clearcoat: currentConfig.cylinderClearcoat,
       metalness: currentConfig.cylinderMetalness,
       color: currentConfig.cylinderColor,
+      normalScale: currentConfig.cylinderNormalScale,
+      sheen: currentConfig.cylinderSheen,
+      sheenColor: currentConfig.cylinderSheenColor,
     });
     manager.updateJointConfig({
       roughness: currentConfig.jointRoughness,
@@ -138,6 +141,9 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
       clearcoat: config.cylinderClearcoat,
       metalness: config.cylinderMetalness,
       color: config.cylinderColor,
+      normalScale: config.cylinderNormalScale,
+      sheen: config.cylinderSheen,
+      sheenColor: config.cylinderSheenColor,
     });
 
     // Update joint top config
@@ -555,12 +561,12 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                       id="cylinderRoughness-mobile"
                       type="number"
                       min={0}
-                      max={1}
-                      step={0.01}
+                      max={255}
+                      step={1}
                       value={config.cylinderRoughness}
                       onChange={(e) =>
                         updateConfig({
-                          cylinderRoughness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                          cylinderRoughness: Math.min(255, Math.max(0, parseInt(e.target.value) || 0)),
                         })
                       }
                     />
@@ -571,12 +577,12 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                       id="cylinderClearcoat-mobile"
                       type="number"
                       min={0}
-                      max={1}
-                      step={0.01}
+                      max={100}
+                      step={1}
                       value={config.cylinderClearcoat}
                       onChange={(e) =>
                         updateConfig({
-                          cylinderClearcoat: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                          cylinderClearcoat: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
                         })
                       }
                     />
@@ -615,6 +621,56 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                       />
                     </div>
                   </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="cylinderNormalScale-mobile">Texture Depth</Label>
+                    <Input
+                      id="cylinderNormalScale-mobile"
+                      type="number"
+                      min={0}
+                      max={10}
+                      step={0.1}
+                      value={config.cylinderNormalScale}
+                      onChange={(e) =>
+                        updateConfig({
+                          cylinderNormalScale: Math.min(10, Math.max(0, parseFloat(e.target.value) || 0)),
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="cylinderSheen-mobile">Sheen</Label>
+                    <Input
+                      id="cylinderSheen-mobile"
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={config.cylinderSheen}
+                      onChange={(e) =>
+                        updateConfig({
+                          cylinderSheen: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="cylinderSheenColor-mobile">Sheen Color</Label>
+                    <div className="flex gap-2 items-center">
+                      <input
+                        id="cylinderSheenColor-mobile"
+                        type="color"
+                        value={config.cylinderSheenColor}
+                        onChange={(e) => updateConfig({ cylinderSheenColor: e.target.value })}
+                        className="w-10 h-10 rounded border cursor-pointer"
+                      />
+                      <Input
+                        type="text"
+                        value={config.cylinderSheenColor}
+                        onChange={(e) => updateConfig({ cylinderSheenColor: e.target.value })}
+                        className="flex-1"
+                      />
+                    </div>
+                  </div>
                 </div>
               </CollapsibleCard>
 
@@ -630,12 +686,12 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                       id="jointRoughness-mobile"
                       type="number"
                       min={0}
-                      max={1}
-                      step={0.01}
+                      max={255}
+                      step={1}
                       value={config.jointRoughness}
                       onChange={(e) =>
                         updateConfig({
-                          jointRoughness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                          jointRoughness: Math.min(255, Math.max(0, parseInt(e.target.value) || 0)),
                         })
                       }
                     />
@@ -646,12 +702,12 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                       id="jointClearcoat-mobile"
                       type="number"
                       min={0}
-                      max={1}
-                      step={0.01}
+                      max={100}
+                      step={1}
                       value={config.jointClearcoat}
                       onChange={(e) =>
                         updateConfig({
-                          jointClearcoat: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                          jointClearcoat: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
                         })
                       }
                     />
@@ -905,16 +961,16 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                     id="cylinderRoughness"
                     type="number"
                     min={0}
-                    max={1}
-                    step={0.01}
+                    max={255}
+                    step={1}
                     value={config.cylinderRoughness}
                     onChange={(e) =>
                       updateConfig({
-                        cylinderRoughness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                        cylinderRoughness: Math.min(255, Math.max(0, parseInt(e.target.value) || 0)),
                       })
                     }
                   />
-                  <p className="text-xs text-muted-foreground">0 - 1 (default: 0.4)</p>
+                  <p className="text-xs text-muted-foreground">0 - 255 (default: 102)</p>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="cylinderClearcoat">Clearcoat</Label>
@@ -922,16 +978,16 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                     id="cylinderClearcoat"
                     type="number"
                     min={0}
-                    max={1}
-                    step={0.01}
+                    max={100}
+                    step={1}
                     value={config.cylinderClearcoat}
                     onChange={(e) =>
                       updateConfig({
-                        cylinderClearcoat: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                        cylinderClearcoat: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
                       })
                     }
                   />
-                  <p className="text-xs text-muted-foreground">0 - 1 (default: 0.1)</p>
+                  <p className="text-xs text-muted-foreground">0 - 100 (default: 10)</p>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="cylinderMetalness">Metalness</Label>
@@ -969,6 +1025,59 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                   </div>
                   <p className="text-xs text-muted-foreground">Hex color (default: #1A1A1A)</p>
                 </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="cylinderNormalScale">Texture Depth</Label>
+                  <Input
+                    id="cylinderNormalScale"
+                    type="number"
+                    min={0}
+                    max={10}
+                    step={0.1}
+                    value={config.cylinderNormalScale}
+                    onChange={(e) =>
+                      updateConfig({
+                        cylinderNormalScale: Math.min(10, Math.max(0, parseFloat(e.target.value) || 0)),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">0 - 10 (default: 1.0) — Normal map intensity</p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="cylinderSheen">Sheen</Label>
+                  <Input
+                    id="cylinderSheen"
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={config.cylinderSheen}
+                    onChange={(e) =>
+                      updateConfig({
+                        cylinderSheen: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">0 - 100 (default: 0) — Leather sheen highlight</p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="cylinderSheenColor">Sheen Color</Label>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      id="cylinderSheenColor"
+                      type="color"
+                      value={config.cylinderSheenColor}
+                      onChange={(e) => updateConfig({ cylinderSheenColor: e.target.value })}
+                      className="w-10 h-10 rounded border cursor-pointer"
+                    />
+                    <Input
+                      type="text"
+                      value={config.cylinderSheenColor}
+                      onChange={(e) => updateConfig({ cylinderSheenColor: e.target.value })}
+                      className="flex-1"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">Hex color (default: #FFFFFF)</p>
+                </div>
               </div>
             </CollapsibleCard>
 
@@ -984,16 +1093,16 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                     id="jointRoughness"
                     type="number"
                     min={0}
-                    max={1}
-                    step={0.01}
+                    max={255}
+                    step={1}
                     value={config.jointRoughness}
                     onChange={(e) =>
                       updateConfig({
-                        jointRoughness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                        jointRoughness: Math.min(255, Math.max(0, parseInt(e.target.value) || 0)),
                       })
                     }
                   />
-                  <p className="text-xs text-muted-foreground">0 - 1 (default: 0)</p>
+                  <p className="text-xs text-muted-foreground">0 - 255 (default: 0)</p>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="jointClearcoat">Clearcoat</Label>
@@ -1001,16 +1110,16 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                     id="jointClearcoat"
                     type="number"
                     min={0}
-                    max={1}
-                    step={0.01}
+                    max={100}
+                    step={1}
                     value={config.jointClearcoat}
                     onChange={(e) =>
                       updateConfig({
-                        jointClearcoat: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                        jointClearcoat: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
                       })
                     }
                   />
-                  <p className="text-xs text-muted-foreground">0 - 1 (default: 0.5)</p>
+                  <p className="text-xs text-muted-foreground">0 - 100 (default: 50)</p>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="jointMetalness">Metalness</Label>

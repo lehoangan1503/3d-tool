@@ -102,6 +102,9 @@ export class SceneManager {
     clearcoat: CYLINDER_LEATHER_CONFIG.clearcoat,
     metalness: CYLINDER_LEATHER_CONFIG.metalness,
     color: CYLINDER_LEATHER_CONFIG.color,
+    normalScale: CYLINDER_LEATHER_CONFIG.normalScale,
+    sheen: CYLINDER_LEATHER_CONFIG.sheen,
+    sheenColor: CYLINDER_LEATHER_CONFIG.sheenColor,
   };
   private currentJointConfig = {
     roughness: TOP_CAP_CONFIG.roughness,
@@ -302,12 +305,15 @@ export class SceneManager {
   /**
    * Update cylinder (leather wrap) material config
    */
-  updateCylinderConfig(config: { roughness?: number; clearcoat?: number; metalness?: number; color?: string }) {
+  updateCylinderConfig(config: { roughness?: number; clearcoat?: number; metalness?: number; color?: string; normalScale?: number; sheen?: number; sheenColor?: string }) {
     console.log("[SceneManager] updateCylinderConfig:", config);
     if (config.roughness !== undefined) this.currentCylinderConfig.roughness = config.roughness;
     if (config.clearcoat !== undefined) this.currentCylinderConfig.clearcoat = config.clearcoat;
     if (config.metalness !== undefined) this.currentCylinderConfig.metalness = config.metalness;
     if (config.color !== undefined) this.currentCylinderConfig.color = config.color;
+    if (config.normalScale !== undefined) this.currentCylinderConfig.normalScale = config.normalScale;
+    if (config.sheen !== undefined) this.currentCylinderConfig.sheen = config.sheen;
+    if (config.sheenColor !== undefined) this.currentCylinderConfig.sheenColor = config.sheenColor;
     this.updateModelMaterials();
   }
 
@@ -354,16 +360,22 @@ export class SceneManager {
         
         if (isCylinder) {
           const physMat = ensurePhysicalMaterial(child, mat, matIdx);
-          physMat.roughness = this.currentCylinderConfig.roughness;
-          physMat.clearcoat = this.currentCylinderConfig.clearcoat;
+          physMat.roughness = this.currentCylinderConfig.roughness / 255;
+          physMat.clearcoat = this.currentCylinderConfig.clearcoat / 100;
           physMat.metalness = this.currentCylinderConfig.metalness;
           physMat.color.set(this.currentCylinderConfig.color);
+          if (physMat.normalMap) {
+            physMat.normalScale.set(this.currentCylinderConfig.normalScale, this.currentCylinderConfig.normalScale);
+          }
+          physMat.sheen = this.currentCylinderConfig.sheen / 100;
+          physMat.sheenColor.set(this.currentCylinderConfig.sheenColor);
+          physMat.sheenRoughness = physMat.roughness;
           physMat.needsUpdate = true;
           updatedCount++;
         } else if (isTopCap) {
           const physMat = ensurePhysicalMaterial(child, mat, matIdx);
-          physMat.roughness = this.currentJointConfig.roughness;
-          physMat.clearcoat = this.currentJointConfig.clearcoat;
+          physMat.roughness = this.currentJointConfig.roughness / 255;
+          physMat.clearcoat = this.currentJointConfig.clearcoat / 100;
           physMat.metalness = this.currentJointConfig.metalness;
           physMat.needsUpdate = true;
           updatedCount++;
@@ -589,26 +601,32 @@ export class SceneManager {
         if (isTopCapFaceMaterial(matName)) {
           applyLogoToExistingMaterial(mat, 'topCapFace');
           const physMat = ensurePhysicalMaterial(child, mat, idx);
-          physMat.roughness = this.currentJointConfig.roughness;
-          physMat.clearcoat = this.currentJointConfig.clearcoat;
+          physMat.roughness = this.currentJointConfig.roughness / 255;
+          physMat.clearcoat = this.currentJointConfig.clearcoat / 100;
           physMat.metalness = this.currentJointConfig.metalness;
           physMat.needsUpdate = true;
           console.log("[SceneManager] ✅ Applied TOP CAP FACE logo + joint config to:", matName);
           return;
         } else if (isTopCapMaterial(matName, meshName)) {
           const physMat = ensurePhysicalMaterial(child, mat, idx);
-          physMat.roughness = this.currentJointConfig.roughness;
-          physMat.clearcoat = this.currentJointConfig.clearcoat;
+          physMat.roughness = this.currentJointConfig.roughness / 255;
+          physMat.clearcoat = this.currentJointConfig.clearcoat / 100;
           physMat.metalness = this.currentJointConfig.metalness;
           physMat.needsUpdate = true;
           console.log("[SceneManager] ✅ Applied joint config to TOP CAP BODY:", matName || meshName);
           return;
         } else if (isCylinderLeatherMaterial(matName, meshName)) {
           const physMat = ensurePhysicalMaterial(child, mat, idx);
-          physMat.roughness = this.currentCylinderConfig.roughness;
-          physMat.clearcoat = this.currentCylinderConfig.clearcoat;
+          physMat.roughness = this.currentCylinderConfig.roughness / 255;
+          physMat.clearcoat = this.currentCylinderConfig.clearcoat / 100;
           physMat.metalness = this.currentCylinderConfig.metalness;
           physMat.color.set(this.currentCylinderConfig.color);
+          if (physMat.normalMap) {
+            physMat.normalScale.set(this.currentCylinderConfig.normalScale, this.currentCylinderConfig.normalScale);
+          }
+          physMat.sheen = this.currentCylinderConfig.sheen / 100;
+          physMat.sheenColor.set(this.currentCylinderConfig.sheenColor);
+          physMat.sheenRoughness = physMat.roughness;
           physMat.needsUpdate = true;
           console.log("[SceneManager] ✅ Applied cylinder config to:", matName || meshName);
           return;

@@ -153,6 +153,9 @@ export interface CylinderLeatherConfigType {
   clearcoat: number;
   metalness: number;
   color: string;
+  normalScale: number;
+  sheen: number;
+  sheenColor: string;
 }
 
 export interface LeatherConfigType {
@@ -454,10 +457,13 @@ export const TOP_CAP_CONFIG: TopCapConfigType = {
 export const CYLINDER_LEATHER_CONFIG: CylinderLeatherConfigType = {
   enabled: true,
   materialNames: ["leather_mat", "leather", "cylinder", "wrap", "Mat_Leather"],
-  roughness: 0.4,
-  clearcoat: 0.1,
+  roughness: 102,
+  clearcoat: 10,
   metalness: 0,
   color: "#1A1A1A",
+  normalScale: 1.0,
+  sheen: 0,
+  sheenColor: "#FFFFFF",
 };
 
 // =====================================================

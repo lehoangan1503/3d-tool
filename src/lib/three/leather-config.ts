@@ -393,7 +393,7 @@ export function getSurfacePath(surfaceKey: string): string {
 
 export const RUBBER_CONFIG: RubberConfigType = {
   enabled: true,
-  materialNames: ["bumper", "rubber", "bottom", "butt_cap", "end_cap", "pad", "foot", "base", "Mat_Bumper"],
+  materialNames: ["bumper_mat", "bumper", "rubber", "bottom", "butt_cap", "end_cap", "pad", "foot", "base", "Mat_Bumper"],
   backgroundColor: "#2a2a2a",
   roughness: 0.94,
   clearcoat: 0.01,
@@ -422,7 +422,7 @@ export const RUBBER_CONFIG: RubberConfigType = {
 
 export const TOP_CAP_CONFIG: TopCapConfigType = {
   enabled: true,
-  materialNames: ["joint", "jointcover", "joint_cover", "thread", "screw", "thread_cap", "top_cap", "ferrule", "connector", "adapter", "Mat_JointCover", "JointCover"],
+  materialNames: ["joint_mat", "joint", "jointcover", "joint_cover", "thread", "screw", "thread_cap", "top_cap", "ferrule", "connector", "adapter", "Mat_JointCover", "JointCover"],
   roughness: 0,
   clearcoat: 0.5,
   metalness: 0.3,
@@ -453,7 +453,7 @@ export const TOP_CAP_CONFIG: TopCapConfigType = {
 
 export const CYLINDER_LEATHER_CONFIG: CylinderLeatherConfigType = {
   enabled: true,
-  materialNames: ["outside", "butt_body", "leather", "cylinder", "wrap", "Mat_Leather"],
+  materialNames: ["leather_mat", "leather", "cylinder", "wrap", "Mat_Leather"],
   roughness: 0.4,
   clearcoat: 0.1,
   metalness: 0,

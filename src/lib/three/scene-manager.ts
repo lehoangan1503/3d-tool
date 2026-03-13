@@ -279,36 +279,19 @@ export class SceneManager {
           const isBodyPart = isRubber || isTopCap;
           
           if (isLeatherPart) {
-            if (this.isLeatherProduct) {
-              // Leather cue: DO NOT set mat.roughness directly - it would multiply with roughnessMap!
-              // The roughnessMap handles both bodyRoughness (non-leather areas) and leatherRoughness (leather areas).
-              // bodyRoughness is applied via updateBodyRoughness() which regenerates the roughnessMap.
-              // Only leatherRoughness (via normalScale) and sheen affect leather texture appearance.
-              mat.sheen = this.currentLeatherConfig.sheen / 100;
-              if (mat.normalScale) {
-                mat.normalScale.set(this.currentLeatherConfig.roughness / 255, this.currentLeatherConfig.normalStrength);
-              }
-              console.log(`[SceneManager] Updated leather body "${matName || meshName}":`, {
-                roughness: mat.roughness, // Controlled by roughnessMap (not set directly)
-                bodyRoughness: this.bodyRoughness, // Applied via roughnessMap non-leather areas
-                leatherRoughness: this.currentLeatherConfig.roughness,
-                sheen: mat.sheen,
-                normalScale: mat.normalScale ? [mat.normalScale.x, mat.normalScale.y] : null,
-              });
-            } else {
-              // Smooth cue: bodyRoughness controls base mesh roughness (no roughnessMap)
-              mat.roughness = this.bodyRoughness / 255;
-              mat.sheen = 0;
-              console.log(`[SceneManager] Updated smooth body "${matName || meshName}":`, {
-                roughness: mat.roughness,
-                bodyRoughness: this.bodyRoughness,
-              });
-            }
-            
-            // Clearcoat applies to both types
-            mat.clearcoat = this.currentLeatherConfig.clearcoat / 100;
-            mat.needsUpdate = true;
-            updatedCount++;
+            // TEMP: ver2 model has baked-in leather - skip custom leather config
+            // if (this.isLeatherProduct) {
+            //   mat.sheen = this.currentLeatherConfig.sheen / 100;
+            //   if (mat.normalScale) {
+            //     mat.normalScale.set(this.currentLeatherConfig.roughness / 255, this.currentLeatherConfig.normalStrength);
+            //   }
+            // } else {
+            //   mat.roughness = this.bodyRoughness / 255;
+            //   mat.sheen = 0;
+            // }
+            // mat.clearcoat = this.currentLeatherConfig.clearcoat / 100;
+            // mat.needsUpdate = true;
+            console.log(`[SceneManager] Skipping leather config for baked-in material "${matName || meshName}"`);
           } else if (isBodyPart) {
             // Rubber/top cap: Body Roughness ONLY (both smooth and leather cues)
             mat.roughness = this.bodyRoughness / 255;
@@ -538,13 +521,16 @@ export class SceneManager {
           meshNameLower.includes("butt_body") || matNameLower.includes("butt_body")
         ) {
           // Main body - apply surface texture
-          if (productType === "leather" && textureMaps) {
-            newMat = createLeatherMaterial(mapTexture, textureMaps);
-            console.log("[SceneManager] ✅ Applied LEATHER material to:", matName || meshName);
-          } else {
-            newMat = createStandardMaterial(mapTexture);
-            console.log("[SceneManager] ✅ Applied STANDARD material to:", matName || meshName);
-          }
+          // TEMP: ver2 model has baked-in leather - skip custom leather material
+          // if (productType === "leather" && textureMaps) {
+          //   newMat = createLeatherMaterial(mapTexture, textureMaps);
+          //   console.log("[SceneManager] ✅ Applied LEATHER material to:", matName || meshName);
+          // } else {
+          //   newMat = createStandardMaterial(mapTexture);
+          //   console.log("[SceneManager] ✅ Applied STANDARD material to:", matName || meshName);
+          // }
+          console.log("[SceneManager] ⏭️ Keeping baked-in leather material for:", matName || meshName);
+          return;
         } else {
           // Unknown material - skip
           console.log("[SceneManager] ⏭️ Skipping material:", matName || meshName);

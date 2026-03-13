@@ -517,8 +517,8 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                 </div>
               </CollapsibleCard>
 
-              {/* Leather Options (only for leather type) */}
-              {product.type === "leather" && (
+              {/* TEMP: Leather options disabled - ver2 model has baked-in leather */}
+              {/* {product.type === "leather" && (
                 <>
                   <CollapsibleCard
                     title="Leather Options"
@@ -592,7 +592,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                     </div>
                   </CollapsibleCard>
                 </>
-              )}
+              )} */}
             </div>
           </div>
         </div>
@@ -735,8 +735,8 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
               </div>
             </CollapsibleCard>
 
-            {/* Leather Material Settings (only for leather type) */}
-            {product.type === "leather" && (
+            {/* TEMP: Leather options disabled - ver2 model has baked-in leather */}
+            {/* {product.type === "leather" && (
               <>
                 <CollapsibleCard
                   title="Leather Options"
@@ -813,7 +813,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                   </div>
                 </CollapsibleCard>
               </>
-            )}
+            )} */}
 
             {/* Copy JSON Metadata */}
             <CollapsibleCard

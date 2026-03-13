@@ -107,9 +107,10 @@ export const LEATHER_COLORS: Record<LeatherColor, { name: string; hex: string }>
 };
 
 // Model paths (single model for all types)
+// ver2 model has baked-in leather texture - no custom leather config needed
 export const MODEL_PATHS: Record<ProductType, string> = {
-  smooth: "/models/cue-butt-leather.glb",
-  leather: "/models/cue-butt-leather.glb",
+  smooth: "/models/cue-butt-leather-ver2.glb",
+  leather: "/models/cue-butt-leather-ver2.glb",
 };
 
 // Default textures (normal maps for leather types)

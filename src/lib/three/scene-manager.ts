@@ -31,6 +31,31 @@ const TEXTURE_CANVAS_SIZE = 4096;
 // Instance counter for debugging
 let sceneManagerInstanceId = 0;
 
+/**
+ * Upgrade a MeshStandardMaterial to MeshPhysicalMaterial (preserving all properties).
+ * GLTFLoader creates MeshStandardMaterial by default; MeshPhysicalMaterial is needed
+ * for clearcoat, sheen, and other physical properties.
+ */
+function ensurePhysicalMaterial(mesh: THREE.Mesh, mat: THREE.MeshStandardMaterial, index: number): THREE.MeshPhysicalMaterial {
+  if (mat instanceof THREE.MeshPhysicalMaterial) return mat;
+
+  const physMat = new THREE.MeshPhysicalMaterial();
+  // Copy all shared properties from MeshStandardMaterial
+  physMat.copy(mat);
+  physMat.name = mat.name;
+
+  // Replace in mesh
+  if (Array.isArray(mesh.material)) {
+    mesh.material[index] = physMat;
+  } else {
+    mesh.material = physMat;
+  }
+
+  mat.dispose();
+  console.log(`[SceneManager] Upgraded material "${mat.name}" to MeshPhysicalMaterial`);
+  return physMat;
+}
+
 export class SceneManager {
   private instanceId: number;
   private container: HTMLElement;
@@ -297,40 +322,39 @@ export class SceneManager {
       if (!(child instanceof THREE.Mesh)) return;
       
       const materials = Array.isArray(child.material) ? child.material : [child.material];
-      materials.forEach((mat) => {
-        if (mat instanceof THREE.MeshPhysicalMaterial) {
-          const matName = mat.name?.toLowerCase() || "";
-          const meshName = child.name?.toLowerCase() || "";
-          
-          const isCylinder = isCylinderLeatherMaterial(matName, meshName);
-          const isTopCap = isTopCapMaterial(matName, meshName) || isTopCapFaceMaterial(matName);
-          const isRubber = isRubberMaterial(matName, meshName);
-          
-          if (isCylinder) {
-            // Leather cylinder: apply isolated cylinder config
-            mat.roughness = this.currentCylinderConfig.roughness;
-            mat.clearcoat = this.currentCylinderConfig.clearcoat;
-            mat.metalness = this.currentCylinderConfig.metalness;
-            mat.color.set(this.currentCylinderConfig.color);
-            mat.needsUpdate = true;
-            updatedCount++;
-          } else if (isTopCap) {
-            // Joint/Top cap: apply isolated joint config
-            mat.roughness = this.currentJointConfig.roughness;
-            mat.clearcoat = this.currentJointConfig.clearcoat;
-            mat.metalness = this.currentJointConfig.metalness;
-            mat.needsUpdate = true;
-            updatedCount++;
-          } else if (isRubber) {
-            // Rubber: keep original GLB material
-            console.log(`[SceneManager] Keeping original material for rubber "${matName || meshName}"`);
-          } else {
-            // Other body meshes: apply general body config
-            mat.roughness = this.bodyRoughness / 255;
-            mat.clearcoat = this.currentLeatherConfig.clearcoat / 100;
-            mat.needsUpdate = true;
-            updatedCount++;
-          }
+      materials.forEach((mat, matIdx) => {
+        if (!(mat instanceof THREE.MeshStandardMaterial)) return;
+
+        const matName = mat.name?.toLowerCase() || "";
+        const meshName = child.name?.toLowerCase() || "";
+        
+        const isCylinder = isCylinderLeatherMaterial(matName, meshName);
+        const isTopCap = isTopCapMaterial(matName, meshName) || isTopCapFaceMaterial(matName);
+        const isRubber = isRubberMaterial(matName, meshName);
+        
+        if (isCylinder) {
+          const physMat = ensurePhysicalMaterial(child, mat, matIdx);
+          physMat.roughness = this.currentCylinderConfig.roughness;
+          physMat.clearcoat = this.currentCylinderConfig.clearcoat;
+          physMat.metalness = this.currentCylinderConfig.metalness;
+          physMat.color.set(this.currentCylinderConfig.color);
+          physMat.needsUpdate = true;
+          updatedCount++;
+        } else if (isTopCap) {
+          const physMat = ensurePhysicalMaterial(child, mat, matIdx);
+          physMat.roughness = this.currentJointConfig.roughness;
+          physMat.clearcoat = this.currentJointConfig.clearcoat;
+          physMat.metalness = this.currentJointConfig.metalness;
+          physMat.needsUpdate = true;
+          updatedCount++;
+        } else if (isRubber) {
+          // Rubber: keep original GLB material
+        } else {
+          const physMat = ensurePhysicalMaterial(child, mat, matIdx);
+          physMat.roughness = this.bodyRoughness / 255;
+          physMat.clearcoat = this.currentLeatherConfig.clearcoat / 100;
+          physMat.needsUpdate = true;
+          updatedCount++;
         }
       });
     });
@@ -532,46 +556,51 @@ export class SceneManager {
       materials.forEach((mat, idx) => {
         const matName = mat?.name || "";
         
-        console.log(`[SceneManager]   Material[${idx}]: "${matName}"`);
+        console.log(`[SceneManager]   Material[${idx}]: "${matName}" type: ${mat?.type}`);
         console.log(`[SceneManager]   isCylinder: ${isCylinderLeatherMaterial(matName, meshName)}, isTopCapFace: ${isTopCapFaceMaterial(matName)}, isTopCap: ${isTopCapMaterial(matName, meshName)}, isRubber: ${isRubberMaterial(matName, meshName)}`);
+
+        // Skip non-standard materials
+        if (!(mat instanceof THREE.MeshStandardMaterial)) {
+          console.log("[SceneManager]   ⏭️ Not a MeshStandardMaterial, skipping");
+          return;
+        }
 
         // Check material type: top cap face first (most specific), then top cap body, then cylinder, then rubber
         if (isTopCapFaceMaterial(matName)) {
-          // Top cap FACE - apply logo overlay + joint config
           applyLogoToExistingMaterial(mat, 'topCapFace');
-          mat.roughness = this.currentJointConfig.roughness;
-          mat.clearcoat = this.currentJointConfig.clearcoat;
-          mat.metalness = this.currentJointConfig.metalness;
-          mat.needsUpdate = true;
+          const physMat = ensurePhysicalMaterial(child, mat, idx);
+          physMat.roughness = this.currentJointConfig.roughness;
+          physMat.clearcoat = this.currentJointConfig.clearcoat;
+          physMat.metalness = this.currentJointConfig.metalness;
+          physMat.needsUpdate = true;
           console.log("[SceneManager] ✅ Applied TOP CAP FACE logo + joint config to:", matName);
           return;
         } else if (isTopCapMaterial(matName, meshName)) {
-          // Top cap BODY - joint config, no logo
-          mat.roughness = this.currentJointConfig.roughness;
-          mat.clearcoat = this.currentJointConfig.clearcoat;
-          mat.metalness = this.currentJointConfig.metalness;
-          mat.needsUpdate = true;
+          const physMat = ensurePhysicalMaterial(child, mat, idx);
+          physMat.roughness = this.currentJointConfig.roughness;
+          physMat.clearcoat = this.currentJointConfig.clearcoat;
+          physMat.metalness = this.currentJointConfig.metalness;
+          physMat.needsUpdate = true;
           console.log("[SceneManager] ✅ Applied joint config to TOP CAP BODY:", matName || meshName);
           return;
         } else if (isCylinderLeatherMaterial(matName, meshName)) {
-          // Leather cylinder - apply cylinder config
-          mat.roughness = this.currentCylinderConfig.roughness;
-          mat.clearcoat = this.currentCylinderConfig.clearcoat;
-          mat.metalness = this.currentCylinderConfig.metalness;
-          mat.color.set(this.currentCylinderConfig.color);
-          mat.needsUpdate = true;
+          const physMat = ensurePhysicalMaterial(child, mat, idx);
+          physMat.roughness = this.currentCylinderConfig.roughness;
+          physMat.clearcoat = this.currentCylinderConfig.clearcoat;
+          physMat.metalness = this.currentCylinderConfig.metalness;
+          physMat.color.set(this.currentCylinderConfig.color);
+          physMat.needsUpdate = true;
           console.log("[SceneManager] ✅ Applied cylinder config to:", matName || meshName);
           return;
         } else if (isRubberMaterial(matName, meshName)) {
-          // Rubber bumper - apply logo overlay, keep original GLB texture
           applyLogoToExistingMaterial(mat, 'rubber');
-          console.log("[SceneManager] ✅ Applied RUBBER logo (keeping original texture) to:", matName || meshName);
+          console.log("[SceneManager] ✅ Applied RUBBER logo to:", matName || meshName);
           return;
         } else {
-          // Other meshes - apply general body config
-          mat.roughness = this.bodyRoughness / 255;
-          mat.clearcoat = this.currentLeatherConfig.clearcoat / 100;
-          mat.needsUpdate = true;
+          const physMat = ensurePhysicalMaterial(child, mat, idx);
+          physMat.roughness = this.bodyRoughness / 255;
+          physMat.clearcoat = this.currentLeatherConfig.clearcoat / 100;
+          physMat.needsUpdate = true;
           console.log("[SceneManager] ✅ Applied body config to:", matName || meshName);
           return;
         }

@@ -144,10 +144,9 @@ export const LEATHER_COLORS: Record<LeatherColor, { name: string; hex: string }>
   tan: { name: "Tan", hex: "#D2B48C" },
 };
 
-// Model paths (single model for all types)
-// ver2 model has baked-in leather texture - no custom leather config needed
+// Model paths per product type
 export const MODEL_PATHS: Record<ProductType, string> = {
-  smooth: "/models/cue-butt-leather-ver2.glb",
+  smooth: "/models/cue-butt-leather.glb",
   leather: "/models/cue-butt-leather-ver2.glb",
 };
 

@@ -39,10 +39,30 @@ let sceneManagerInstanceId = 0;
 function ensurePhysicalMaterial(mesh: THREE.Mesh, mat: THREE.MeshStandardMaterial, index: number): THREE.MeshPhysicalMaterial {
   if (mat instanceof THREE.MeshPhysicalMaterial) return mat;
 
-  const physMat = new THREE.MeshPhysicalMaterial();
-  // Copy all shared properties from MeshStandardMaterial
-  physMat.copy(mat);
-  physMat.name = mat.name;
+  const physMat = new THREE.MeshPhysicalMaterial({
+    map: mat.map,
+    color: mat.color,
+    roughness: mat.roughness,
+    metalness: mat.metalness,
+    normalMap: mat.normalMap,
+    normalScale: mat.normalScale?.clone(),
+    aoMap: mat.aoMap,
+    aoMapIntensity: mat.aoMapIntensity,
+    emissive: mat.emissive?.clone(),
+    emissiveMap: mat.emissiveMap,
+    emissiveIntensity: mat.emissiveIntensity,
+    bumpMap: mat.bumpMap,
+    bumpScale: mat.bumpScale,
+    displacementMap: mat.displacementMap,
+    displacementScale: mat.displacementScale,
+    envMap: mat.envMap,
+    envMapIntensity: mat.envMapIntensity,
+    alphaMap: mat.alphaMap,
+    side: mat.side,
+    transparent: mat.transparent,
+    opacity: mat.opacity,
+    name: mat.name,
+  });
 
   // Replace in mesh
   if (Array.isArray(mesh.material)) {

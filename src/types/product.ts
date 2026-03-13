@@ -30,6 +30,15 @@ export interface ProductConfig {
   leatherSheen: number;      // 0-100 range (hidden but in JSON)
   normalStrength: number;    // 0-10 range
   textureScale: number;      // 1-8 range - how many times to tile the texture
+  // Joint Top settings (isolated per-part config)
+  jointRoughness: number;    // 0-1 range (Three.js native)
+  jointClearcoat: number;    // 0-1 range
+  jointMetalness: number;    // 0-1 range
+  // Leather Cylinder settings (isolated per-part config)
+  cylinderRoughness: number; // 0-1 range
+  cylinderClearcoat: number; // 0-1 range
+  cylinderMetalness: number; // 0-1 range
+  cylinderColor: string;     // hex color string
 }
 
 // JSON structure stored in threejs_settings table
@@ -45,6 +54,17 @@ export interface ThreeJSSettingsJson {
     sheen: number;
     normalStrength: number;
     textureScale: number;
+  };
+  joint?: {
+    roughness: number;
+    clearcoat: number;
+    metalness: number;
+  };
+  cylinder?: {
+    roughness: number;
+    clearcoat: number;
+    metalness: number;
+    color: string;
   };
 }
 
@@ -63,10 +83,21 @@ export function configToSettingsJson(config: ProductConfig): ThreeJSSettingsJson
       normalStrength: config.normalStrength,
       textureScale: config.textureScale,
     },
+    joint: {
+      roughness: config.jointRoughness,
+      clearcoat: config.jointClearcoat,
+      metalness: config.jointMetalness,
+    },
+    cylinder: {
+      roughness: config.cylinderRoughness,
+      clearcoat: config.cylinderClearcoat,
+      metalness: config.cylinderMetalness,
+      color: config.cylinderColor,
+    },
   };
 }
 
-// Convert database JSON to ProductConfig
+// Convert database JSON to ProductConfig (backward-compatible with older records)
 export function settingsJsonToConfig(json: ThreeJSSettingsJson): ProductConfig {
   return {
     ambientLight: json.lighting.ambientLight,
@@ -77,6 +108,13 @@ export function settingsJsonToConfig(json: ThreeJSSettingsJson): ProductConfig {
     leatherSheen: json.material.sheen,
     normalStrength: json.material.normalStrength,
     textureScale: json.material.textureScale ?? 1,
+    jointRoughness: json.joint?.roughness ?? 0,
+    jointClearcoat: json.joint?.clearcoat ?? 0.5,
+    jointMetalness: json.joint?.metalness ?? 0.3,
+    cylinderRoughness: json.cylinder?.roughness ?? 0.4,
+    cylinderClearcoat: json.cylinder?.clearcoat ?? 0.1,
+    cylinderMetalness: json.cylinder?.metalness ?? 0,
+    cylinderColor: json.cylinder?.color ?? "#1A1A1A",
   };
 }
 
@@ -131,6 +169,13 @@ export const DEFAULT_SMOOTH_CONFIG: ProductConfig = {
   leatherSheen: 0,             // Not used for smooth cue
   normalStrength: 0,           // Not used for smooth cue
   textureScale: 1,             // Not used for smooth cue
+  jointRoughness: 0,
+  jointClearcoat: 0.5,
+  jointMetalness: 0.3,
+  cylinderRoughness: 0.4,
+  cylinderClearcoat: 0.1,
+  cylinderMetalness: 0,
+  cylinderColor: "#1A1A1A",
 };
 
 // Default values for config - Leather cue type
@@ -143,6 +188,13 @@ export const DEFAULT_LEATHER_CONFIG: ProductConfig = {
   leatherSheen: 80,            // Leather sheen
   normalStrength: 3.0,         // Leather normal map strength
   textureScale: 1,             // Texture tiling (1 = no repeat, 2+ = tiled)
+  jointRoughness: 0,
+  jointClearcoat: 0.5,
+  jointMetalness: 0.3,
+  cylinderRoughness: 0.4,
+  cylinderClearcoat: 0.1,
+  cylinderMetalness: 0,
+  cylinderColor: "#1A1A1A",
 };
 
 // Recommended texture settings per leather type

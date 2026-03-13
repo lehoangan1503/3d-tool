@@ -91,6 +91,17 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
         normalStrength: currentConfig.normalStrength,
       });
     }
+    manager.updateCylinderConfig({
+      roughness: currentConfig.cylinderRoughness,
+      clearcoat: currentConfig.cylinderClearcoat,
+      metalness: currentConfig.cylinderMetalness,
+      color: currentConfig.cylinderColor,
+    });
+    manager.updateJointConfig({
+      roughness: currentConfig.jointRoughness,
+      clearcoat: currentConfig.jointClearcoat,
+      metalness: currentConfig.jointMetalness,
+    });
     console.log("[EditorClient] Initial config applied:", currentConfig);
   }, []);
 
@@ -120,6 +131,21 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
         normalStrength: config.normalStrength,
       });
     }
+
+    // Update cylinder (leather wrap) config
+    sceneManager.updateCylinderConfig({
+      roughness: config.cylinderRoughness,
+      clearcoat: config.cylinderClearcoat,
+      metalness: config.cylinderMetalness,
+      color: config.cylinderColor,
+    });
+
+    // Update joint top config
+    sceneManager.updateJointConfig({
+      roughness: config.jointRoughness,
+      clearcoat: config.jointClearcoat,
+      metalness: config.jointMetalness,
+    });
   }, [sceneManager, config, product.type]);
 
   const updateProduct = (updates: Partial<Product>) => {
@@ -517,6 +543,138 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                 </div>
               </CollapsibleCard>
 
+              {/* Leather Cylinder Config */}
+              <CollapsibleCard
+                title="Leather Cylinder"
+                icon={<Palette className="h-4 w-4 text-primary" />}
+              >
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="cylinderRoughness-mobile">Roughness</Label>
+                    <Input
+                      id="cylinderRoughness-mobile"
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={config.cylinderRoughness}
+                      onChange={(e) =>
+                        updateConfig({
+                          cylinderRoughness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="cylinderClearcoat-mobile">Clearcoat</Label>
+                    <Input
+                      id="cylinderClearcoat-mobile"
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={config.cylinderClearcoat}
+                      onChange={(e) =>
+                        updateConfig({
+                          cylinderClearcoat: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="cylinderMetalness-mobile">Metalness</Label>
+                    <Input
+                      id="cylinderMetalness-mobile"
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={config.cylinderMetalness}
+                      onChange={(e) =>
+                        updateConfig({
+                          cylinderMetalness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="cylinderColor-mobile">Color</Label>
+                    <div className="flex gap-2 items-center">
+                      <input
+                        id="cylinderColor-mobile"
+                        type="color"
+                        value={config.cylinderColor}
+                        onChange={(e) => updateConfig({ cylinderColor: e.target.value })}
+                        className="w-10 h-10 rounded border cursor-pointer"
+                      />
+                      <Input
+                        type="text"
+                        value={config.cylinderColor}
+                        onChange={(e) => updateConfig({ cylinderColor: e.target.value })}
+                        className="flex-1"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </CollapsibleCard>
+
+              {/* Joint Top Config */}
+              <CollapsibleCard
+                title="Joint Top"
+                icon={<Settings className="h-4 w-4 text-primary" />}
+              >
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="jointRoughness-mobile">Roughness</Label>
+                    <Input
+                      id="jointRoughness-mobile"
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={config.jointRoughness}
+                      onChange={(e) =>
+                        updateConfig({
+                          jointRoughness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="jointClearcoat-mobile">Clearcoat</Label>
+                    <Input
+                      id="jointClearcoat-mobile"
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={config.jointClearcoat}
+                      onChange={(e) =>
+                        updateConfig({
+                          jointClearcoat: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="jointMetalness-mobile">Metalness</Label>
+                    <Input
+                      id="jointMetalness-mobile"
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={config.jointMetalness}
+                      onChange={(e) =>
+                        updateConfig({
+                          jointMetalness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+              </CollapsibleCard>
+
               {/* TEMP: Leather options disabled - ver2 model has baked-in leather */}
               {/* {product.type === "leather" && (
                 <>
@@ -731,6 +889,145 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                     }
                   />
                   <p className="text-xs text-muted-foreground">Độ bóng thân gậy - 0 to 255 (default: 50)</p>
+                </div>
+              </div>
+            </CollapsibleCard>
+
+            {/* Leather Cylinder Config */}
+            <CollapsibleCard
+              title="Leather Cylinder"
+              icon={<Palette className="h-4 w-4 text-primary" />}
+            >
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="cylinderRoughness">Roughness</Label>
+                  <Input
+                    id="cylinderRoughness"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={config.cylinderRoughness}
+                    onChange={(e) =>
+                      updateConfig({
+                        cylinderRoughness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">0 - 1 (default: 0.4)</p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="cylinderClearcoat">Clearcoat</Label>
+                  <Input
+                    id="cylinderClearcoat"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={config.cylinderClearcoat}
+                    onChange={(e) =>
+                      updateConfig({
+                        cylinderClearcoat: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">0 - 1 (default: 0.1)</p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="cylinderMetalness">Metalness</Label>
+                  <Input
+                    id="cylinderMetalness"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={config.cylinderMetalness}
+                    onChange={(e) =>
+                      updateConfig({
+                        cylinderMetalness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">0 - 1 (default: 0)</p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="cylinderColor">Color</Label>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      id="cylinderColor"
+                      type="color"
+                      value={config.cylinderColor}
+                      onChange={(e) => updateConfig({ cylinderColor: e.target.value })}
+                      className="w-10 h-10 rounded border cursor-pointer"
+                    />
+                    <Input
+                      type="text"
+                      value={config.cylinderColor}
+                      onChange={(e) => updateConfig({ cylinderColor: e.target.value })}
+                      className="flex-1"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">Hex color (default: #1A1A1A)</p>
+                </div>
+              </div>
+            </CollapsibleCard>
+
+            {/* Joint Top Config */}
+            <CollapsibleCard
+              title="Joint Top"
+              icon={<Settings className="h-4 w-4 text-primary" />}
+            >
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="jointRoughness">Roughness</Label>
+                  <Input
+                    id="jointRoughness"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={config.jointRoughness}
+                    onChange={(e) =>
+                      updateConfig({
+                        jointRoughness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">0 - 1 (default: 0)</p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="jointClearcoat">Clearcoat</Label>
+                  <Input
+                    id="jointClearcoat"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={config.jointClearcoat}
+                    onChange={(e) =>
+                      updateConfig({
+                        jointClearcoat: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">0 - 1 (default: 0.5)</p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="jointMetalness">Metalness</Label>
+                  <Input
+                    id="jointMetalness"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={config.jointMetalness}
+                    onChange={(e) =>
+                      updateConfig({
+                        jointMetalness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">0 - 1 (default: 0.3)</p>
                 </div>
               </div>
             </CollapsibleCard>

@@ -4,16 +4,14 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { RectAreaLightUniformsLib } from "three/examples/jsm/lights/RectAreaLightUniformsLib.js";
 import type { ThreeJSSettings } from "@/types/settings";
 import { DEFAULT_THREEJS_SETTINGS } from "@/types/settings";
-import { LEATHER_CONFIG, getLeatherColorHex, isRubberMaterial, isTopCapMaterial, isTopCapFaceMaterial } from "./leather-config";
+import { LEATHER_CONFIG, TOP_CAP_CONFIG, CYLINDER_LEATHER_CONFIG, getLeatherColorHex, isRubberMaterial, isTopCapMaterial, isTopCapFaceMaterial, isCylinderLeatherMaterial } from "./leather-config";
 import {
   loadLeatherNormal,
   createLeatherTextureMaps,
   createLeatherMaterial,
   createStandardMaterial,
   loadAllLogos,
-  createRubberMaterial,
-  createTopCapMaterial,
-  createTopCapFaceMaterial,
+  applyLogoToExistingMaterial,
   type LeatherTextureMaps,
 } from "./leather-material";
 import { createLeatherSurface, createLeatherRoughnessMap } from "./leather-overlay";
@@ -53,6 +51,17 @@ export class SceneManager {
     clearcoat: LEATHER_CONFIG.clearcoat,
     sheen: LEATHER_CONFIG.sheen,
     normalStrength: LEATHER_CONFIG.normalStrength,
+  };
+  private currentCylinderConfig = {
+    roughness: CYLINDER_LEATHER_CONFIG.roughness,
+    clearcoat: CYLINDER_LEATHER_CONFIG.clearcoat,
+    metalness: CYLINDER_LEATHER_CONFIG.metalness,
+    color: CYLINDER_LEATHER_CONFIG.color,
+  };
+  private currentJointConfig = {
+    roughness: TOP_CAP_CONFIG.roughness,
+    clearcoat: TOP_CAP_CONFIG.clearcoat,
+    metalness: TOP_CAP_CONFIG.metalness,
   };
   private bodyRoughness = 0; // For smooth cue body (default: 0)
   private textureScale = 1; // Texture tiling scale (1 = no tiling)
@@ -246,10 +255,34 @@ export class SceneManager {
   }
 
   /**
+   * Update cylinder (leather wrap) material config
+   */
+  updateCylinderConfig(config: { roughness?: number; clearcoat?: number; metalness?: number; color?: string }) {
+    console.log("[SceneManager] updateCylinderConfig:", config);
+    if (config.roughness !== undefined) this.currentCylinderConfig.roughness = config.roughness;
+    if (config.clearcoat !== undefined) this.currentCylinderConfig.clearcoat = config.clearcoat;
+    if (config.metalness !== undefined) this.currentCylinderConfig.metalness = config.metalness;
+    if (config.color !== undefined) this.currentCylinderConfig.color = config.color;
+    this.updateModelMaterials();
+  }
+
+  /**
+   * Update joint top material config
+   */
+  updateJointConfig(config: { roughness?: number; clearcoat?: number; metalness?: number }) {
+    console.log("[SceneManager] updateJointConfig:", config);
+    if (config.roughness !== undefined) this.currentJointConfig.roughness = config.roughness;
+    if (config.clearcoat !== undefined) this.currentJointConfig.clearcoat = config.clearcoat;
+    if (config.metalness !== undefined) this.currentJointConfig.metalness = config.metalness;
+    this.updateModelMaterials();
+  }
+
+  /**
    * Update materials on the model with current config
-   * "outside" mesh: bodyRoughness controls base roughness (same for both smooth and leather)
-   * Leather cue: leatherRoughness controls leather texture via normalScale
-   * Rubber/top cap: bodyRoughness
+   * Cylinder leather: cylinderConfig controls roughness/clearcoat/metalness/color
+   * Joint/Top cap: jointConfig controls roughness/clearcoat/metalness
+   * Rubber: keeps original GLB material
+   * Other meshes: bodyRoughness + clearcoat from leatherConfig
    */
   private updateModelMaterials() {
     if (!this.model) {
@@ -257,7 +290,7 @@ export class SceneManager {
       return;
     }
 
-    console.log(`[SceneManager #${this.instanceId}] updateModelMaterials - isLeather:`, this.isLeatherProduct, "leatherConfig:", this.currentLeatherConfig, "bodyRoughness:", this.bodyRoughness);
+    console.log(`[SceneManager #${this.instanceId}] updateModelMaterials - cylinder:`, this.currentCylinderConfig, "joint:", this.currentJointConfig, "bodyRoughness:", this.bodyRoughness);
     let updatedCount = 0;
 
     this.model.traverse((child) => {
@@ -269,39 +302,34 @@ export class SceneManager {
           const matName = mat.name?.toLowerCase() || "";
           const meshName = child.name?.toLowerCase() || "";
           
-          // Check if this is a leather-wrapped part (outside/butt_body)
-          const isLeatherPart = matName.includes("outside") || meshName.includes("outside") ||
-                                matName.includes("butt_body") || meshName.includes("butt_body");
-          
-          // Check if this is rubber or top cap (non-leather body parts) using config-based helpers
-          const isRubber = isRubberMaterial(matName, meshName);
+          const isCylinder = isCylinderLeatherMaterial(matName, meshName);
           const isTopCap = isTopCapMaterial(matName, meshName) || isTopCapFaceMaterial(matName);
-          const isBodyPart = isRubber || isTopCap;
+          const isRubber = isRubberMaterial(matName, meshName);
           
-          if (isLeatherPart) {
-            // TEMP: ver2 model has baked-in leather - skip custom leather config
-            // if (this.isLeatherProduct) {
-            //   mat.sheen = this.currentLeatherConfig.sheen / 100;
-            //   if (mat.normalScale) {
-            //     mat.normalScale.set(this.currentLeatherConfig.roughness / 255, this.currentLeatherConfig.normalStrength);
-            //   }
-            // } else {
-            //   mat.roughness = this.bodyRoughness / 255;
-            //   mat.sheen = 0;
-            // }
-            // mat.clearcoat = this.currentLeatherConfig.clearcoat / 100;
-            // mat.needsUpdate = true;
-            console.log(`[SceneManager] Skipping leather config for baked-in material "${matName || meshName}"`);
-          } else if (isBodyPart) {
-            // Rubber/top cap: Body Roughness ONLY (both smooth and leather cues)
+          if (isCylinder) {
+            // Leather cylinder: apply isolated cylinder config
+            mat.roughness = this.currentCylinderConfig.roughness;
+            mat.clearcoat = this.currentCylinderConfig.clearcoat;
+            mat.metalness = this.currentCylinderConfig.metalness;
+            mat.color.set(this.currentCylinderConfig.color);
+            mat.needsUpdate = true;
+            updatedCount++;
+          } else if (isTopCap) {
+            // Joint/Top cap: apply isolated joint config
+            mat.roughness = this.currentJointConfig.roughness;
+            mat.clearcoat = this.currentJointConfig.clearcoat;
+            mat.metalness = this.currentJointConfig.metalness;
+            mat.needsUpdate = true;
+            updatedCount++;
+          } else if (isRubber) {
+            // Rubber: keep original GLB material
+            console.log(`[SceneManager] Keeping original material for rubber "${matName || meshName}"`);
+          } else {
+            // Other body meshes: apply general body config
             mat.roughness = this.bodyRoughness / 255;
             mat.clearcoat = this.currentLeatherConfig.clearcoat / 100;
             mat.needsUpdate = true;
             updatedCount++;
-            console.log(`[SceneManager] Updated body part "${matName || meshName}":`, {
-              roughness: mat.roughness,
-              bodyRoughness: this.bodyRoughness,
-            });
           }
         }
       });
@@ -375,6 +403,14 @@ export class SceneManager {
           }
 
           this.model = gltf.scene;
+
+          // Log all objects in the loaded model for debugging
+          this.model.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              const mats = Array.isArray(child.material) ? child.material : [child.material];
+              console.log(`[SceneManager] GLB mesh: "${child.name}" type: ${child.type} materials: [${mats.map(m => m.name || '(unnamed)').join(', ')}]`);
+            }
+          });
 
           // Scale model
           const box = new THREE.Box3().setFromObject(this.model);
@@ -495,54 +531,49 @@ export class SceneManager {
 
       materials.forEach((mat, idx) => {
         const matName = mat?.name || "";
-        const meshNameLower = meshName.toLowerCase();
-        const matNameLower = matName.toLowerCase();
         
         console.log(`[SceneManager]   Material[${idx}]: "${matName}"`);
-        console.log(`[SceneManager]   isTopCapFace: ${isTopCapFaceMaterial(matName)}, isTopCap: ${isTopCapMaterial(matName, meshName)}, isRubber: ${isRubberMaterial(matName, meshName)}`);
-        
-        let newMat: THREE.MeshPhysicalMaterial;
+        console.log(`[SceneManager]   isCylinder: ${isCylinderLeatherMaterial(matName, meshName)}, isTopCapFace: ${isTopCapFaceMaterial(matName)}, isTopCap: ${isTopCapMaterial(matName, meshName)}, isRubber: ${isRubberMaterial(matName, meshName)}`);
 
-        // Check material type: top cap face first (most specific), then top cap body, then rubber, then outside
+        // Check material type: top cap face first (most specific), then top cap body, then cylinder, then rubber
         if (isTopCapFaceMaterial(matName)) {
-          // Top cap FACE - the flat top circle with logo
-          newMat = createTopCapFaceMaterial(512, 512);
-          console.log("[SceneManager] ✅ Applied TOP CAP FACE material to:", matName);
+          // Top cap FACE - apply logo overlay + joint config
+          applyLogoToExistingMaterial(mat, 'topCapFace');
+          mat.roughness = this.currentJointConfig.roughness;
+          mat.clearcoat = this.currentJointConfig.clearcoat;
+          mat.metalness = this.currentJointConfig.metalness;
+          mat.needsUpdate = true;
+          console.log("[SceneManager] ✅ Applied TOP CAP FACE logo + joint config to:", matName);
+          return;
         } else if (isTopCapMaterial(matName, meshName)) {
-          // Top cap BODY - cylindrical joint cover
-          newMat = createTopCapMaterial(512, 512);
-          console.log("[SceneManager] ✅ Applied TOP CAP BODY material to:", matName || meshName);
+          // Top cap BODY - joint config, no logo
+          mat.roughness = this.currentJointConfig.roughness;
+          mat.clearcoat = this.currentJointConfig.clearcoat;
+          mat.metalness = this.currentJointConfig.metalness;
+          mat.needsUpdate = true;
+          console.log("[SceneManager] ✅ Applied joint config to TOP CAP BODY:", matName || meshName);
+          return;
+        } else if (isCylinderLeatherMaterial(matName, meshName)) {
+          // Leather cylinder - apply cylinder config
+          mat.roughness = this.currentCylinderConfig.roughness;
+          mat.clearcoat = this.currentCylinderConfig.clearcoat;
+          mat.metalness = this.currentCylinderConfig.metalness;
+          mat.color.set(this.currentCylinderConfig.color);
+          mat.needsUpdate = true;
+          console.log("[SceneManager] ✅ Applied cylinder config to:", matName || meshName);
+          return;
         } else if (isRubberMaterial(matName, meshName)) {
-          // Rubber bumper at bottom
-          newMat = createRubberMaterial(512, 512);
-          console.log("[SceneManager] ✅ Applied RUBBER material to:", matName || meshName);
-        } else if (
-          meshNameLower.includes("outside") || matNameLower.includes("outside") ||
-          meshNameLower.includes("butt_body") || matNameLower.includes("butt_body")
-        ) {
-          // Main body - apply surface texture
-          // TEMP: ver2 model has baked-in leather - skip custom leather material
-          // if (productType === "leather" && textureMaps) {
-          //   newMat = createLeatherMaterial(mapTexture, textureMaps);
-          //   console.log("[SceneManager] ✅ Applied LEATHER material to:", matName || meshName);
-          // } else {
-          //   newMat = createStandardMaterial(mapTexture);
-          //   console.log("[SceneManager] ✅ Applied STANDARD material to:", matName || meshName);
-          // }
-          console.log("[SceneManager] ⏭️ Keeping baked-in leather material for:", matName || meshName);
+          // Rubber bumper - apply logo overlay, keep original GLB texture
+          applyLogoToExistingMaterial(mat, 'rubber');
+          console.log("[SceneManager] ✅ Applied RUBBER logo (keeping original texture) to:", matName || meshName);
           return;
         } else {
-          // Unknown material - skip
-          console.log("[SceneManager] ⏭️ Skipping material:", matName || meshName);
+          // Other meshes - apply general body config
+          mat.roughness = this.bodyRoughness / 255;
+          mat.clearcoat = this.currentLeatherConfig.clearcoat / 100;
+          mat.needsUpdate = true;
+          console.log("[SceneManager] ✅ Applied body config to:", matName || meshName);
           return;
-        }
-
-        newMat.name = matName;
-
-        if (Array.isArray(child.material)) {
-          child.material[idx] = newMat;
-        } else {
-          child.material = newMat;
         }
       });
     });

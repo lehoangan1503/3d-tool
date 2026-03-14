@@ -81,7 +81,8 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
     // This ensures material values match UI state
     const currentConfig = configRef.current;
     const currentProduct = productRef.current;
-    manager.updateLighting(currentConfig.ambientLight, currentConfig.hemisphereLight);
+    // manager.updateLighting(currentConfig.ambientLight, currentConfig.hemisphereLight);
+    manager.updateHdriExposure(currentConfig.hdriExposure);
     manager.updateClearcoat(currentConfig.clearcoat);
     manager.updateBodyRoughness(currentConfig.bodyRoughness);
     if (currentProduct.type === "leather") {
@@ -91,15 +92,6 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
         normalStrength: currentConfig.normalStrength,
       });
     }
-    manager.updateCylinderConfig({
-      roughness: currentConfig.cylinderRoughness,
-      clearcoat: currentConfig.cylinderClearcoat,
-      metalness: currentConfig.cylinderMetalness,
-      color: currentConfig.cylinderColor,
-      normalScale: currentConfig.cylinderNormalScale,
-      sheen: currentConfig.cylinderSheen,
-      sheenColor: currentConfig.cylinderSheenColor,
-    });
     manager.updateJointConfig({
       roughness: currentConfig.jointRoughness,
       clearcoat: currentConfig.jointClearcoat,
@@ -117,8 +109,11 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
 
     console.log("[EditorClient] Applying config to scene:", config);
 
-    // Update lighting
-    sceneManager.updateLighting(config.ambientLight, config.hemisphereLight);
+    // Update lighting (commented out — using HDRI instead)
+    // sceneManager.updateLighting(config.ambientLight, config.hemisphereLight);
+
+    // Update HDRI exposure
+    sceneManager.updateHdriExposure(config.hdriExposure);
 
     // Update clearcoat (works for both leather and smooth)
     sceneManager.updateClearcoat(config.clearcoat);
@@ -134,17 +129,6 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
         normalStrength: config.normalStrength,
       });
     }
-
-    // Update cylinder (leather wrap) config
-    sceneManager.updateCylinderConfig({
-      roughness: config.cylinderRoughness,
-      clearcoat: config.cylinderClearcoat,
-      metalness: config.cylinderMetalness,
-      color: config.cylinderColor,
-      normalScale: config.cylinderNormalScale,
-      sheen: config.cylinderSheen,
-      sheenColor: config.cylinderSheenColor,
-    });
 
     // Update joint top config
     sceneManager.updateJointConfig({
@@ -310,6 +294,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
       texture_url: product.texture_url,
       color: product.color,
       config: {
+        hdriExposure: config.hdriExposure,
         lighting: {
           ambient: config.ambientLight,
           hemisphere: config.hemisphereLight,
@@ -478,7 +463,32 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                 />
               </CollapsibleCard>
 
-              {/* Lighting Configuration */}
+              {/* HDRI Exposure Control */}
+              <CollapsibleCard
+                title="HDRI Exposure"
+                icon={<Lightbulb className="h-4 w-4 text-primary" />}
+              >
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="hdriExposure-mobile">Intensity</Label>
+                    <Input
+                      id="hdriExposure-mobile"
+                      type="number"
+                      min={0}
+                      max={3}
+                      step={0.05}
+                      value={config.hdriExposure}
+                      onChange={(e) =>
+                        updateConfig({
+                          hdriExposure: Math.min(3, Math.max(0, parseFloat(e.target.value) || 0)),
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+              </CollapsibleCard>
+
+              {/* Lighting & Environment — hidden (using HDRI instead)
               <CollapsibleCard
                 title="Lighting & Environment"
                 icon={<Lightbulb className="h-4 w-4 text-primary" />}
@@ -548,8 +558,9 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                   </div>
                 </div>
               </CollapsibleCard>
+              */}
 
-              {/* Leather Cylinder Config */}
+              {/* Leather Cylinder Config — DISABLED: using original GLB material (may re-enable later)
               <CollapsibleCard
                 title="Leather Cylinder"
                 icon={<Palette className="h-4 w-4 text-primary" />}
@@ -673,6 +684,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                   </div>
                 </div>
               </CollapsibleCard>
+              */}
 
               {/* Joint Top Config */}
               <CollapsibleCard
@@ -874,7 +886,33 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
               />
             </CollapsibleCard>
 
-            {/* Lighting Configuration */}
+            {/* HDRI Exposure Control */}
+            <CollapsibleCard
+              title="HDRI Exposure"
+              icon={<Lightbulb className="h-4 w-4 text-primary" />}
+            >
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="hdriExposure">Intensity</Label>
+                  <Input
+                    id="hdriExposure"
+                    type="number"
+                    min={0}
+                    max={3}
+                    step={0.05}
+                    value={config.hdriExposure}
+                    onChange={(e) =>
+                      updateConfig({
+                        hdriExposure: Math.min(3, Math.max(0, parseFloat(e.target.value) || 0)),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">0 - 3 (default: 1.0)</p>
+                </div>
+              </div>
+            </CollapsibleCard>
+
+            {/* Lighting & Environment — hidden (using HDRI instead)
             <CollapsibleCard
               title="Lighting & Environment"
               icon={<Lightbulb className="h-4 w-4 text-primary" />}
@@ -948,8 +986,9 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                 </div>
               </div>
             </CollapsibleCard>
+            */}
 
-            {/* Leather Cylinder Config */}
+            {/* Leather Cylinder Config — DISABLED: using original GLB material (may re-enable later)
             <CollapsibleCard
               title="Leather Cylinder"
               icon={<Palette className="h-4 w-4 text-primary" />}
@@ -1080,6 +1119,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                 </div>
               </div>
             </CollapsibleCard>
+            */}
 
             {/* Joint Top Config */}
             <CollapsibleCard
@@ -1102,7 +1142,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                       })
                     }
                   />
-                  <p className="text-xs text-muted-foreground">0 - 255 (default: 0)</p>
+                  <p className="text-xs text-muted-foreground">0 - 255 (default: 255)</p>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="jointClearcoat">Clearcoat</Label>
@@ -1119,7 +1159,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                       })
                     }
                   />
-                  <p className="text-xs text-muted-foreground">0 - 100 (default: 50)</p>
+                  <p className="text-xs text-muted-foreground">0 - 100 (default: 0)</p>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="jointMetalness">Metalness</Label>
@@ -1136,7 +1176,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                       })
                     }
                   />
-                  <p className="text-xs text-muted-foreground">0 - 1 (default: 0.3)</p>
+                  <p className="text-xs text-muted-foreground">0 - 1 (default: 1)</p>
                 </div>
               </div>
             </CollapsibleCard>

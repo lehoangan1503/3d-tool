@@ -16,20 +16,10 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         {/* Preload 3D model for parallel loading with other assets */}
-        <link
-          rel="preload"
-          href="/models/cue-butt-leather.glb"
-          as="fetch"
-          crossOrigin="anonymous"
-        />
+        {/* <link rel="preload" href="/models/cue-butt-leather.glb" as="fetch" crossOrigin="anonymous" /> */}
       </head>
       <body className="antialiased min-h-screen">
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="dark"
-          enableSystem
-          disableTransitionOnChange
-        >
+        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
           {children}
         </ThemeProvider>
       </body>

@@ -16,9 +16,7 @@ export {
 } from "./leather-config";
 
 export {
-  createRubberMaterial,
-  createTopCapMaterial,
-  createTopCapFaceMaterial,
+  applyLogoToExistingMaterial,
   loadBumperLogo,
   loadTopCapLogo,
   loadAllLogos,

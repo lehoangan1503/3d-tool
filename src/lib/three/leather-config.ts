@@ -426,9 +426,9 @@ export const RUBBER_CONFIG: RubberConfigType = {
 export const TOP_CAP_CONFIG: TopCapConfigType = {
   enabled: true,
   materialNames: ["joint_mat", "joint", "jointcover", "joint_cover", "thread", "screw", "thread_cap", "top_cap", "ferrule", "connector", "adapter", "Mat_JointCover", "JointCover"],
-  roughness: 0,
-  clearcoat: 0.5,
-  metalness: 0.3,
+  roughness: 255,
+  clearcoat: 0,
+  metalness: 1,
   logo: {
     enabled: true,
     path: "/logo.png",
@@ -456,7 +456,7 @@ export const TOP_CAP_CONFIG: TopCapConfigType = {
 
 export const CYLINDER_LEATHER_CONFIG: CylinderLeatherConfigType = {
   enabled: true,
-  materialNames: ["leather_mat", "leather", "cylinder", "wrap", "Mat_Leather"],
+  materialNames: ["cylinder", "wrap"],
   roughness: 102,
   clearcoat: 10,
   metalness: 0,

@@ -549,87 +549,89 @@ export function loadBumperLogo(): Promise<HTMLImageElement | null> {
 }
 
 /**
- * Create diffuse texture for rubber with logo
+ * Draw rubber bumper logo onto a canvas context (no background fill)
  */
-export function createRubberDiffuseWithLogo(width = 512, height = 512): THREE.CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d")!;
+function drawRubberLogoOnCanvas(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+  if (!bumperLogoImage || !RUBBER_CONFIG.logo.enabled) return;
 
-  // Fill with rubber background color
-  ctx.fillStyle = RUBBER_CONFIG.backgroundColor;
-  ctx.fillRect(0, 0, width, height);
+  const logoScale = RUBBER_CONFIG.logo.scale;
+  const logoW = width * logoScale;
+  const logoH = (bumperLogoImage.height / bumperLogoImage.width) * logoW;
+  const offsetX = (RUBBER_CONFIG.logo.offsetX || 0) * width;
+  const offsetY = (RUBBER_CONFIG.logo.offsetY || 0) * height;
+  const logoX = (width - logoW) / 2 + offsetX;
+  const logoY = (height - logoH) / 2 + offsetY;
 
-  // Draw logo if available
-  if (bumperLogoImage && RUBBER_CONFIG.logo.enabled) {
-    const logoScale = RUBBER_CONFIG.logo.scale;
-    const logoW = width * logoScale;
-    const logoH = (bumperLogoImage.height / bumperLogoImage.width) * logoW;
-    const offsetX = (RUBBER_CONFIG.logo.offsetX || 0) * width;
-    const offsetY = (RUBBER_CONFIG.logo.offsetY || 0) * height;
-    const logoX = (width - logoW) / 2 + offsetX;
-    const logoY = (height - logoH) / 2 + offsetY;
+  // Create colored logo
+  const colorCanvas = document.createElement("canvas");
+  colorCanvas.width = bumperLogoImage.width;
+  colorCanvas.height = bumperLogoImage.height;
+  const colorCtx = colorCanvas.getContext("2d")!;
+  colorCtx.drawImage(bumperLogoImage, 0, 0);
 
-    // Create colored logo
-    const colorCanvas = document.createElement("canvas");
-    colorCanvas.width = bumperLogoImage.width;
-    colorCanvas.height = bumperLogoImage.height;
-    const colorCtx = colorCanvas.getContext("2d")!;
-    colorCtx.drawImage(bumperLogoImage, 0, 0);
+  // Apply logo color
+  const logoColor = RUBBER_CONFIG.logo.color || "#cfd3d6";
+  colorCtx.globalCompositeOperation = "source-in";
+  colorCtx.fillStyle = logoColor;
+  colorCtx.fillRect(0, 0, colorCanvas.width, colorCanvas.height);
 
-    // Apply logo color
-    const logoColor = RUBBER_CONFIG.logo.color || "#cfd3d6";
-    colorCtx.globalCompositeOperation = "source-in";
-    colorCtx.fillStyle = logoColor;
-    colorCtx.fillRect(0, 0, colorCanvas.width, colorCanvas.height);
-
-    // Draw logo with optional flip
-    ctx.save();
-    ctx.globalAlpha = RUBBER_CONFIG.logo.opacity || 1.0;
-    
-    if (RUBBER_CONFIG.logo.flipX || RUBBER_CONFIG.logo.flipY) {
-      ctx.translate(logoX + logoW / 2, logoY + logoH / 2);
-      ctx.scale(RUBBER_CONFIG.logo.flipX ? -1 : 1, RUBBER_CONFIG.logo.flipY ? -1 : 1);
-      ctx.drawImage(colorCanvas, -logoW / 2, -logoH / 2, logoW, logoH);
-    } else {
-      ctx.drawImage(colorCanvas, logoX, logoY, logoW, logoH);
-    }
-    
-    ctx.restore();
-    console.log("[Rubber] Logo drawn at:", logoX, logoY, logoW, logoH);
+  // Draw logo with optional flip
+  ctx.save();
+  ctx.globalAlpha = RUBBER_CONFIG.logo.opacity || 1.0;
+  
+  if (RUBBER_CONFIG.logo.flipX || RUBBER_CONFIG.logo.flipY) {
+    ctx.translate(logoX + logoW / 2, logoY + logoH / 2);
+    ctx.scale(RUBBER_CONFIG.logo.flipX ? -1 : 1, RUBBER_CONFIG.logo.flipY ? -1 : 1);
+    ctx.drawImage(colorCanvas, -logoW / 2, -logoH / 2, logoW, logoH);
+  } else {
+    ctx.drawImage(colorCanvas, logoX, logoY, logoW, logoH);
   }
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.flipY = false;
-  texture.needsUpdate = true;
-  return texture;
+  
+  ctx.restore();
+  console.log("[Rubber] Logo drawn at:", logoX, logoY, logoW, logoH);
 }
 
-/**
- * Create MeshPhysicalMaterial for rubber bumper
- */
-export function createRubberMaterial(width = 512, height = 512): THREE.MeshPhysicalMaterial {
-  const mapTexture = createRubberDiffuseWithLogo(width, height);
+// /**
+//  * Create diffuse texture for rubber with logo (replaced by applyLogoToExistingMaterial)
+//  */
+// export function createRubberDiffuseWithLogo(width = 512, height = 512): THREE.CanvasTexture {
+//   const canvas = document.createElement("canvas");
+//   canvas.width = width;
+//   canvas.height = height;
+//   const ctx = canvas.getContext("2d")!;
+//   ctx.fillStyle = RUBBER_CONFIG.backgroundColor;
+//   ctx.fillRect(0, 0, width, height);
+//   drawRubberLogoOnCanvas(ctx, width, height);
+//   const texture = new THREE.CanvasTexture(canvas);
+//   texture.colorSpace = THREE.SRGBColorSpace;
+//   texture.flipY = false;
+//   texture.needsUpdate = true;
+//   return texture;
+// }
 
-  return new THREE.MeshPhysicalMaterial({
-    map: mapTexture,
-    color: new THREE.Color(0xffffff), // White so texture colors show correctly
-    roughness: RUBBER_CONFIG.roughness,
-    metalness: RUBBER_CONFIG.metalness,
-    clearcoat: RUBBER_CONFIG.clearcoat,
-    clearcoatRoughness: 0.94,
-    reflectivity: RUBBER_CONFIG.reflectivity,
-    ior: 1.45,
-    specularIntensity: 0.19,
-    specularColor: new THREE.Color(0x2a2a2a),
-    sheen: 0.0,
-    sheenRoughness: 1.0,
-    sheenColor: new THREE.Color(0x222222),
-    transparent: false,
-  });
-}
+// /**
+//  * Create MeshPhysicalMaterial for rubber bumper
+//  * DEPRECATED: Now we keep the original GLB material and only apply the logo overlay
+//  */
+// export function createRubberMaterial(width = 512, height = 512): THREE.MeshPhysicalMaterial {
+//   const mapTexture = createRubberDiffuseWithLogo(width, height);
+//   return new THREE.MeshPhysicalMaterial({
+//     map: mapTexture,
+//     color: new THREE.Color(0xffffff),
+//     roughness: RUBBER_CONFIG.roughness,
+//     metalness: RUBBER_CONFIG.metalness,
+//     clearcoat: RUBBER_CONFIG.clearcoat,
+//     clearcoatRoughness: 0.94,
+//     reflectivity: RUBBER_CONFIG.reflectivity,
+//     ior: 1.45,
+//     specularIntensity: 0.19,
+//     specularColor: new THREE.Color(0x2a2a2a),
+//     sheen: 0.0,
+//     sheenRoughness: 1.0,
+//     sheenColor: new THREE.Color(0x222222),
+//     transparent: false,
+//   });
+// }
 
 // =====================================================
 // TOP CAP MATERIAL (Joint cover at top)
@@ -663,124 +665,172 @@ export function loadTopCapLogo(): Promise<HTMLImageElement | null> {
 }
 
 /**
- * Create texture with logo for top cap BODY (cylindrical part)
- */
-export function createTopCapTextureWithLogo(width = 512, height = 512): THREE.CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d")!;
-
-  // Fill with uniform dark gray background (same as rubber)
-  ctx.fillStyle = "#2a2a2a";
-  ctx.fillRect(0, 0, width, height);
-
-  // No logo on cylindrical body - only on flat top face
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.flipY = false;
-  texture.needsUpdate = true;
-  return texture;
-}
-
-/**
- * Create texture with logo for top cap FACE (flat top circle)
+ * Draw top cap face logo onto a canvas context (no background fill)
  * UV is a simple quad: U: 0.01-0.49, V: 0.51-0.99, center at (0.25, 0.75)
  */
-export function createTopCapFaceTextureWithLogo(width = 512, height = 512): THREE.CanvasTexture {
+function drawTopCapFaceLogoOnCanvas(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+  if (!topCapLogoImage || !TOP_CAP_CONFIG.logo.enabled) return;
+
+  const logoScale = TOP_CAP_CONFIG.logo.scale;
+  const logoW = width * logoScale;
+  const logoH = (topCapLogoImage.height / topCapLogoImage.width) * logoW;
+  
+  // UV center is at (0.25, 0.75) for the top_cap face
+  const uvCenterX = 0.25;
+  const uvCenterY = 0.75;
+  
+  const logoX = width * uvCenterX - logoW / 2;
+  const logoY = height * uvCenterY - logoH / 2;
+
+  // Create colored logo
+  const colorCanvas = document.createElement("canvas");
+  colorCanvas.width = topCapLogoImage.width;
+  colorCanvas.height = topCapLogoImage.height;
+  const colorCtx = colorCanvas.getContext("2d")!;
+  colorCtx.drawImage(topCapLogoImage, 0, 0);
+
+  // Apply logo color
+  const logoColor = TOP_CAP_CONFIG.logo.color || "#4a4a4a";
+  colorCtx.globalCompositeOperation = "source-in";
+  colorCtx.fillStyle = logoColor;
+  colorCtx.fillRect(0, 0, colorCanvas.width, colorCanvas.height);
+
+  // Draw logo
+  ctx.save();
+  ctx.globalAlpha = TOP_CAP_CONFIG.logo.opacity || 1.0;
+  ctx.drawImage(colorCanvas, logoX, logoY, logoW, logoH);
+  ctx.restore();
+  
+  console.log("[TopCapFace] Logo drawn at UV center (0.25, 0.75), canvas pos:", logoX.toFixed(0), logoY.toFixed(0));
+}
+
+// /**
+//  * Create texture with logo for top cap BODY (cylindrical part)
+//  * DEPRECATED: Now we keep the original GLB material texture
+//  */
+// export function createTopCapTextureWithLogo(width = 512, height = 512): THREE.CanvasTexture {
+//   const canvas = document.createElement("canvas");
+//   canvas.width = width;
+//   canvas.height = height;
+//   const ctx = canvas.getContext("2d")!;
+//   ctx.fillStyle = "#2a2a2a";
+//   ctx.fillRect(0, 0, width, height);
+//   const texture = new THREE.CanvasTexture(canvas);
+//   texture.colorSpace = THREE.SRGBColorSpace;
+//   texture.flipY = false;
+//   texture.needsUpdate = true;
+//   return texture;
+// }
+
+// /**
+//  * Create texture with logo for top cap FACE (flat top circle)
+//  * DEPRECATED: Now we keep the original GLB material texture and only overlay the logo
+//  */
+// export function createTopCapFaceTextureWithLogo(width = 512, height = 512): THREE.CanvasTexture {
+//   const canvas = document.createElement("canvas");
+//   canvas.width = width;
+//   canvas.height = height;
+//   const ctx = canvas.getContext("2d")!;
+//   ctx.fillStyle = "#2a2a2a";
+//   ctx.fillRect(0, 0, width, height);
+//   drawTopCapFaceLogoOnCanvas(ctx, width, height);
+//   const texture = new THREE.CanvasTexture(canvas);
+//   texture.colorSpace = THREE.SRGBColorSpace;
+//   texture.flipY = false;
+//   texture.needsUpdate = true;
+//   return texture;
+// }
+
+// /**
+//  * Create MeshPhysicalMaterial for top cap BODY (cylindrical joint cover)
+//  * DEPRECATED: Now we keep the original GLB material
+//  */
+// export function createTopCapMaterial(width = 512, height = 512): THREE.MeshPhysicalMaterial {
+//   const mapTexture = createTopCapTextureWithLogo(width, height);
+//   return new THREE.MeshPhysicalMaterial({
+//     map: mapTexture,
+//     color: new THREE.Color(0xffffff),
+//     roughness: 0.4,
+//     metalness: 0,
+//     clearcoat: 0.3,
+//     clearcoatRoughness: 0.5,
+//     reflectivity: 0.3,
+//     ior: 1.45,
+//     specularIntensity: 0.3,
+//     specularColor: new THREE.Color(0x333333),
+//     sheen: 0.0,
+//     transparent: false,
+//   });
+// }
+
+// /**
+//  * Create MeshPhysicalMaterial for top cap FACE (flat top with logo)
+//  * DEPRECATED: Now we keep the original GLB material and only overlay the logo
+//  */
+// export function createTopCapFaceMaterial(width = 512, height = 512): THREE.MeshPhysicalMaterial {
+//   const mapTexture = createTopCapFaceTextureWithLogo(width, height);
+//   return new THREE.MeshPhysicalMaterial({
+//     map: mapTexture,
+//     color: new THREE.Color(0xffffff),
+//     roughness: 0.4,
+//     metalness: 0,
+//     clearcoat: 0.3,
+//     clearcoatRoughness: 0.5,
+//     reflectivity: 0.3,
+//     ior: 1.45,
+//     specularIntensity: 0.3,
+//     specularColor: new THREE.Color(0x333333),
+//     sheen: 0.0,
+//     transparent: false,
+//   });
+// }
+
+/**
+ * Apply logo overlay to an existing material's map texture.
+ * Keeps the original GLB texture intact and only draws the logo on top.
+ */
+export function applyLogoToExistingMaterial(
+  mat: THREE.Material,
+  type: 'rubber' | 'topCapFace'
+): void {
+  const physMat = mat as THREE.MeshStandardMaterial;
+  const originalMap = physMat.map;
+
+  if (!originalMap || !originalMap.image) {
+    console.warn(`[applyLogo] No map texture found on material "${mat.name}", skipping logo`);
+    return;
+  }
+
+  const img = originalMap.image as HTMLImageElement | HTMLCanvasElement | ImageBitmap;
+  const width = (img as HTMLImageElement).width || 512;
+  const height = (img as HTMLImageElement).height || 512;
+
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d")!;
 
-  // Fill with uniform dark gray background
-  ctx.fillStyle = "#2a2a2a";
-  ctx.fillRect(0, 0, width, height);
+  // Draw original texture first
+  ctx.drawImage(img as CanvasImageSource, 0, 0, width, height);
 
-  // Draw logo centered at UV (0.25, 0.75)
-  if (topCapLogoImage && TOP_CAP_CONFIG.logo.enabled) {
-    const logoScale = TOP_CAP_CONFIG.logo.scale;
-    const logoW = width * logoScale;
-    const logoH = (topCapLogoImage.height / topCapLogoImage.width) * logoW;
-    
-    // UV center is at (0.25, 0.75) for the top_cap face
-    const uvCenterX = 0.25;
-    const uvCenterY = 0.75;
-    
-    const logoX = width * uvCenterX - logoW / 2;
-    const logoY = height * uvCenterY - logoH / 2;
-
-    // Create colored logo
-    const colorCanvas = document.createElement("canvas");
-    colorCanvas.width = topCapLogoImage.width;
-    colorCanvas.height = topCapLogoImage.height;
-    const colorCtx = colorCanvas.getContext("2d")!;
-    colorCtx.drawImage(topCapLogoImage, 0, 0);
-
-    // Apply logo color
-    const logoColor = TOP_CAP_CONFIG.logo.color || "#4a4a4a";
-    colorCtx.globalCompositeOperation = "source-in";
-    colorCtx.fillStyle = logoColor;
-    colorCtx.fillRect(0, 0, colorCanvas.width, colorCanvas.height);
-
-    // Draw logo
-    ctx.save();
-    ctx.globalAlpha = TOP_CAP_CONFIG.logo.opacity || 1.0;
-    ctx.drawImage(colorCanvas, logoX, logoY, logoW, logoH);
-    ctx.restore();
-    
-    console.log("[TopCapFace] Logo drawn at UV center (0.25, 0.75), canvas pos:", logoX.toFixed(0), logoY.toFixed(0));
+  // Draw logo on top
+  if (type === 'rubber') {
+    drawRubberLogoOnCanvas(ctx, width, height);
+  } else if (type === 'topCapFace') {
+    drawTopCapFaceLogoOnCanvas(ctx, width, height);
   }
 
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.flipY = false;
-  texture.needsUpdate = true;
-  return texture;
-}
+  // Create new texture preserving original texture settings
+  const newTexture = new THREE.CanvasTexture(canvas);
+  newTexture.colorSpace = originalMap.colorSpace;
+  newTexture.flipY = originalMap.flipY;
+  newTexture.wrapS = originalMap.wrapS;
+  newTexture.wrapT = originalMap.wrapT;
+  newTexture.needsUpdate = true;
 
-/**
- * Create MeshPhysicalMaterial for top cap BODY (cylindrical joint cover)
- */
-export function createTopCapMaterial(width = 512, height = 512): THREE.MeshPhysicalMaterial {
-  const mapTexture = createTopCapTextureWithLogo(width, height);
-
-  return new THREE.MeshPhysicalMaterial({
-    map: mapTexture,
-    color: new THREE.Color(0xffffff), // White so texture colors show correctly
-    roughness: 0.4,
-    metalness: 0,
-    clearcoat: 0.3,
-    clearcoatRoughness: 0.5,
-    reflectivity: 0.3,
-    ior: 1.45,
-    specularIntensity: 0.3,
-    specularColor: new THREE.Color(0x333333),
-    sheen: 0.0,
-    transparent: false,
-  });
-}
-
-/**
- * Create MeshPhysicalMaterial for top cap FACE (flat top with logo)
- */
-export function createTopCapFaceMaterial(width = 512, height = 512): THREE.MeshPhysicalMaterial {
-  const mapTexture = createTopCapFaceTextureWithLogo(width, height);
-
-  return new THREE.MeshPhysicalMaterial({
-    map: mapTexture,
-    color: new THREE.Color(0xffffff),
-    roughness: 0.4,
-    metalness: 0,
-    clearcoat: 0.3,
-    clearcoatRoughness: 0.5,
-    reflectivity: 0.3,
-    ior: 1.45,
-    specularIntensity: 0.3,
-    specularColor: new THREE.Color(0x333333),
-    sheen: 0.0,
-    transparent: false,
-  });
+  physMat.map = newTexture;
+  physMat.needsUpdate = true;
+  console.log(`[applyLogo] Applied ${type} logo overlay to material "${mat.name}" (${width}x${height})`);
 }
 
 // =====================================================

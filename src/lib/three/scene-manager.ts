@@ -1,10 +1,11 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { RectAreaLightUniformsLib } from "three/examples/jsm/lights/RectAreaLightUniformsLib.js";
+import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
+// import { RectAreaLightUniformsLib } from "three/examples/jsm/lights/RectAreaLightUniformsLib.js";
 import type { ThreeJSSettings } from "@/types/settings";
 import { DEFAULT_THREEJS_SETTINGS } from "@/types/settings";
-import { LEATHER_CONFIG, TOP_CAP_CONFIG, CYLINDER_LEATHER_CONFIG, getLeatherColorHex, isRubberMaterial, isTopCapMaterial, isTopCapFaceMaterial, isCylinderLeatherMaterial } from "./leather-config";
+import { LEATHER_CONFIG, TOP_CAP_CONFIG, CYLINDER_LEATHER_CONFIG, isRubberMaterial, isTopCapMaterial, isTopCapFaceMaterial, isCylinderLeatherMaterial } from "./leather-config";
 import {
   loadLeatherNormal,
   createLeatherTextureMaps,
@@ -14,7 +15,7 @@ import {
   applyLogoToExistingMaterial,
   type LeatherTextureMaps,
 } from "./leather-material";
-import { createLeatherSurface, createLeatherRoughnessMap } from "./leather-overlay";
+import { createLeatherRoughnessMap } from "./leather-overlay";
 import type { ProductType, LeatherColor, LeatherTextureType } from "@/types/product";
 
 export interface SurfaceOptions {
@@ -89,8 +90,9 @@ export class SceneManager {
   private isDarkBg = true;
   private maxAnisotropy: number;
   private createdTextures: THREE.Texture[] = [];
-  private ambientLight: THREE.AmbientLight | null = null;
-  private hemisphereLight: THREE.HemisphereLight | null = null;
+  // private ambientLight: THREE.AmbientLight | null = null;
+  // private hemisphereLight: THREE.HemisphereLight | null = null;
+  private envMap: THREE.Texture | null = null;
   private currentLeatherConfig = {
     roughness: LEATHER_CONFIG.roughness,
     clearcoat: LEATHER_CONFIG.clearcoat,
@@ -121,12 +123,12 @@ export class SceneManager {
   constructor(container: HTMLElement, settings?: ThreeJSSettings) {
     this.instanceId = ++sceneManagerInstanceId;
     console.log(`[SceneManager #${this.instanceId}] Constructor called`);
-    
+
     this.container = container;
     this.settings = settings || DEFAULT_THREEJS_SETTINGS;
 
-    // Initialize RectAreaLight uniforms
-    RectAreaLightUniformsLib.init();
+    // Initialize RectAreaLight uniforms (commented out — using HDRI instead)
+    // RectAreaLightUniformsLib.init();
 
     // Scene
     this.scene = new THREE.Scene();
@@ -134,12 +136,7 @@ export class SceneManager {
 
     // Camera
     const { fov, position, near, far } = this.settings.camera;
-    this.camera = new THREE.PerspectiveCamera(
-      fov,
-      container.clientWidth / container.clientHeight,
-      near,
-      far
-    );
+    this.camera = new THREE.PerspectiveCamera(fov, container.clientWidth / container.clientHeight, near, far);
     this.camera.position.set(position[0], position[1], position[2]);
 
     // Renderer
@@ -147,6 +144,8 @@ export class SceneManager {
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.AgXToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
     container.appendChild(this.renderer.domElement);
 
     // Get max anisotropy for texture filtering
@@ -168,8 +167,11 @@ export class SceneManager {
       this.controls.target.z = 0;
     });
 
-    // Lighting
-    this.setupLighting();
+    // Lighting — HDRI environment
+    this.setupEnvironment();
+
+    // Lighting (commented out — using HDRI instead)
+    // this.setupLighting();
 
     // Handle resize
     window.addEventListener("resize", this.handleResize);
@@ -178,52 +180,78 @@ export class SceneManager {
     this.animate();
   }
 
-  private setupLighting() {
-    // Ambient light
-    this.ambientLight = new THREE.AmbientLight(0xffffff, this.settings.lighting.ambient);
-    this.scene.add(this.ambientLight);
+  private setupEnvironment() {
+    const rgbeLoader = new RGBELoader();
+    rgbeLoader.load("/hdri/bloem_train_track_clear_2k.hdr", (texture) => {
+      texture.mapping = THREE.EquirectangularReflectionMapping;
+      this.envMap = texture;
+      this.scene.environment = texture;
+      // Keep solid background color (don't set scene.background to HDRI)
+    });
 
-    // Hemisphere light
-    this.hemisphereLight = new THREE.HemisphereLight(0xffffff, 0xf0f0f0, this.settings.lighting.hemisphere);
-    this.scene.add(this.hemisphereLight);
-
-    // Studio-style RectAreaLights attached to camera
-    const stripRight = new THREE.RectAreaLight(0xffffff, 5, 1.0, 5);
-    stripRight.position.set(2, 0, 1);
-    stripRight.lookAt(0, 0, 0);
-    this.camera.add(stripRight);
-
-    const stripLeft = new THREE.RectAreaLight(0xffffff, 4, 0.8, 4.5);
-    stripLeft.position.set(-1.8, 0, 1);
-    stripLeft.lookAt(0, 0, 0);
-    this.camera.add(stripLeft);
-
-    const stripTop = new THREE.RectAreaLight(0xffffff, 4.5, 4, 0.8);
-    stripTop.position.set(0, 2, 1);
-    stripTop.lookAt(0, 0, 0);
-    this.camera.add(stripTop);
-
-    const stripBottom = new THREE.RectAreaLight(0xffffff, 3.5, 3.5, 0.6);
-    stripBottom.position.set(0, -1.8, 1);
-    stripBottom.lookAt(0, 0, 0);
-    this.camera.add(stripBottom);
+    // Subtle fill light from below to illuminate the bumper area
+    const bottomFill = new THREE.PointLight(0xffffff, 0.5, 10);
+    bottomFill.position.set(0, -3, 1);
+    this.scene.add(bottomFill);
 
     this.scene.add(this.camera);
   }
 
+  // --- Commented out light config (may reuse later) ---
+  // private setupLighting() {
+  //   // Ambient light
+  //   this.ambientLight = new THREE.AmbientLight(0xffffff, this.settings.lighting.ambient);
+  //   this.scene.add(this.ambientLight);
+  //
+  //   // Hemisphere light
+  //   this.hemisphereLight = new THREE.HemisphereLight(0xffffff, 0xf0f0f0, this.settings.lighting.hemisphere);
+  //   this.scene.add(this.hemisphereLight);
+  //
+  //   // Studio-style RectAreaLights attached to camera
+  //   const stripRight = new THREE.RectAreaLight(0xffffff, 5, 1.0, 5);
+  //   stripRight.position.set(2, 0, 1);
+  //   stripRight.lookAt(0, 0, 0);
+  //   this.camera.add(stripRight);
+  //
+  //   const stripLeft = new THREE.RectAreaLight(0xffffff, 4, 0.8, 4.5);
+  //   stripLeft.position.set(-1.8, 0, 1);
+  //   stripLeft.lookAt(0, 0, 0);
+  //   this.camera.add(stripLeft);
+  //
+  //   const stripTop = new THREE.RectAreaLight(0xffffff, 4.5, 4, 0.8);
+  //   stripTop.position.set(0, 2, 1);
+  //   stripTop.lookAt(0, 0, 0);
+  //   this.camera.add(stripTop);
+  //
+  //   const stripBottom = new THREE.RectAreaLight(0xffffff, 3.5, 3.5, 0.6);
+  //   stripBottom.position.set(0, -1.8, 1);
+  //   stripBottom.lookAt(0, 0, 0);
+  //   this.camera.add(stripBottom);
+  //
+  //   this.scene.add(this.camera);
+  // }
+
   /**
-   * Update lighting settings dynamically
+   * Update lighting settings dynamically (commented out — using HDRI instead)
    */
-  updateLighting(ambient: number, hemisphere: number) {
-    console.log("[SceneManager] updateLighting:", { ambient, hemisphere });
-    if (this.ambientLight) {
-      this.ambientLight.intensity = ambient;
-      console.log("[SceneManager] Ambient light intensity set to:", ambient);
-    }
-    if (this.hemisphereLight) {
-      this.hemisphereLight.intensity = hemisphere;
-      console.log("[SceneManager] Hemisphere light intensity set to:", hemisphere);
-    }
+  // updateLighting(ambient: number, hemisphere: number) {
+  //   console.log("[SceneManager] updateLighting:", { ambient, hemisphere });
+  //   if (this.ambientLight) {
+  //     this.ambientLight.intensity = ambient;
+  //     console.log("[SceneManager] Ambient light intensity set to:", ambient);
+  //   }
+  //   if (this.hemisphereLight) {
+  //     this.hemisphereLight.intensity = hemisphere;
+  //     console.log("[SceneManager] Hemisphere light intensity set to:", hemisphere);
+  //   }
+  // }
+
+  /**
+   * Update HDRI exposure (tone mapping exposure)
+   */
+  updateHdriExposure(exposure: number) {
+    console.log("[SceneManager] updateHdriExposure:", exposure);
+    this.renderer.toneMappingExposure = exposure;
   }
 
   /**
@@ -243,7 +271,7 @@ export class SceneManager {
   updateBodyRoughness(roughness: number) {
     console.log(`[SceneManager #${this.instanceId}] updateBodyRoughness:`, roughness);
     this.bodyRoughness = roughness;
-    
+
     // For leather products, regenerate the roughnessMap with new bodyRoughness
     if (this.isLeatherProduct && this.leatherRoughnessTexture) {
       const canvas = createLeatherRoughnessMap(
@@ -257,27 +285,22 @@ export class SceneManager {
       this.leatherRoughnessTexture.needsUpdate = true;
       console.log(`[SceneManager #${this.instanceId}] Updated leatherRoughnessTexture with bodyRoughness:`, this.bodyRoughness);
     }
-    
+
     this.updateModelMaterials();
   }
 
   /**
    * Update leather material config and re-apply to model
    */
-  updateLeatherConfig(config: {
-    roughness?: number;
-    clearcoat?: number;
-    sheen?: number;
-    normalStrength?: number;
-  }) {
+  updateLeatherConfig(config: { roughness?: number; clearcoat?: number; sheen?: number; normalStrength?: number }) {
     console.log("[SceneManager] updateLeatherConfig:", config);
     const roughnessChanged = config.roughness !== undefined && config.roughness !== this.currentLeatherConfig.roughness;
-    
+
     if (config.roughness !== undefined) this.currentLeatherConfig.roughness = config.roughness;
     if (config.clearcoat !== undefined) this.currentLeatherConfig.clearcoat = config.clearcoat;
     if (config.sheen !== undefined) this.currentLeatherConfig.sheen = config.sheen;
     if (config.normalStrength !== undefined) this.currentLeatherConfig.normalStrength = config.normalStrength;
-    
+
     // If leather roughness changed, regenerate the roughnessMap
     if (roughnessChanged && this.isLeatherProduct && this.leatherRoughnessTexture) {
       const canvas = createLeatherRoughnessMap(
@@ -290,7 +313,7 @@ export class SceneManager {
       this.leatherRoughnessTexture.needsUpdate = true;
       console.log("[SceneManager] Updated leatherRoughnessTexture with leatherRoughness:", this.currentLeatherConfig.roughness);
     }
-    
+
     // Update materials on the model
     this.updateModelMaterials();
   }
@@ -341,37 +364,32 @@ export class SceneManager {
       return;
     }
 
-    console.log(`[SceneManager #${this.instanceId}] updateModelMaterials - cylinder:`, this.currentCylinderConfig, "joint:", this.currentJointConfig, "bodyRoughness:", this.bodyRoughness);
+    console.log(
+      `[SceneManager #${this.instanceId}] updateModelMaterials - cylinder:`,
+      this.currentCylinderConfig,
+      "joint:",
+      this.currentJointConfig,
+      "bodyRoughness:",
+      this.bodyRoughness
+    );
     let updatedCount = 0;
 
     this.model.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) return;
-      
+
       const materials = Array.isArray(child.material) ? child.material : [child.material];
       materials.forEach((mat, matIdx) => {
         if (!(mat instanceof THREE.MeshStandardMaterial)) return;
 
         const matName = mat.name?.toLowerCase() || "";
         const meshName = child.name?.toLowerCase() || "";
-        
+
         const isCylinder = isCylinderLeatherMaterial(matName, meshName);
         const isTopCap = isTopCapMaterial(matName, meshName) || isTopCapFaceMaterial(matName);
         const isRubber = isRubberMaterial(matName, meshName);
-        
+
         if (isCylinder) {
-          const physMat = ensurePhysicalMaterial(child, mat, matIdx);
-          physMat.roughness = this.currentCylinderConfig.roughness / 255;
-          physMat.clearcoat = this.currentCylinderConfig.clearcoat / 100;
-          physMat.metalness = this.currentCylinderConfig.metalness;
-          physMat.color.set(this.currentCylinderConfig.color);
-          if (physMat.normalMap) {
-            physMat.normalScale.set(this.currentCylinderConfig.normalScale, this.currentCylinderConfig.normalScale);
-          }
-          physMat.sheen = this.currentCylinderConfig.sheen / 100;
-          physMat.sheenColor.set(this.currentCylinderConfig.sheenColor);
-          physMat.sheenRoughness = physMat.roughness;
-          physMat.needsUpdate = true;
-          updatedCount++;
+          // Cylinder: keep original GLB material
         } else if (isTopCap) {
           const physMat = ensurePhysicalMaterial(child, mat, matIdx);
           physMat.roughness = this.currentJointConfig.roughness / 255;
@@ -390,7 +408,7 @@ export class SceneManager {
         }
       });
     });
-    
+
     console.log(`[SceneManager] Updated ${updatedCount} materials`);
   }
 
@@ -405,12 +423,12 @@ export class SceneManager {
 
   private animate = () => {
     this.animationId = requestAnimationFrame(this.animate);
-    
+
     // Auto-rotate model on Y axis
     if (this.autoRotate && this.model) {
       this.model.rotation.y += this.autoRotateSpeed;
     }
-    
+
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   };
@@ -460,11 +478,17 @@ export class SceneManager {
 
           this.model = gltf.scene;
 
-          // Log all objects in the loaded model for debugging
+          // Force FrontSide rendering on all meshes to hide the hollow interior
           this.model.traverse((child) => {
             if (child instanceof THREE.Mesh) {
               const mats = Array.isArray(child.material) ? child.material : [child.material];
-              console.log(`[SceneManager] GLB mesh: "${child.name}" type: ${child.type} materials: [${mats.map(m => m.name || '(unnamed)').join(', ')}]`);
+              mats.forEach((mat) => {
+                if (mat instanceof THREE.Material) {
+                  mat.side = THREE.FrontSide;
+                  mat.needsUpdate = true;
+                }
+              });
+              console.log(`[SceneManager] GLB mesh: "${child.name}" type: ${child.type} materials: [${mats.map((m) => m.name || "(unnamed)").join(", ")}]`);
             }
           });
 
@@ -514,27 +538,18 @@ export class SceneManager {
     this.disposeTextures();
 
     // Load assets in parallel for better performance
-    const baseSurfaceUrl = surfaceUrl || "/textures/defaults/surface-leather6.jpg";
+    const baseSurfaceUrl = surfaceUrl || "/textures/defaults/surface-leather-default.jpg";
 
     let surfaceImage: HTMLImageElement;
 
     if (productType === "leather") {
-      const colorHex = getLeatherColorHex(leatherColor || "black");
-
-      // Load logos, leather normal, and create leather surface IN PARALLEL
-      const [, , leatherCanvas] = await Promise.all([
-        loadAllLogos(),
-        loadLeatherNormal(leatherTexture || "crocodile"),
-        createLeatherSurface(baseSurfaceUrl, colorHex),
-      ]);
-
-      surfaceImage = await this.canvasToImage(leatherCanvas);
+      // v2 model: leather region is a separate cylinder mesh stacked above "outside"
+      // Load raw surface for body mesh — no color overlay needed
+      const [, , loadedImage] = await Promise.all([loadAllLogos(), loadLeatherNormal(leatherTexture || "crocodile"), this.loadImage(baseSurfaceUrl)]);
+      surfaceImage = loadedImage;
     } else {
       // Smooth product: load logos and surface image in parallel
-      const [, loadedImage] = await Promise.all([
-        loadAllLogos(),
-        this.loadImage(baseSurfaceUrl),
-      ]);
+      const [, loadedImage] = await Promise.all([loadAllLogos(), this.loadImage(baseSurfaceUrl)]);
       surfaceImage = loadedImage;
     }
 
@@ -563,11 +578,7 @@ export class SceneManager {
     let textureMaps: LeatherTextureMaps | null = null;
     if (productType === "leather") {
       textureMaps = createLeatherTextureMaps(TEXTURE_CANVAS_SIZE, TEXTURE_CANVAS_SIZE, this.bodyRoughness, this.textureScale);
-      this.createdTextures.push(
-        textureMaps.roughnessTexture,
-        textureMaps.clearcoatTexture,
-        textureMaps.normalTexture
-      );
+      this.createdTextures.push(textureMaps.roughnessTexture, textureMaps.clearcoatTexture, textureMaps.normalTexture);
       // Store reference for dynamic updates
       this.leatherRoughnessTexture = textureMaps.roughnessTexture;
       console.log(`[SceneManager] Created leather textures with scale: ${this.textureScale}x`);
@@ -582,14 +593,19 @@ export class SceneManager {
 
       const meshName = child.name || "";
       const materials = Array.isArray(child.material) ? child.material : [child.material];
-      
+
       console.log(`[SceneManager] Found mesh: "${meshName}" with ${materials.length} material(s)`);
 
       materials.forEach((mat, idx) => {
         const matName = mat?.name || "";
-        
+
         console.log(`[SceneManager]   Material[${idx}]: "${matName}" type: ${mat?.type}`);
-        console.log(`[SceneManager]   isCylinder: ${isCylinderLeatherMaterial(matName, meshName)}, isTopCapFace: ${isTopCapFaceMaterial(matName)}, isTopCap: ${isTopCapMaterial(matName, meshName)}, isRubber: ${isRubberMaterial(matName, meshName)}`);
+        console.log(
+          `[SceneManager]   isCylinder: ${isCylinderLeatherMaterial(matName, meshName)}, isTopCapFace: ${isTopCapFaceMaterial(matName)}, isTopCap: ${isTopCapMaterial(
+            matName,
+            meshName
+          )}, isRubber: ${isRubberMaterial(matName, meshName)}`
+        );
 
         // Skip non-standard materials
         if (!(mat instanceof THREE.MeshStandardMaterial)) {
@@ -599,7 +615,7 @@ export class SceneManager {
 
         // Check material type: top cap face first (most specific), then top cap body, then cylinder, then rubber
         if (isTopCapFaceMaterial(matName)) {
-          applyLogoToExistingMaterial(mat, 'topCapFace');
+          applyLogoToExistingMaterial(mat, "topCapFace");
           const physMat = ensurePhysicalMaterial(child, mat, idx);
           physMat.roughness = this.currentJointConfig.roughness / 255;
           physMat.clearcoat = this.currentJointConfig.clearcoat / 100;
@@ -616,30 +632,25 @@ export class SceneManager {
           console.log("[SceneManager] ✅ Applied joint config to TOP CAP BODY:", matName || meshName);
           return;
         } else if (isCylinderLeatherMaterial(matName, meshName)) {
-          const physMat = ensurePhysicalMaterial(child, mat, idx);
-          physMat.roughness = this.currentCylinderConfig.roughness / 255;
-          physMat.clearcoat = this.currentCylinderConfig.clearcoat / 100;
-          physMat.metalness = this.currentCylinderConfig.metalness;
-          physMat.color.set(this.currentCylinderConfig.color);
-          if (physMat.normalMap) {
-            physMat.normalScale.set(this.currentCylinderConfig.normalScale, this.currentCylinderConfig.normalScale);
-          }
-          physMat.sheen = this.currentCylinderConfig.sheen / 100;
-          physMat.sheenColor.set(this.currentCylinderConfig.sheenColor);
-          physMat.sheenRoughness = physMat.roughness;
-          physMat.needsUpdate = true;
-          console.log("[SceneManager] ✅ Applied cylinder config to:", matName || meshName);
+          console.log("[SceneManager] ⏭️ Skipping cylinder (using original GLB material):", matName || meshName);
           return;
         } else if (isRubberMaterial(matName, meshName)) {
-          applyLogoToExistingMaterial(mat, 'rubber');
+          applyLogoToExistingMaterial(mat, "rubber");
           console.log("[SceneManager] ✅ Applied RUBBER logo to:", matName || meshName);
           return;
         } else {
           const physMat = ensurePhysicalMaterial(child, mat, idx);
+          physMat.map = mapTexture;
+          if (textureMaps) {
+            physMat.normalMap = textureMaps.normalTexture;
+            physMat.normalScale = new THREE.Vector2(LEATHER_CONFIG.normalScaleX, LEATHER_CONFIG.normalScaleY);
+            physMat.roughnessMap = textureMaps.roughnessTexture;
+            physMat.clearcoatMap = textureMaps.clearcoatTexture;
+          }
           physMat.roughness = this.bodyRoughness / 255;
           physMat.clearcoat = this.currentLeatherConfig.clearcoat / 100;
           physMat.needsUpdate = true;
-          console.log("[SceneManager] ✅ Applied body config to:", matName || meshName);
+          console.log("[SceneManager] ✅ Applied surface texture + body config to:", matName || meshName);
           return;
         }
       });
@@ -647,7 +658,7 @@ export class SceneManager {
 
     // Apply current leather config to newly created materials
     this.updateModelMaterials();
-    
+
     console.log("[SceneManager] Surface applied successfully");
   }
 
@@ -682,9 +693,7 @@ export class SceneManager {
 
   toggleBackground() {
     this.isDarkBg = !this.isDarkBg;
-    this.scene.background = new THREE.Color(
-      this.isDarkBg ? this.settings.background.dark : this.settings.background.light
-    );
+    this.scene.background = new THREE.Color(this.isDarkBg ? this.settings.background.dark : this.settings.background.light);
     return this.isDarkBg;
   }
 
@@ -695,6 +704,12 @@ export class SceneManager {
     }
 
     window.removeEventListener("resize", this.handleResize);
+
+    // Dispose HDRI environment map
+    if (this.envMap) {
+      this.envMap.dispose();
+      this.envMap = null;
+    }
 
     // Dispose textures
     this.disposeTextures();

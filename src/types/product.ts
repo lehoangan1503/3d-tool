@@ -21,10 +21,11 @@ export interface Product {
 // Editable configuration for 3D preview
 export interface ProductConfig {
   // Lighting/Environment settings (shared by all types)
-  ambientLight: number;      // 0-2 range
-  hemisphereLight: number;   // 0-2 range
+  ambientLight: number;      // 0-2 range (legacy, kept for DB compat)
+  hemisphereLight: number;   // 0-2 range (legacy, kept for DB compat)
   clearcoat: number;         // 0-100 range (shared)
   bodyRoughness: number;     // 0-255 range for non-leather body parts
+  hdriExposure: number;      // 0-3 range — HDRI intensity control
   // Leather material settings (only for leather type)
   leatherRoughness: number;  // 0-255 range for leather wrap
   leatherSheen: number;      // 0-100 range (hidden but in JSON)
@@ -51,6 +52,7 @@ export interface ThreeJSSettingsJson {
     hemisphereLight: number;
     clearcoat: number;
     bodyRoughness: number;
+    hdriExposure?: number;
   };
   material: {
     leatherRoughness: number;
@@ -82,6 +84,7 @@ export function configToSettingsJson(config: ProductConfig): ThreeJSSettingsJson
       hemisphereLight: config.hemisphereLight,
       clearcoat: config.clearcoat,
       bodyRoughness: config.bodyRoughness,
+      hdriExposure: config.hdriExposure,
     },
     material: {
       leatherRoughness: config.leatherRoughness,
@@ -113,13 +116,14 @@ export function settingsJsonToConfig(json: ThreeJSSettingsJson): ProductConfig {
     hemisphereLight: json.lighting.hemisphereLight,
     clearcoat: json.lighting.clearcoat,
     bodyRoughness: json.lighting.bodyRoughness,
+    hdriExposure: json.lighting.hdriExposure ?? 1.0,
     leatherRoughness: json.material.leatherRoughness,
     leatherSheen: json.material.sheen,
     normalStrength: json.material.normalStrength,
     textureScale: json.material.textureScale ?? 1,
-    jointRoughness: json.joint?.roughness ?? 0,
-    jointClearcoat: json.joint?.clearcoat ?? 50,
-    jointMetalness: json.joint?.metalness ?? 0.3,
+    jointRoughness: json.joint?.roughness ?? 255,
+    jointClearcoat: json.joint?.clearcoat ?? 0,
+    jointMetalness: json.joint?.metalness ?? 1,
     cylinderRoughness: json.cylinder?.roughness ?? 102,
     cylinderClearcoat: json.cylinder?.clearcoat ?? 10,
     cylinderMetalness: json.cylinder?.metalness ?? 0,
@@ -176,13 +180,14 @@ export const DEFAULT_SMOOTH_CONFIG: ProductConfig = {
   hemisphereLight: 0.4,
   clearcoat: 5,
   bodyRoughness: 0,            // Smooth cue body (0 = very shiny)
+  hdriExposure: 1.0,           // HDRI intensity (1 = default)
   leatherRoughness: 0,         // Not used for smooth cue
   leatherSheen: 0,             // Not used for smooth cue
   normalStrength: 0,           // Not used for smooth cue
   textureScale: 1,             // Not used for smooth cue
-  jointRoughness: 0,
-  jointClearcoat: 50,
-  jointMetalness: 0.3,
+  jointRoughness: 255,
+  jointClearcoat: 0,
+  jointMetalness: 1,
   cylinderRoughness: 102,
   cylinderClearcoat: 10,
   cylinderMetalness: 0,
@@ -198,13 +203,14 @@ export const DEFAULT_LEATHER_CONFIG: ProductConfig = {
   hemisphereLight: 0.4,
   clearcoat: 5,
   bodyRoughness: 0,            // Body roughness for "outside" mesh
+  hdriExposure: 1.0,           // HDRI intensity (1 = default)
   leatherRoughness: 120,       // Leather wrap roughness
   leatherSheen: 80,            // Leather sheen
   normalStrength: 3.0,         // Leather normal map strength
   textureScale: 1,             // Texture tiling (1 = no repeat, 2+ = tiled)
-  jointRoughness: 0,
-  jointClearcoat: 50,
-  jointMetalness: 0.3,
+  jointRoughness: 255,
+  jointClearcoat: 0,
+  jointMetalness: 1,
   cylinderRoughness: 102,
   cylinderClearcoat: 10,
   cylinderMetalness: 0,

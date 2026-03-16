@@ -56,7 +56,8 @@ function ensurePhysicalMaterial(mesh: THREE.Mesh, mat: THREE.MeshStandardMateria
     bumpScale: mat.bumpScale,
     displacementMap: mat.displacementMap,
     displacementScale: mat.displacementScale,
-    envMap: mat.envMap,
+    // IMPORTANT: Do not copy GLB-provided envMap. We want scene.environment to drive HDRI lighting.
+    envMap: null,
     envMapIntensity: mat.envMapIntensity,
     alphaMap: mat.alphaMap,
     side: mat.side,
@@ -92,7 +93,10 @@ export class SceneManager {
   private createdTextures: THREE.Texture[] = [];
   // private ambientLight: THREE.AmbientLight | null = null;
   // private hemisphereLight: THREE.HemisphereLight | null = null;
-  private envMap: THREE.Texture | null = null;
+  private pmremGenerator: THREE.PMREMGenerator | null = null;
+  private envRenderTarget: THREE.WebGLRenderTarget | null = null;
+  private currentHdriUrl = "/hdri/bloem_train_track_clear_2k.hdr";
+  private hdriLoadSeq = 0;
   private currentLeatherConfig = {
     roughness: LEATHER_CONFIG.roughness,
     clearcoat: LEATHER_CONFIG.clearcoat,
@@ -148,6 +152,10 @@ export class SceneManager {
     this.renderer.toneMappingExposure = 1.0;
     container.appendChild(this.renderer.domElement);
 
+    // HDRI preprocessing for correct image-based lighting
+    this.pmremGenerator = new THREE.PMREMGenerator(this.renderer);
+    this.pmremGenerator.compileEquirectangularShader();
+
     // Get max anisotropy for texture filtering
     this.maxAnisotropy = this.renderer.capabilities.getMaxAnisotropy();
 
@@ -181,13 +189,8 @@ export class SceneManager {
   }
 
   private setupEnvironment() {
-    const rgbeLoader = new RGBELoader();
-    rgbeLoader.load("/hdri/bloem_train_track_clear_2k.hdr", (texture) => {
-      texture.mapping = THREE.EquirectangularReflectionMapping;
-      this.envMap = texture;
-      this.scene.environment = texture;
-      // Keep solid background color (don't set scene.background to HDRI)
-    });
+    // Load default HDRI (UI can override via updateHdriEnvironment)
+    this.updateHdriEnvironment(this.currentHdriUrl);
 
     // Subtle fill light from below to illuminate the bumper area
     const bottomFill = new THREE.PointLight(0xffffff, 0.5, 10);
@@ -252,6 +255,50 @@ export class SceneManager {
   updateHdriExposure(exposure: number) {
     console.log("[SceneManager] updateHdriExposure:", exposure);
     this.renderer.toneMappingExposure = exposure;
+  }
+
+  /**
+   * Update HDRI environment map.
+   * Accepts either a full URL ("/hdri/foo.hdr") or a filename ("foo.hdr").
+   */
+  updateHdriEnvironment(hdriTypeOrUrl: string) {
+    const url = hdriTypeOrUrl.startsWith("/") ? hdriTypeOrUrl : `/hdri/${encodeURIComponent(hdriTypeOrUrl)}`;
+    this.currentHdriUrl = url;
+
+    if (!this.pmremGenerator) return;
+
+    const loadSeq = ++this.hdriLoadSeq;
+    const rgbeLoader = new RGBELoader();
+    rgbeLoader.load(
+      url,
+      (texture) => {
+        // If a newer request started, ignore this result.
+        if (loadSeq !== this.hdriLoadSeq) {
+          texture.dispose();
+          return;
+        }
+
+        texture.mapping = THREE.EquirectangularReflectionMapping;
+
+        const rt = this.pmremGenerator!.fromEquirectangular(texture);
+        texture.dispose();
+
+        if (this.envRenderTarget) {
+          this.envRenderTarget.dispose();
+        }
+        this.envRenderTarget = rt;
+
+        this.scene.environment = rt.texture;
+        // Keep solid background color (don't set scene.background to HDRI)
+
+        // Make sure any GLB-provided envMap doesn't override scene.environment
+        this.forceSceneEnvironmentOnMaterials();
+      },
+      undefined,
+      (error) => {
+        console.error("[SceneManager] Failed to load HDRI:", url, error);
+      }
+    );
   }
 
   /**
@@ -358,6 +405,25 @@ export class SceneManager {
    * Rubber: keeps original GLB material
    * Other meshes: bodyRoughness + clearcoat from leatherConfig
    */
+  private forceSceneEnvironmentOnMaterials() {
+    if (!this.model) return;
+
+    this.model.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      materials.forEach((mat) => {
+        if (mat instanceof THREE.MeshStandardMaterial) {
+          // Null envMap forces Three.js to use scene.environment for PBR IBL
+          if (mat.envMap !== null) {
+            mat.envMap = null;
+            mat.needsUpdate = true;
+          }
+        }
+      });
+    });
+  }
+
   private updateModelMaterials() {
     if (!this.model) {
       console.log("[SceneManager] updateModelMaterials: No model loaded");
@@ -504,6 +570,9 @@ export class SceneManager {
           this.model.position.set(-centerPoint.x, -centerPoint.y, -centerPoint.z);
 
           this.scene.add(this.model);
+
+          // Ensure HDRI lighting is driven by scene.environment (not any baked GLB envMap)
+          this.forceSceneEnvironmentOnMaterials();
 
           // Update camera position
           this.camera.position.set(2, 0, 2);
@@ -706,9 +775,13 @@ export class SceneManager {
     window.removeEventListener("resize", this.handleResize);
 
     // Dispose HDRI environment map
-    if (this.envMap) {
-      this.envMap.dispose();
-      this.envMap = null;
+    if (this.envRenderTarget) {
+      this.envRenderTarget.dispose();
+      this.envRenderTarget = null;
+    }
+    if (this.pmremGenerator) {
+      this.pmremGenerator.dispose();
+      this.pmremGenerator = null;
     }
 
     // Dispose textures

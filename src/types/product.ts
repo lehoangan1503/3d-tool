@@ -21,27 +21,28 @@ export interface Product {
 // Editable configuration for 3D preview
 export interface ProductConfig {
   // Lighting/Environment settings (shared by all types)
-  ambientLight: number;      // 0-2 range (legacy, kept for DB compat)
-  hemisphereLight: number;   // 0-2 range (legacy, kept for DB compat)
-  clearcoat: number;         // 0-100 range (shared)
-  bodyRoughness: number;     // 0-255 range for non-leather body parts
-  hdriExposure: number;      // 0-3 range — HDRI intensity control
+  ambientLight: number; // 0-2 range (legacy, kept for DB compat)
+  hemisphereLight: number; // 0-2 range (legacy, kept for DB compat)
+  clearcoat: number; // 0-100 range (shared)
+  bodyRoughness: number; // 0-255 range for non-leather body parts
+  hdriExposure: number; // 0-3 range — HDRI intensity control
+  hdriType: string; // HDRI filename under /public/hdri (e.g. "bloem_train_track_clear_2k.hdr")
   // Leather material settings (only for leather type)
-  leatherRoughness: number;  // 0-255 range for leather wrap
-  leatherSheen: number;      // 0-100 range (hidden but in JSON)
-  normalStrength: number;    // 0-10 range
-  textureScale: number;      // 1-8 range - how many times to tile the texture
+  leatherRoughness: number; // 0-255 range for leather wrap
+  leatherSheen: number; // 0-100 range (hidden but in JSON)
+  normalStrength: number; // 0-10 range
+  textureScale: number; // 1-8 range - how many times to tile the texture
   // Joint Top settings (isolated per-part config)
-  jointRoughness: number;    // 0-255 range
-  jointClearcoat: number;    // 0-100 range
-  jointMetalness: number;    // 0-1 range
+  jointRoughness: number; // 0-255 range
+  jointClearcoat: number; // 0-100 range
+  jointMetalness: number; // 0-1 range
   // Leather Cylinder settings (isolated per-part config)
   cylinderRoughness: number; // 0-255 range
   cylinderClearcoat: number; // 0-100 range
   cylinderMetalness: number; // 0-1 range
-  cylinderColor: string;     // hex color string
+  cylinderColor: string; // hex color string
   cylinderNormalScale: number; // 0-10 range - leather texture depth
-  cylinderSheen: number;     // 0-100 range - leather sheen
+  cylinderSheen: number; // 0-100 range - leather sheen
   cylinderSheenColor: string; // hex color string
 }
 
@@ -53,6 +54,7 @@ export interface ThreeJSSettingsJson {
     clearcoat: number;
     bodyRoughness: number;
     hdriExposure?: number;
+    hdriType?: string;
   };
   material: {
     leatherRoughness: number;
@@ -85,6 +87,7 @@ export function configToSettingsJson(config: ProductConfig): ThreeJSSettingsJson
       clearcoat: config.clearcoat,
       bodyRoughness: config.bodyRoughness,
       hdriExposure: config.hdriExposure,
+      hdriType: config.hdriType,
     },
     material: {
       leatherRoughness: config.leatherRoughness,
@@ -117,6 +120,7 @@ export function settingsJsonToConfig(json: ThreeJSSettingsJson): ProductConfig {
     clearcoat: json.lighting.clearcoat,
     bodyRoughness: json.lighting.bodyRoughness,
     hdriExposure: json.lighting.hdriExposure ?? 1.0,
+    hdriType: json.lighting.hdriType ?? "bloem_train_track_clear_2k.hdr",
     leatherRoughness: json.material.leatherRoughness,
     leatherSheen: json.material.sheen,
     normalStrength: json.material.normalStrength,
@@ -179,13 +183,14 @@ export const DEFAULT_SMOOTH_CONFIG: ProductConfig = {
   ambientLight: 0.55,
   hemisphereLight: 0.4,
   clearcoat: 5,
-  bodyRoughness: 0,            // Smooth cue body (0 = very shiny)
-  hdriExposure: 1.0,           // HDRI intensity (1 = default)
-  leatherRoughness: 0,         // Not used for smooth cue
-  leatherSheen: 0,             // Not used for smooth cue
-  normalStrength: 0,           // Not used for smooth cue
-  textureScale: 1,             // Not used for smooth cue
-  jointRoughness: 255,
+  bodyRoughness: 0, // Smooth cue body (0 = very shiny)
+  hdriExposure: 1.0, // HDRI intensity (1 = default)
+  hdriType: "bloem_train_track_clear_2k.hdr",
+  leatherRoughness: 0, // Not used for smooth cue
+  leatherSheen: 0, // Not used for smooth cue
+  normalStrength: 0, // Not used for smooth cue
+  textureScale: 1, // Not used for smooth cue
+  jointRoughness: 120,
   jointClearcoat: 0,
   jointMetalness: 1,
   cylinderRoughness: 102,
@@ -202,13 +207,14 @@ export const DEFAULT_LEATHER_CONFIG: ProductConfig = {
   ambientLight: 0.55,
   hemisphereLight: 0.4,
   clearcoat: 5,
-  bodyRoughness: 0,            // Body roughness for "outside" mesh
-  hdriExposure: 1.0,           // HDRI intensity (1 = default)
-  leatherRoughness: 120,       // Leather wrap roughness
-  leatherSheen: 80,            // Leather sheen
-  normalStrength: 3.0,         // Leather normal map strength
-  textureScale: 1,             // Texture tiling (1 = no repeat, 2+ = tiled)
-  jointRoughness: 255,
+  bodyRoughness: 0, // Body roughness for "outside" mesh
+  hdriExposure: 1.0, // HDRI intensity (1 = default)
+  hdriType: "bloem_train_track_clear_2k.hdr",
+  leatherRoughness: 120, // Leather wrap roughness
+  leatherSheen: 80, // Leather sheen
+  normalStrength: 3.0, // Leather normal map strength
+  textureScale: 1, // Texture tiling (1 = no repeat, 2+ = tiled)
+  jointRoughness: 120,
   jointClearcoat: 0,
   jointMetalness: 1,
   cylinderRoughness: 102,
@@ -224,17 +230,17 @@ export const DEFAULT_LEATHER_CONFIG: ProductConfig = {
 export const LEATHER_TEXTURE_PRESETS: Record<LeatherTextureType, Partial<ProductConfig>> = {
   crocodile: {
     normalStrength: 3.5,
-    textureScale: 1,           // Crocodile has large scales, no tiling needed
+    textureScale: 1, // Crocodile has large scales, no tiling needed
     leatherRoughness: 120,
   },
   cowhide: {
-    normalStrength: 6.0,       // Higher strength for more pronounced grain
-    textureScale: 6,           // Tile 6x for dense pebble pattern (grain is scaled 16x bigger)
-    leatherRoughness: 230,     // High roughness for matte cowhide surface (0-255)
+    normalStrength: 6.0, // Higher strength for more pronounced grain
+    textureScale: 6, // Tile 6x for dense pebble pattern (grain is scaled 16x bigger)
+    leatherRoughness: 230, // High roughness for matte cowhide surface (0-255)
   },
   snake: {
     normalStrength: 2.5,
-    textureScale: 2,           // Medium tiling for snake scales
+    textureScale: 2, // Medium tiling for snake scales
     leatherRoughness: 100,
   },
   custom: {

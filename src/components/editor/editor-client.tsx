@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CollapsibleCard } from "@/components/ui/collapsible-card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useUnsavedChangesWarning } from "@/hooks/use-unsaved-changes-warning";
 import {
   ArrowLeft,
@@ -63,6 +64,8 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
     customTexture: null,
   });
 
+  const [hdriOptions, setHdriOptions] = useState<Array<{ id: string; label: string }>>([]);
+
   // Ref to access current config in callbacks
   const configRef = useRef(config);
   configRef.current = config;
@@ -74,6 +77,44 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
   // Unsaved changes warning
   const { confirmNavigation } = useUnsavedChangesWarning(hasChanges);
 
+  // Load available HDRIs from /public/hdri (via API)
+  useEffect(() => {
+    let cancelled = false;
+
+    const fallback: Array<{ id: string; label: string }> = [
+      { id: "bloem_train_track_clear_2k.hdr", label: "Bloem Train Track Clear 2k" },
+      { id: "church_museum_2k.hdr", label: "Church Museum 2k" },
+      { id: "church_stairway_2k.hdr", label: "Church Stairway 2k" },
+      { id: "ferndale_studio_07_2k.hdr", label: "Ferndale Studio 07 2k" },
+    ];
+
+    async function loadHdris() {
+      try {
+        const res = await fetch("/api/hdri");
+        const data = (await res.json()) as { options?: Array<{ id: string; label: string }> };
+        const options = Array.isArray(data?.options) ? data.options : [];
+        if (!cancelled) {
+          setHdriOptions(options.length ? options : fallback);
+        }
+      } catch {
+        if (!cancelled) {
+          setHdriOptions(fallback);
+        }
+      }
+    }
+
+    loadHdris();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Ensure current selection is present in the list (even if API fails)
+  useEffect(() => {
+    if (!config.hdriType) return;
+    setHdriOptions((prev) => (prev.some((o) => o.id === config.hdriType) ? prev : [{ id: config.hdriType, label: config.hdriType }, ...prev]));
+  }, [config.hdriType]);
+
   const handleSceneReady = useCallback((manager: SceneManager) => {
     console.log("[EditorClient] handleSceneReady called");
     setSceneManager(manager);
@@ -83,6 +124,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
     const currentProduct = productRef.current;
     // manager.updateLighting(currentConfig.ambientLight, currentConfig.hemisphereLight);
     manager.updateHdriExposure(currentConfig.hdriExposure);
+    manager.updateHdriEnvironment(currentConfig.hdriType);
     manager.updateClearcoat(currentConfig.clearcoat);
     manager.updateBodyRoughness(currentConfig.bodyRoughness);
     if (currentProduct.type === "leather") {
@@ -137,6 +179,12 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
       metalness: config.jointMetalness,
     });
   }, [sceneManager, config, product.type]);
+
+  // Update HDRI type only when it changes (avoid reloading HDRI on every config edit)
+  useEffect(() => {
+    if (!sceneManager) return;
+    sceneManager.updateHdriEnvironment(config.hdriType);
+  }, [sceneManager, config.hdriType]);
 
   const updateProduct = (updates: Partial<Product>) => {
     setProduct((prev) => ({ ...prev, ...updates }));
@@ -295,6 +343,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
       color: product.color,
       config: {
         hdriExposure: config.hdriExposure,
+        hdriType: config.hdriType,
         lighting: {
           ambient: config.ambientLight,
           hemisphere: config.hemisphereLight,
@@ -469,6 +518,22 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                 icon={<Lightbulb className="h-4 w-4 text-primary" />}
               >
                 <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label>HDRI Type</Label>
+                    <Select value={config.hdriType} onValueChange={(v) => updateConfig({ hdriType: v })}>
+                      <SelectTrigger id="hdriType-mobile">
+                        <SelectValue placeholder="Select HDRI" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {hdriOptions.map((o) => (
+                          <SelectItem key={o.id} value={o.id}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="hdriExposure-mobile">Intensity</Label>
                     <Input
@@ -892,6 +957,22 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
               icon={<Lightbulb className="h-4 w-4 text-primary" />}
             >
               <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-2">
+                  <Label>HDRI Type</Label>
+                  <Select value={config.hdriType} onValueChange={(v) => updateConfig({ hdriType: v })}>
+                    <SelectTrigger id="hdriType">
+                      <SelectValue placeholder="Select HDRI" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {hdriOptions.map((o) => (
+                        <SelectItem key={o.id} value={o.id}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="hdriExposure">Intensity</Label>
                   <Input

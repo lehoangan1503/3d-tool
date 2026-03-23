@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 // import { RectAreaLightUniformsLib } from "three/examples/jsm/lights/RectAreaLightUniformsLib.js";
 import type { ThreeJSSettings } from "@/types/settings";
@@ -95,6 +96,7 @@ export class SceneManager {
   // private hemisphereLight: THREE.HemisphereLight | null = null;
   private pmremGenerator: THREE.PMREMGenerator | null = null;
   private envRenderTarget: THREE.WebGLRenderTarget | null = null;
+  private ktx2Loader: KTX2Loader | null = null;
   private currentHdriUrl = "/hdri/bloem_train_track_clear_2k.hdr";
   private hdriLoadSeq = 0;
   private isDisposed = false;
@@ -182,9 +184,19 @@ export class SceneManager {
     this.renderer.toneMappingExposure = 1.0;
     container.appendChild(this.renderer.domElement);
 
+    // Handle WebGL context loss (e.g. GPU out-of-memory on mobile)
+    this.renderer.domElement.addEventListener("webglcontextlost", this.handleContextLost, false);
+    this.renderer.domElement.addEventListener("webglcontextrestored", this.handleContextRestored, false);
+
     // HDRI preprocessing for correct image-based lighting
     this.pmremGenerator = new THREE.PMREMGenerator(this.renderer);
     this.pmremGenerator.compileEquirectangularShader();
+
+    // KTX2 / Basis Universal transcoder — keeps textures GPU-compressed in VRAM.
+    // Basis transcoder files are copied from three/examples/jsm/libs/basis/ to /public/basis/.
+    this.ktx2Loader = new KTX2Loader();
+    this.ktx2Loader.setTranscoderPath("/basis/");
+    this.ktx2Loader.detectSupport(this.renderer);
 
     // Get max anisotropy for texture filtering
     this.maxAnisotropy = this.renderer.capabilities.getMaxAnisotropy();
@@ -230,6 +242,26 @@ export class SceneManager {
     // Start animation loop
     this.animate();
   }
+
+  private handleContextLost = (event: Event) => {
+    event.preventDefault();
+    console.error(
+      "[SceneManager] WebGL context lost — GPU ran out of memory. " +
+        "Stop the animation loop to prevent errors."
+    );
+    // Pause the render loop; the browser will fire contextrestored when ready.
+    if (this.animationId !== null) {
+      cancelAnimationFrame(this.animationId);
+      this.animationId = null;
+    }
+  };
+
+  private handleContextRestored = () => {
+    console.warn("[SceneManager] WebGL context restored — restarting animation loop.");
+    if (!this.isDisposed) {
+      this.animate();
+    }
+  };
 
   private setupEnvironment() {
     // Load default HDRI (UI can override via updateHdriEnvironment)
@@ -782,8 +814,24 @@ export class SceneManager {
   }
 
   async loadModel(modelPath: string): Promise<THREE.Group> {
+    // Memory guard: warn early on severely constrained devices.
+    // navigator.deviceMemory is available in Chromium-based browsers (not Safari).
+    const deviceMemoryGB = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+    if (deviceMemoryGB !== undefined && deviceMemoryGB < 2) {
+      console.warn(
+        `[SceneManager] Low device memory detected (${deviceMemoryGB} GB). ` +
+          "Loading a large model may cause instability on this device."
+      );
+    }
+
     return new Promise((resolve, reject) => {
       const loader = new GLTFLoader();
+
+      // Wire KTX2 loader so GLB textures in KTX2/Basis format are GPU-decompressed natively.
+      if (this.ktx2Loader) {
+        loader.setKTX2Loader(this.ktx2Loader);
+      }
+
       loader.load(
         modelPath,
         (gltf) => {
@@ -852,8 +900,31 @@ export class SceneManager {
           console.log("[SceneManager] Model loaded successfully");
           resolve(this.model);
         },
-        undefined,
-        reject
+        (progressEvent) => {
+          if (progressEvent.lengthComputable) {
+            const pct = Math.round((progressEvent.loaded / progressEvent.total) * 100);
+            console.log(`[SceneManager] Model loading: ${pct}% (${(progressEvent.loaded / 1024 / 1024).toFixed(1)} MB)`);
+          }
+        },
+        (error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          const isOom =
+            message.toLowerCase().includes("out of memory") ||
+            message.toLowerCase().includes("webgl") ||
+            message.toLowerCase().includes("context lost");
+
+          if (isOom) {
+            console.error(
+              "[SceneManager] GPU/memory error while loading model. " +
+                "Consider using KTX2-compressed textures to reduce VRAM usage.",
+              error
+            );
+            reject(new Error("GPU_OUT_OF_MEMORY: The 3D model could not be loaded due to insufficient GPU memory. Try closing other browser tabs or apps."));
+          } else {
+            console.error("[SceneManager] Failed to load model:", modelPath, error);
+            reject(error);
+          }
+        }
       );
     });
   }
@@ -1049,6 +1120,16 @@ export class SceneManager {
 
     window.removeEventListener("resize", this.handleResize);
     this.teardownTurntableModelRotation();
+
+    // Remove WebGL context loss listeners
+    this.renderer.domElement.removeEventListener("webglcontextlost", this.handleContextLost);
+    this.renderer.domElement.removeEventListener("webglcontextrestored", this.handleContextRestored);
+
+    // Dispose KTX2 transcoder
+    if (this.ktx2Loader) {
+      this.ktx2Loader.dispose();
+      this.ktx2Loader = null;
+    }
 
     // Dispose HDRI environment map
     if (this.envRenderTarget) {

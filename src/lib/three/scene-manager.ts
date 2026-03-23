@@ -97,6 +97,7 @@ export class SceneManager {
   private envRenderTarget: THREE.WebGLRenderTarget | null = null;
   private currentHdriUrl = "/hdri/bloem_train_track_clear_2k.hdr";
   private hdriLoadSeq = 0;
+  private isDisposed = false;
   private currentLeatherConfig = {
     roughness: LEATHER_CONFIG.roughness,
     clearcoat: LEATHER_CONFIG.clearcoat,
@@ -124,6 +125,35 @@ export class SceneManager {
   private autoRotate = true; // Auto-rotate model on Y axis
   private autoRotateSpeed = 0.003; // Slow rotation speed (radians per frame)
 
+  // Turntable-style rotation: rotate the MODEL on drag so HDRI/IBL stays world-fixed
+  private isDraggingModel = false;
+  private dragPointerId: number | null = null;
+  private dragLastX = 0;
+  private dragLastY = 0;
+  private activePointers = new Set<number>();
+  private restoreAutoRotateAfterDrag: boolean | null = null;
+  private modelDragRotateSpeed = 0.005; // radians per pixel
+  private cameraOrbitSpeed = 0.005; // radians per pixel (vertical drag)
+  private wheelZoomSpeed = 0.001; // world-units per wheel deltaY pixel (approx)
+
+  private cameraMinPolarAngle = 0.001; // ~0° (top view) without hitting the pole singularity
+  private cameraMaxPolarAngle = Math.PI - 0.001; // ~180° (bottom view)
+
+  // Inertia / velocity
+  private inertiaDamping = 0.92; // closer to 1 = longer glide
+  private inertiaGain = 0.18; // scale down release velocity vs. drag delta
+  private maxSpinVelocityY = 0.025; // radians per frame
+  private maxOrbitVelocityPhi = 0.025; // radians per frame
+  private maxZoomVelocity = 0.05; // world units per frame
+
+  private spinVelocityY = 0;
+  private orbitVelocityPhi = 0;
+  private zoomVelocity = 0;
+  private lastFrameTime = 0;
+
+  // Zoom-out cap: do not allow zooming out beyond the initial load distance.
+  private maxZoomOutRadius: number | null = null;
+
   constructor(container: HTMLElement, settings?: ThreeJSSettings) {
     this.instanceId = ++sceneManagerInstanceId;
     console.log(`[SceneManager #${this.instanceId}] Constructor called`);
@@ -148,7 +178,7 @@ export class SceneManager {
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.AgXToneMapping;
+    this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     container.appendChild(this.renderer.domElement);
 
@@ -169,10 +199,23 @@ export class SceneManager {
     this.controls.panSpeed = 0.8;
     this.controls.rotateSpeed = 0.8;
 
-    // Lock pan to Y-axis only (for vertical movement along cue)
+    // Keep camera stable; rotate the model instead (prevents HDRI lighting from appearing to rotate with the cue)
+    this.controls.enableRotate = false;
+
+    // Custom drag-to-rotate (turntable)
+    this.setupTurntableModelRotation();
+
+    // Keep cue centered horizontally: allow vertical pan (Y), but prevent X/Z drift.
     this.controls.addEventListener("change", () => {
+      const offsetX = this.camera.position.x - this.controls.target.x;
+      const offsetZ = this.camera.position.z - this.controls.target.z;
+
       this.controls.target.x = 0;
       this.controls.target.z = 0;
+
+      // Undo any horizontal pan by keeping the camera offset relative to the target.
+      this.camera.position.x = offsetX;
+      this.camera.position.z = offsetZ;
     });
 
     // Lighting — HDRI environment
@@ -249,6 +292,12 @@ export class SceneManager {
   //   }
   // }
 
+  updateToneMapping(_mode?: string) {
+    if (this.isDisposed) return;
+    // Use original/no tone mapping by default
+    this.renderer.toneMapping = THREE.NoToneMapping;
+  }
+
   /**
    * Update HDRI exposure (tone mapping exposure)
    */
@@ -259,28 +308,47 @@ export class SceneManager {
 
   /**
    * Update HDRI environment map.
-   * Accepts either a full URL ("/hdri/foo.hdr") or a filename ("foo.hdr").
+   *
+   * Accepted inputs:
+   * - Absolute URL: "https://cdn.shopify.com/.../env.hdr" (Shopify Files/CDN)
+   * - Root-relative URL: "/hdri/env.hdr" (Next.js public folder)
+   * - Filename: "env.hdr" (resolved under "/hdri/")
    */
   updateHdriEnvironment(hdriTypeOrUrl: string) {
-    const url = hdriTypeOrUrl.startsWith("/") ? hdriTypeOrUrl : `/hdri/${encodeURIComponent(hdriTypeOrUrl)}`;
+    if (this.isDisposed) return;
+
+    const isAbsoluteUrl = /^https?:\/\//.test(hdriTypeOrUrl) || hdriTypeOrUrl.startsWith("//");
+    const url = isAbsoluteUrl
+      ? hdriTypeOrUrl
+      : hdriTypeOrUrl.startsWith("/")
+        ? hdriTypeOrUrl
+        : `/hdri/${encodeURIComponent(hdriTypeOrUrl)}`;
+
     this.currentHdriUrl = url;
 
-    if (!this.pmremGenerator) return;
+    // PMREMGenerator can be disposed during React unmount/remount while an HDRI load is in flight.
+    // Lazily recreate it if needed.
+    if (!this.pmremGenerator) {
+      this.pmremGenerator = new THREE.PMREMGenerator(this.renderer);
+      this.pmremGenerator.compileEquirectangularShader();
+    }
 
     const loadSeq = ++this.hdriLoadSeq;
     const rgbeLoader = new RGBELoader();
     rgbeLoader.load(
       url,
       (texture) => {
-        // If a newer request started, ignore this result.
-        if (loadSeq !== this.hdriLoadSeq) {
+        const pmremGenerator = this.pmremGenerator;
+
+        // If we were disposed, a newer request started, or PMREM isn't available anymore, ignore this result.
+        if (this.isDisposed || loadSeq !== this.hdriLoadSeq || !pmremGenerator) {
           texture.dispose();
           return;
         }
 
         texture.mapping = THREE.EquirectangularReflectionMapping;
 
-        const rt = this.pmremGenerator!.fromEquirectangular(texture);
+        const rt = pmremGenerator.fromEquirectangular(texture);
         texture.dispose();
 
         if (this.envRenderTarget) {
@@ -296,7 +364,9 @@ export class SceneManager {
       },
       undefined,
       (error) => {
-        console.error("[SceneManager] Failed to load HDRI:", url, error);
+        if (!this.isDisposed) {
+          console.error("[SceneManager] Failed to load HDRI:", url, error);
+        }
       }
     );
   }
@@ -478,6 +548,168 @@ export class SceneManager {
     console.log(`[SceneManager] Updated ${updatedCount} materials`);
   }
 
+  private setupTurntableModelRotation() {
+    const el = this.renderer.domElement;
+    // Prevent browser gestures (scroll/zoom) from fighting with pointer rotation.
+    el.style.touchAction = "none";
+
+    el.addEventListener("pointerdown", this.onTurntablePointerDown);
+    el.addEventListener("pointermove", this.onTurntablePointerMove);
+    el.addEventListener("pointerup", this.onTurntablePointerUp);
+    el.addEventListener("pointercancel", this.onTurntablePointerUp);
+    el.addEventListener("wheel", this.onTurntableWheel, { passive: false });
+  }
+
+  private teardownTurntableModelRotation() {
+    const el = this.renderer.domElement;
+    el.removeEventListener("pointerdown", this.onTurntablePointerDown);
+    el.removeEventListener("pointermove", this.onTurntablePointerMove);
+    el.removeEventListener("pointerup", this.onTurntablePointerUp);
+    el.removeEventListener("pointercancel", this.onTurntablePointerUp);
+    el.removeEventListener("wheel", this.onTurntableWheel);
+    this.activePointers.clear();
+    this.stopModelDrag();
+  }
+
+  private stopModelDrag() {
+    if (!this.isDraggingModel) return;
+
+    const pointerId = this.dragPointerId;
+    this.isDraggingModel = false;
+    this.dragPointerId = null;
+
+    if (this.restoreAutoRotateAfterDrag !== null) {
+      this.autoRotate = this.restoreAutoRotateAfterDrag;
+      this.restoreAutoRotateAfterDrag = null;
+    }
+
+    if (pointerId !== null) {
+      try {
+        this.renderer.domElement.releasePointerCapture(pointerId);
+      } catch {
+        // no-op
+      }
+    }
+  }
+
+  private onTurntablePointerDown = (event: PointerEvent) => {
+    if (this.isDisposed) return;
+
+    // Stop any existing inertia when a new drag begins.
+    this.spinVelocityY = 0;
+    this.orbitVelocityPhi = 0;
+
+    this.activePointers.add(event.pointerId);
+
+    // Only start drag rotation on primary/left mouse button (or touch).
+    if (event.pointerType !== "touch" && event.button !== 0) return;
+
+    // Allow OrbitControls modifier gestures (e.g. shift/ctrl drag for pan)
+    if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+
+    // If the user is multi-touching (pinch/pan), don't rotate the model.
+    if (this.activePointers.size !== 1) {
+      this.stopModelDrag();
+      return;
+    }
+
+    if (!this.model) return;
+
+    this.isDraggingModel = true;
+    this.dragPointerId = event.pointerId;
+    this.dragLastX = event.clientX;
+    this.dragLastY = event.clientY;
+
+    // Pause auto-rotation while the user is dragging (restore on release).
+    if (this.restoreAutoRotateAfterDrag === null) {
+      this.restoreAutoRotateAfterDrag = this.autoRotate;
+    }
+    this.autoRotate = false;
+
+    try {
+      this.renderer.domElement.setPointerCapture(event.pointerId);
+    } catch {
+      // no-op
+    }
+  };
+
+  private onTurntablePointerMove = (event: PointerEvent) => {
+    if (!this.isDraggingModel || this.dragPointerId !== event.pointerId) return;
+    if (!this.model) return;
+    if (this.activePointers.size !== 1) return;
+
+    event.preventDefault();
+
+    const dx = event.clientX - this.dragLastX;
+    const dy = event.clientY - this.dragLastY;
+    this.dragLastX = event.clientX;
+    this.dragLastY = event.clientY;
+
+    const deltaSpin = dx * this.modelDragRotateSpeed;
+    const deltaPhi = -dy * this.cameraOrbitSpeed;
+
+    // Apply drag deltas directly (responsive), but store smaller velocities for inertia after release.
+    this.spinVelocityY = THREE.MathUtils.clamp(deltaSpin * this.inertiaGain, -this.maxSpinVelocityY, this.maxSpinVelocityY);
+    this.orbitVelocityPhi = THREE.MathUtils.clamp(deltaPhi * this.inertiaGain, -this.maxOrbitVelocityPhi, this.maxOrbitVelocityPhi);
+
+    // Keep the cue perfectly erect (no tilt/roll), but still allow spin.
+    this.model.rotation.y += deltaSpin;
+    this.model.rotation.x = 0;
+    this.model.rotation.z = 0;
+
+    // Vertical drag: orbit the CAMERA up/down around the cue.
+    if (deltaPhi !== 0) {
+      this.applyCameraOrbitAndZoom(deltaPhi, 0);
+      this.controls.update();
+    }
+  };
+
+  private onTurntablePointerUp = (event: PointerEvent) => {
+    this.activePointers.delete(event.pointerId);
+
+    if (this.dragPointerId === event.pointerId) {
+      this.stopModelDrag();
+    }
+  };
+
+  private onTurntableWheel = (event: WheelEvent) => {
+    if (this.isDisposed) return;
+
+    // Custom zoom inertia (also prevents OrbitControls wheel zoom on this element).
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
+    let dy = event.deltaY;
+    // Normalize line/page scroll to pixel-ish values.
+    if (event.deltaMode === 1) dy *= 16;
+    if (event.deltaMode === 2) dy *= 100;
+
+    this.zoomVelocity = THREE.MathUtils.clamp(this.zoomVelocity + dy * this.wheelZoomSpeed, -this.maxZoomVelocity, this.maxZoomVelocity);
+  };
+
+  private applyCameraOrbitAndZoom(deltaPhi: number, deltaRadius: number) {
+    const target = this.controls.target;
+    const offset = this.camera.position.clone().sub(target);
+    const spherical = new THREE.Spherical().setFromVector3(offset);
+
+    spherical.phi = THREE.MathUtils.clamp(
+      spherical.phi + deltaPhi,
+      this.cameraMinPolarAngle,
+      this.cameraMaxPolarAngle
+    );
+
+    const maxRadius = this.maxZoomOutRadius ?? this.controls.maxDistance;
+    spherical.radius = THREE.MathUtils.clamp(
+      spherical.radius + deltaRadius,
+      this.controls.minDistance,
+      maxRadius
+    );
+
+    offset.setFromSpherical(spherical);
+    this.camera.position.copy(target).add(offset);
+    this.camera.lookAt(target);
+  }
+
   private handleResize = () => {
     const width = this.container.clientWidth;
     const height = this.container.clientHeight;
@@ -487,13 +719,41 @@ export class SceneManager {
     this.renderer.setSize(width, height);
   };
 
-  private animate = () => {
+  private animate = (time: number = performance.now()) => {
     this.animationId = requestAnimationFrame(this.animate);
+
+    // Frame-rate independent damping
+    const dtMs = this.lastFrameTime ? Math.min(64, time - this.lastFrameTime) : 16.67;
+    this.lastFrameTime = time;
+    const damping = Math.pow(this.inertiaDamping, dtMs / (1000 / 60));
 
     // Auto-rotate model on Y axis
     if (this.autoRotate && this.model) {
       this.model.rotation.y += this.autoRotateSpeed;
     }
+
+    // Inertia: continue motion after drag/wheel and slow down gradually.
+    if (this.model && !this.isDraggingModel && this.spinVelocityY !== 0) {
+      this.model.rotation.y += this.spinVelocityY;
+    }
+
+    const phiDelta = !this.isDraggingModel ? this.orbitVelocityPhi : 0;
+    const radiusDelta = this.zoomVelocity;
+    if (phiDelta !== 0 || radiusDelta !== 0) {
+      this.applyCameraOrbitAndZoom(phiDelta, radiusDelta);
+    }
+
+    // Decay velocities
+    if (!this.isDraggingModel) {
+      this.spinVelocityY *= damping;
+      this.orbitVelocityPhi *= damping;
+    }
+    this.zoomVelocity *= damping;
+
+    // Snap to zero to avoid tiny perpetual drift
+    if (Math.abs(this.spinVelocityY) < 1e-5) this.spinVelocityY = 0;
+    if (Math.abs(this.orbitVelocityPhi) < 1e-5) this.orbitVelocityPhi = 0;
+    if (Math.abs(this.zoomVelocity) < 1e-4) this.zoomVelocity = 0;
 
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
@@ -542,10 +802,10 @@ export class SceneManager {
             });
           }
 
-          this.model = gltf.scene;
+          const gltfScene = gltf.scene;
 
           // Force FrontSide rendering on all meshes to hide the hollow interior
-          this.model.traverse((child) => {
+          gltfScene.traverse((child) => {
             if (child instanceof THREE.Mesh) {
               const mats = Array.isArray(child.material) ? child.material : [child.material];
               mats.forEach((mat) => {
@@ -558,17 +818,24 @@ export class SceneManager {
             }
           });
 
-          // Scale model
-          const box = new THREE.Box3().setFromObject(this.model);
+          // Scale GLB content
+          const box = new THREE.Box3().setFromObject(gltfScene);
           const size = box.getSize(new THREE.Vector3());
           const scale = 2.0 / Math.max(size.x, size.y, size.z);
-          this.model.scale.setScalar(scale);
+          gltfScene.scale.setScalar(scale);
 
-          // Center model
-          const centerBox = new THREE.Box3().setFromObject(this.model);
+          // Create a centered pivot root so rotations happen around the cue center
+          const pivot = new THREE.Group();
+          pivot.rotation.order = "YXZ";
+          pivot.rotation.x = 0;
+          pivot.rotation.z = 0;
+          pivot.add(gltfScene);
+
+          const centerBox = new THREE.Box3().setFromObject(gltfScene);
           const centerPoint = centerBox.getCenter(new THREE.Vector3());
-          this.model.position.set(-centerPoint.x, -centerPoint.y, -centerPoint.z);
+          gltfScene.position.set(-centerPoint.x, -centerPoint.y, -centerPoint.z);
 
+          this.model = pivot;
           this.scene.add(this.model);
 
           // Ensure HDRI lighting is driven by scene.environment (not any baked GLB envMap)
@@ -578,6 +845,9 @@ export class SceneManager {
           this.camera.position.set(2, 0, 2);
           this.controls.target.set(0, 0, 0);
           this.controls.update();
+
+          // Cap zoom-out at the initial loaded view distance.
+          this.maxZoomOutRadius = this.camera.position.distanceTo(this.controls.target);
 
           console.log("[SceneManager] Model loaded successfully");
           resolve(this.model);
@@ -767,12 +1037,18 @@ export class SceneManager {
   }
 
   dispose() {
+    if (this.isDisposed) return;
+    this.isDisposed = true;
+    // Invalidate any in-flight HDRI loads so their callbacks become no-ops.
+    this.hdriLoadSeq++;
+
     console.log(`[SceneManager #${this.instanceId}] dispose() called`);
     if (this.animationId) {
       cancelAnimationFrame(this.animationId);
     }
 
     window.removeEventListener("resize", this.handleResize);
+    this.teardownTurntableModelRotation();
 
     // Dispose HDRI environment map
     if (this.envRenderTarget) {

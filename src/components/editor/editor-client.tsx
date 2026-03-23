@@ -123,6 +123,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
     const currentConfig = configRef.current;
     const currentProduct = productRef.current;
     // manager.updateLighting(currentConfig.ambientLight, currentConfig.hemisphereLight);
+    manager.updateToneMapping(); // Use original/no tone mapping
     manager.updateHdriExposure(currentConfig.hdriExposure);
     manager.updateHdriEnvironment(currentConfig.hdriType);
     manager.updateClearcoat(currentConfig.clearcoat);
@@ -153,6 +154,8 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
 
     // Update lighting (commented out — using HDRI instead)
     // sceneManager.updateLighting(config.ambientLight, config.hemisphereLight);
+
+    sceneManager.updateToneMapping(); // Use original/no tone mapping
 
     // Update HDRI exposure
     sceneManager.updateHdriExposure(config.hdriExposure);
@@ -335,26 +338,24 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
   };
 
   const copyJsonMetadata = async () => {
+    // Simplified Shopify metafield format
     const metadata = {
       type: product.type,
-      surface_url: product.surface_url,
-      texture_type: product.texture_type,
-      texture_url: product.texture_url,
-      color: product.color,
+      surface_url: product.surface_url || "",
       config: {
+        logoUrl: "https://cdn.shopify.com/s/files/1/0728/7314/8553/files/logo.png",
         hdriExposure: config.hdriExposure,
-        hdriType: config.hdriType,
-        lighting: {
-          ambient: config.ambientLight,
-          hemisphere: config.hemisphereLight,
-          clearcoat: config.clearcoat,
-          bodyRoughness: config.bodyRoughness,
+        hdriUrls: [
+          "https://cdn.shopify.com/s/files/1/0728/7314/8553/files/church_museum_2k.hdr",
+          "https://cdn.shopify.com/s/files/1/0728/7314/8553/files/church_stairway_2k.hdr",
+          "https://cdn.shopify.com/s/files/1/0728/7314/8553/files/bloem_train_track_clear_2k.hdr"
+        ],
+        textureScale: config.textureScale,
+        joint: {
+          roughness: config.jointRoughness,
+          clearcoat: config.jointClearcoat,
+          metalness: config.jointMetalness,
         },
-        leather: product.type === "leather" ? {
-          roughness: config.leatherRoughness,
-          sheen: config.leatherSheen,
-          normalStrength: config.normalStrength,
-        } : undefined,
       },
     };
 
@@ -903,7 +904,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                     <span>Rotate</span>
                     <div className="flex items-center gap-2">
                       <span className="text-xs bg-background px-2 py-0.5 rounded">
-                        Left-click + drag
+                        Left-click + drag (horizontal: spin, vertical: tilt)
                       </span>
                       <Button
                         variant="outline"

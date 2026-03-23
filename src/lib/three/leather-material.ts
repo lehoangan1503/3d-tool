@@ -6,10 +6,7 @@
 import * as THREE from "three";
 import { LEATHER_CONFIG, RUBBER_CONFIG, TOP_CAP_CONFIG, getLeatherTexturePath, isTopCapFaceMaterial } from "./leather-config";
 import { LEATHER_FRAME } from "./leather-frame";
-import {
-  createLeatherRoughnessMap,
-  createLeatherClearcoatMap,
-} from "./leather-overlay";
+import { createLeatherRoughnessMap, createLeatherClearcoatMap } from "./leather-overlay";
 import { generateLeatherBumpMap, type LeatherBumpResult } from "./procedural";
 
 // =====================================================
@@ -140,10 +137,7 @@ let leatherNormalPromise: Promise<HTMLImageElement | null> | null = null;
 /**
  * Load leather normal map image (fallback when procedural disabled)
  */
-export function loadLeatherNormal(
-  textureKey: string = "crocodile",
-  forceReload = false
-): Promise<HTMLImageElement | null> {
+export function loadLeatherNormal(textureKey: string = "crocodile", forceReload = false): Promise<HTMLImageElement | null> {
   if (leatherNormalPromise && !forceReload) return leatherNormalPromise;
 
   if (forceReload) {
@@ -201,12 +195,7 @@ export function getLeatherNormalImage(): HTMLImageElement | null {
  * @param textureScale - How many times to tile the texture (1 = no tiling, 2 = 2x2, etc.)
  * @param useProcedural - Force procedural or static texture (defaults to config)
  */
-export function createNormalMap(
-  width: number, 
-  height: number,
-  textureScale: number = 1,
-  useProcedural?: boolean
-): HTMLCanvasElement {
+export function createNormalMap(width: number, height: number, textureScale: number = 1, useProcedural?: boolean): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -218,7 +207,7 @@ export function createNormalMap(
 
   // Determine which texture source to use
   const useProceduralTexture = useProcedural ?? LEATHER_CONFIG.procedural.enabled;
-  
+
   // Try procedural texture first if enabled
   if (useProceduralTexture) {
     const proceduralResult = generateProceduralLeatherTexture();
@@ -230,7 +219,7 @@ export function createNormalMap(
 
       // Use procedural normal map
       const normalCanvas = proceduralResult.normalMapCanvas;
-      
+
       // Create temp canvas for leather normal with tiling
       const tempCanvas = document.createElement("canvas");
       tempCanvas.width = width;
@@ -239,19 +228,19 @@ export function createNormalMap(
 
       tempCtx.fillStyle = "rgb(128, 128, 255)";
       tempCtx.fillRect(0, 0, width, height);
-      
+
       // Tile the procedural normal map in leather region
       if (textureScale > 1) {
         const tileWidth = Math.ceil(width / textureScale);
         const tileHeight = Math.ceil(leatherHeight / textureScale);
-        
+
         // Scale down procedural texture to tile size
         const patternCanvas = document.createElement("canvas");
         patternCanvas.width = tileWidth;
         patternCanvas.height = tileHeight;
         const patternCtx = patternCanvas.getContext("2d")!;
         patternCtx.drawImage(normalCanvas, 0, 0, tileWidth, tileHeight);
-        
+
         const pattern = tempCtx.createPattern(patternCanvas, "repeat");
         if (pattern) {
           tempCtx.save();
@@ -272,7 +261,7 @@ export function createNormalMap(
       // Draw onto main canvas
       ctx.drawImage(tempCanvas, 0, 0);
       console.log("[NormalMap] ✅ Applied PROCEDURAL normal to region:", leatherY, "-", leatherEndY);
-      
+
       return canvas;
     }
   }
@@ -292,7 +281,7 @@ export function createNormalMap(
 
     tempCtx.fillStyle = "rgb(128, 128, 255)";
     tempCtx.fillRect(0, 0, width, height);
-    
+
     // If textureScale > 1, tile the normal map texture
     if (textureScale > 1) {
       // Create a tiled pattern canvas for the leather region
@@ -302,10 +291,10 @@ export function createNormalMap(
       patternCanvas.width = tileWidth;
       patternCanvas.height = tileHeight;
       const patternCtx = patternCanvas.getContext("2d")!;
-      
+
       // Draw the normal texture scaled down to tile size
       patternCtx.drawImage(leatherNormalImage, 0, 0, tileWidth, tileHeight);
-      
+
       // Create pattern and fill the leather region
       const pattern = tempCtx.createPattern(patternCanvas, "repeat");
       if (pattern) {
@@ -315,7 +304,7 @@ export function createNormalMap(
         tempCtx.fillRect(0, 0, width, leatherHeight);
         tempCtx.restore();
       }
-      
+
       console.log(`[NormalMap] Applied tiled static texture (${textureScale}x scale, tile: ${tileWidth}x${tileHeight})`);
     } else {
       // Original: stretch texture to fit leather region
@@ -337,14 +326,7 @@ export function createNormalMap(
 /**
  * Apply soft edge mask to leather region
  */
-function applyLeatherMask(
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  leatherY: number,
-  leatherHeight: number,
-  leatherEndY: number
-): void {
+function applyLeatherMask(ctx: CanvasRenderingContext2D, width: number, height: number, leatherY: number, leatherHeight: number, leatherEndY: number): void {
   const maskCanvas = document.createElement("canvas");
   maskCanvas.width = width;
   maskCanvas.height = height;
@@ -392,17 +374,12 @@ export interface LeatherTextureMaps {
  * @param bodyRoughness - Roughness for non-leather body areas (0-255, default 10)
  * @param textureScale - How many times to tile the normal texture (1 = no tiling, 2+ = repeated)
  */
-export function createLeatherTextureMaps(
-  width: number,
-  height: number,
-  bodyRoughness: number = 10,
-  textureScale: number = 1
-): LeatherTextureMaps {
+export function createLeatherTextureMaps(width: number, height: number, bodyRoughness: number = 10, textureScale: number = 1): LeatherTextureMaps {
   const roughnessCanvas = createLeatherRoughnessMap(width, height, LEATHER_CONFIG.roughness, bodyRoughness);
   const roughnessTexture = new THREE.CanvasTexture(roughnessCanvas);
   roughnessTexture.flipY = false;
-  // Match working shopify code: use LinearSRGBColorSpace for canvas textures
-  roughnessTexture.colorSpace = THREE.LinearSRGBColorSpace;
+  // Roughness maps are data textures - use NoColorSpace to prevent color space conversion
+  roughnessTexture.colorSpace = THREE.NoColorSpace;
   roughnessTexture.wrapS = THREE.RepeatWrapping;
   roughnessTexture.wrapT = THREE.ClampToEdgeWrapping;
   roughnessTexture.needsUpdate = true;
@@ -411,7 +388,8 @@ export function createLeatherTextureMaps(
   const clearcoatCanvas = createLeatherClearcoatMap(width, height, LEATHER_CONFIG.clearcoat);
   const clearcoatTexture = new THREE.CanvasTexture(clearcoatCanvas);
   clearcoatTexture.flipY = false;
-  clearcoatTexture.colorSpace = THREE.LinearSRGBColorSpace;
+  // Clearcoat maps are data textures - use NoColorSpace to prevent color space conversion
+  clearcoatTexture.colorSpace = THREE.NoColorSpace;
   clearcoatTexture.wrapS = THREE.RepeatWrapping;
   clearcoatTexture.wrapT = THREE.ClampToEdgeWrapping;
   clearcoatTexture.needsUpdate = true;
@@ -419,7 +397,8 @@ export function createLeatherTextureMaps(
   const normalCanvas = createNormalMap(width, height, textureScale);
   const normalTexture = new THREE.CanvasTexture(normalCanvas);
   normalTexture.flipY = false;
-  normalTexture.colorSpace = THREE.LinearSRGBColorSpace;
+  // Normal maps are data textures - use NoColorSpace to prevent color space conversion
+  normalTexture.colorSpace = THREE.NoColorSpace;
   normalTexture.wrapS = THREE.RepeatWrapping;
   normalTexture.wrapT = THREE.ClampToEdgeWrapping;
   normalTexture.needsUpdate = true;
@@ -443,10 +422,7 @@ export function createLeatherTextureMaps(
  * - Sheen Tint: 0.2-0.4
  * - IOR: 1.45-1.5
  */
-export function createLeatherMaterial(
-  mapTexture: THREE.Texture,
-  textureMaps: LeatherTextureMaps
-): THREE.MeshPhysicalMaterial {
+export function createLeatherMaterial(mapTexture: THREE.Texture, textureMaps: LeatherTextureMaps): THREE.MeshPhysicalMaterial {
   const { roughnessTexture, clearcoatTexture, normalTexture } = textureMaps;
 
   console.log("[createLeatherMaterial] Creating realistic leather material with:", {
@@ -460,30 +436,30 @@ export function createLeatherMaterial(
   return new THREE.MeshPhysicalMaterial({
     map: mapTexture,
     color: new THREE.Color(0xffffff),
-    
+
     // Roughness: Base 0.4 with variation from roughness map
     roughnessMap: roughnessTexture,
     roughness: 0.4, // Base roughness (0.35-0.45 for premium cowhide)
-    
+
     metalness: 0.0,
-    
+
     // Clearcoat: Minimal for matte leather (0.0), more for finished leather (0.1-0.3)
     clearcoat: 0.1, // Subtle clear coat
     clearcoatMap: clearcoatTexture,
     clearcoatRoughness: 0.3, // Rougher clearcoat for matte look
-    
+
     // Reflectivity and IOR
     reflectivity: 0.5, // Specular: 0.5 from settings
     ior: 1.47, // IOR: 1.45-1.5 from settings
-    
+
     // Environment reflection
     envMapIntensity: 0.35,
-    
+
     // SHEEN - Critical for realistic leather! (setting.md emphasizes this)
     sheen: 0.4, // Sheen: 0.3-0.5 (important for leather!)
     sheenRoughness: 0.5, // Controls sheen softness
     sheenColor: new THREE.Color(0x8b7355), // Warm brown tint (Sheen Tint: 0.2-0.4)
-    
+
     // Normal map with proper scale
     normalMap: normalTexture,
     normalScale: new THREE.Vector2(LEATHER_CONFIG.normalScaleX, LEATHER_CONFIG.normalScaleY),
@@ -493,9 +469,7 @@ export function createLeatherMaterial(
 /**
  * Create MeshPhysicalMaterial for standard products (glass-like)
  */
-export function createStandardMaterial(
-  mapTexture: THREE.Texture
-): THREE.MeshPhysicalMaterial {
+export function createStandardMaterial(mapTexture: THREE.Texture): THREE.MeshPhysicalMaterial {
   const cfg = LEATHER_CONFIG.nonLeather;
 
   return new THREE.MeshPhysicalMaterial({
@@ -578,7 +552,7 @@ function drawRubberLogoOnCanvas(ctx: CanvasRenderingContext2D, width: number, he
   // Draw logo with optional flip
   ctx.save();
   ctx.globalAlpha = RUBBER_CONFIG.logo.opacity || 1.0;
-  
+
   if (RUBBER_CONFIG.logo.flipX || RUBBER_CONFIG.logo.flipY) {
     ctx.translate(logoX + logoW / 2, logoY + logoH / 2);
     ctx.scale(RUBBER_CONFIG.logo.flipX ? -1 : 1, RUBBER_CONFIG.logo.flipY ? -1 : 1);
@@ -586,7 +560,7 @@ function drawRubberLogoOnCanvas(ctx: CanvasRenderingContext2D, width: number, he
   } else {
     ctx.drawImage(colorCanvas, logoX, logoY, logoW, logoH);
   }
-  
+
   ctx.restore();
   console.log("[Rubber] Logo drawn at:", logoX, logoY, logoW, logoH);
 }
@@ -674,11 +648,11 @@ function drawTopCapFaceLogoOnCanvas(ctx: CanvasRenderingContext2D, width: number
   const logoScale = TOP_CAP_CONFIG.logo.scale;
   const logoW = width * logoScale;
   const logoH = (topCapLogoImage.height / topCapLogoImage.width) * logoW;
-  
+
   // UV center is at (0.25, 0.75) for the top_cap face
   const uvCenterX = 0.25;
   const uvCenterY = 0.75;
-  
+
   const logoX = width * uvCenterX - logoW / 2;
   const logoY = height * uvCenterY - logoH / 2;
 
@@ -700,7 +674,7 @@ function drawTopCapFaceLogoOnCanvas(ctx: CanvasRenderingContext2D, width: number
   ctx.globalAlpha = TOP_CAP_CONFIG.logo.opacity || 1.0;
   ctx.drawImage(colorCanvas, logoX, logoY, logoW, logoH);
   ctx.restore();
-  
+
   console.log("[TopCapFace] Logo drawn at UV center (0.25, 0.75), canvas pos:", logoX.toFixed(0), logoY.toFixed(0));
 }
 
@@ -789,10 +763,7 @@ function drawTopCapFaceLogoOnCanvas(ctx: CanvasRenderingContext2D, width: number
  * Apply logo overlay to an existing material's map texture.
  * Keeps the original GLB texture intact and only draws the logo on top.
  */
-export function applyLogoToExistingMaterial(
-  mat: THREE.Material,
-  type: 'rubber' | 'topCapFace'
-): void {
+export function applyLogoToExistingMaterial(mat: THREE.Material, type: "rubber" | "topCapFace"): void {
   const physMat = mat as THREE.MeshStandardMaterial;
   const originalMap = physMat.map;
 
@@ -814,9 +785,9 @@ export function applyLogoToExistingMaterial(
   ctx.drawImage(img as CanvasImageSource, 0, 0, width, height);
 
   // Draw logo on top
-  if (type === 'rubber') {
+  if (type === "rubber") {
     drawRubberLogoOnCanvas(ctx, width, height);
-  } else if (type === 'topCapFace') {
+  } else if (type === "topCapFace") {
     drawTopCapFaceLogoOnCanvas(ctx, width, height);
   }
 

@@ -6,6 +6,8 @@ import Link from "next/link";
 import { CuePreview } from "@/components/editor/cue-preview";
 import { LeatherPicker } from "@/components/editor/leather-picker";
 import { SurfaceUploader } from "@/components/editor/surface-uploader";
+import { ImageExtractor } from "@/components/editor/image-extractor";
+import { VideoExtractor } from "@/components/editor/video-extractor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,6 +32,8 @@ import {
   RotateCcw,
   ZoomIn,
   Move,
+  Camera,
+  Video,
 } from "lucide-react";
 import type { Product, ProductConfig, LeatherColor, LeatherTextureType } from "@/types/product";
 import { DEFAULT_PRODUCT_CONFIG, configToSettingsJson } from "@/types/product";
@@ -63,6 +67,8 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
     surface: null,
     customTexture: null,
   });
+  const [showImageExtractor, setShowImageExtractor] = useState(false);
+  const [showVideoExtractor, setShowVideoExtractor] = useState(false);
 
   const [hdriOptions, setHdriOptions] = useState<Array<{ id: string; label: string }>>([]);
 
@@ -415,6 +421,24 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
             ) : (
               <Moon className="h-4 w-4 sm:h-5 sm:w-5" />
             )}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setShowImageExtractor(true)}
+            title="Extract image"
+            className="h-8 w-8 sm:h-10 sm:w-10"
+          >
+            <Camera className="h-4 w-4 sm:h-5 sm:w-5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setShowVideoExtractor(true)}
+            title="Extract video"
+            className="h-8 w-8 sm:h-10 sm:w-10"
+          >
+            <Video className="h-4 w-4 sm:h-5 sm:w-5" />
           </Button>
           <Button 
             onClick={handleSave} 
@@ -1375,6 +1399,20 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
           </div>
         </div>
       </div>
+
+      {/* Extractor Dialogs */}
+      <ImageExtractor
+        sceneManager={sceneManager}
+        productName={product.name}
+        open={showImageExtractor}
+        onClose={() => setShowImageExtractor(false)}
+      />
+      <VideoExtractor
+        sceneManager={sceneManager}
+        productName={product.name}
+        open={showVideoExtractor}
+        onClose={() => setShowVideoExtractor(false)}
+      />
     </div>
   );
 }

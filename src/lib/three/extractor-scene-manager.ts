@@ -280,6 +280,15 @@ export class ExtractorSceneManager {
   }
 
   /**
+   * Render the current scene (call after making changes to see updates)
+   */
+  render(): void {
+    if (!this.isDisposed) {
+      this.renderer.render(this.scene, this.camera);
+    }
+  }
+
+  /**
    * Capture current view as data URL with transparency
    */
   captureFrame(format: 'png' | 'jpeg' | 'webp' = 'png'): string {

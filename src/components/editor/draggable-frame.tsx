@@ -16,7 +16,7 @@ interface DraggableFrameProps {
   scale: number; // Canvas scale factor (e.g., 0.3 for 600px display of 2048)
 }
 
-type HandleType = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rotate';
+type HandleType = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rotate-top' | 'rotate-bottom';
 
 export function DraggableFrame({
   frame,
@@ -27,12 +27,18 @@ export function DraggableFrame({
   scale,
 }: DraggableFrameProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
   const extractorRef = useRef<ExtractorSceneManager | null>(null);
   
   const [isDragging, setIsDragging] = useState(false);
   const [dragType, setDragType] = useState<'move' | 'resize' | 'rotate' | 'cue-orbit' | 'cue-pan' | null>(null);
   const [activeHandle, setActiveHandle] = useState<HandleType | null>(null);
-  const dragStartRef = useRef({ x: 0, y: 0, frameX: 0, frameY: 0, frameW: 0, frameH: 0, frameR: 0, cueOrbitX: 0, cueOrbitY: 0, cueOffsetX: 0, cueOffsetY: 0 });
+  const dragStartRef = useRef({ 
+    x: 0, y: 0, 
+    frameX: 0, frameY: 0, frameW: 0, frameH: 0, frameR: 0, 
+    cueOrbitX: 0, cueOrbitY: 0, cueOffsetX: 0, cueOffsetY: 0,
+    centerX: 0, centerY: 0, startAngle: 0 
+  });
 
   // Initialize extractor
   useEffect(() => {
@@ -48,8 +54,19 @@ export function DraggableFrame({
     if (model) extractor.setModel(model);
 
     const hdriUrl = sceneManager.getCurrentHdriUrl();
-    extractor.loadHDRI(hdriUrl);
+    extractor.loadHDRI(hdriUrl).then(() => {
+      // Render after HDRI loads
+      if (extractorRef.current) {
+        extractorRef.current.render();
+      }
+    });
     extractor.setTransparentBackground(true);
+    
+    // Apply initial cue settings
+    extractor.setCameraOrbit(frame.cue.orbitX, frame.cue.orbitY, 2, 0);
+    extractor.setCameraZoom(frame.cue.zoom);
+    extractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
+    extractor.setDirectionalLight(frame.cue.lightAngle);
 
     if (containerRef.current) {
       const canvas = extractor.getCanvas();
@@ -58,6 +75,9 @@ export function DraggableFrame({
       canvas.style.pointerEvents = 'none'; // Let parent handle events
       containerRef.current.appendChild(canvas);
     }
+    
+    // Initial render
+    extractor.render();
 
     return () => {
       if (extractorRef.current) {
@@ -79,6 +99,7 @@ export function DraggableFrame({
     extractorRef.current.setCameraZoom(frame.cue.zoom);
     extractorRef.current.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
     extractorRef.current.setDirectionalLight(frame.cue.lightAngle);
+    extractorRef.current.render();
   }, [frame]);
 
   // Mouse handlers
@@ -88,6 +109,18 @@ export function DraggableFrame({
     onSelect();
     
     setIsDragging(true);
+    
+    // Get frame center in screen coordinates for rotation
+    let centerX = 0, centerY = 0;
+    if (frameRef.current) {
+      const rect = frameRef.current.getBoundingClientRect();
+      centerX = rect.left + rect.width / 2;
+      centerY = rect.top + rect.height / 2;
+    }
+    
+    // Calculate starting angle for rotation
+    const startAngle = Math.atan2(e.clientY - centerY, e.clientX - centerX);
+    
     dragStartRef.current = {
       x: e.clientX,
       y: e.clientY,
@@ -100,11 +133,14 @@ export function DraggableFrame({
       cueOrbitY: frame.cue.orbitY,
       cueOffsetX: frame.cue.offsetX,
       cueOffsetY: frame.cue.offsetY,
+      centerX,
+      centerY,
+      startAngle,
     };
 
-    if (handle === 'rotate') {
+    if (handle === 'rotate-top' || handle === 'rotate-bottom') {
       setDragType('rotate');
-      setActiveHandle('rotate');
+      setActiveHandle(handle);
     } else if (handle) {
       setDragType('resize');
       setActiveHandle(handle);
@@ -131,24 +167,16 @@ export function DraggableFrame({
         },
       });
     } else if (dragType === 'rotate') {
-      // Calculate rotation based on mouse position relative to frame center
-      const centerX = dragStartRef.current.frameX + dragStartRef.current.frameW / 2;
-      const centerY = dragStartRef.current.frameY + dragStartRef.current.frameH / 2;
-      const startAngle = Math.atan2(
-        dragStartRef.current.y / scale - centerY,
-        dragStartRef.current.x / scale - centerX
-      );
-      const currentAngle = Math.atan2(
-        e.clientY / scale - centerY,
-        e.clientX / scale - centerX
-      );
+      // Calculate rotation based on current mouse angle relative to frame center (screen coords)
+      const { centerX, centerY, startAngle, frameR } = dragStartRef.current;
+      const currentAngle = Math.atan2(e.clientY - centerY, e.clientX - centerX);
       const deltaAngle = (currentAngle - startAngle) * (180 / Math.PI);
       
       onFrameChange({
         ...frame,
         transform: {
           ...frame.transform,
-          rotation: dragStartRef.current.frameR + deltaAngle,
+          rotation: frameR + deltaAngle,
         },
       });
     } else if (dragType === 'resize' && activeHandle) {
@@ -222,7 +250,7 @@ export function DraggableFrame({
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
   const handles: HandleType[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
-  const handlePositions: Record<HandleType, { top?: string; left?: string; right?: string; bottom?: string; cursor: string }> = {
+  const handlePositions: Record<string, { top?: string; left?: string; right?: string; bottom?: string; cursor: string }> = {
     nw: { top: '-4px', left: '-4px', cursor: 'nw-resize' },
     n: { top: '-4px', left: '50%', cursor: 'n-resize' },
     ne: { top: '-4px', right: '-4px', cursor: 'ne-resize' },
@@ -231,11 +259,11 @@ export function DraggableFrame({
     s: { bottom: '-4px', left: '50%', cursor: 's-resize' },
     sw: { bottom: '-4px', left: '-4px', cursor: 'sw-resize' },
     w: { top: '50%', left: '-4px', cursor: 'w-resize' },
-    rotate: { top: '-30px', left: '50%', cursor: 'grab' },
   };
 
   return (
     <div
+      ref={frameRef}
       className={cn(
         "absolute",
         selected ? "z-10" : "z-0"
@@ -283,18 +311,26 @@ export function DraggableFrame({
         />
       ))}
 
-      {/* Rotation handle */}
+      {/* Rotation handles - top and bottom */}
       {selected && (
-        <div
-          className="absolute -top-8 left-1/2 -translate-x-1/2 w-6 h-6 bg-primary rounded-full flex items-center justify-center cursor-grab"
-          onMouseDown={(e) => handleMouseDown(e, 'move', 'rotate')}
-        >
-          <RotateCw className="w-3 h-3 text-primary-foreground" />
-        </div>
+        <>
+          <div
+            className="absolute -top-8 left-1/2 -translate-x-1/2 w-6 h-6 bg-primary rounded-full flex items-center justify-center cursor-grab active:cursor-grabbing"
+            onMouseDown={(e) => handleMouseDown(e, 'move', 'rotate-top')}
+          >
+            <RotateCw className="w-3 h-3 text-primary-foreground" />
+          </div>
+          <div
+            className="absolute -bottom-8 left-1/2 -translate-x-1/2 w-6 h-6 bg-primary rounded-full flex items-center justify-center cursor-grab active:cursor-grabbing"
+            onMouseDown={(e) => handleMouseDown(e, 'move', 'rotate-bottom')}
+          >
+            <RotateCw className="w-3 h-3 text-primary-foreground" />
+          </div>
+        </>
       )}
 
       {/* Frame label */}
-      <div className="absolute bottom-1 left-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
+      <div className="absolute bottom-1 left-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded pointer-events-none">
         {frame.cue.zoom.toFixed(1)}x
       </div>
     </div>

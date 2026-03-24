@@ -1169,4 +1169,57 @@ export class SceneManager {
     // Dispose controls
     this.controls.dispose();
   }
+
+  /**
+   * Get the current model for cloning (used by extractors)
+   */
+  getModelForClone(): THREE.Group | null {
+    return this.model;
+  }
+
+  /**
+   * Get current HDRI URL for extractor to use same environment
+   */
+  getCurrentHdriUrl(): string {
+    return this.currentHdriUrl;
+  }
+
+  /**
+   * Get current material configs for extractor
+   */
+  getMaterialConfigs() {
+    return {
+      leatherConfig: { ...this.currentLeatherConfig },
+      cylinderConfig: { ...this.currentCylinderConfig },
+      jointConfig: { ...this.currentJointConfig },
+      bodyRoughness: this.bodyRoughness,
+      textureScale: this.textureScale,
+      isLeatherProduct: this.isLeatherProduct,
+    };
+  }
+
+  /**
+   * Quick single-frame capture for thumbnail generation
+   */
+  captureFrame(width: number = 512, height: number = 512): string {
+    // Store original size
+    const originalWidth = this.container.clientWidth;
+    const originalHeight = this.container.clientHeight;
+
+    // Temporarily resize
+    this.renderer.setSize(width, height);
+    this.camera.aspect = width / height;
+    this.camera.updateProjectionMatrix();
+
+    // Render and capture
+    this.renderer.render(this.scene, this.camera);
+    const dataUrl = this.renderer.domElement.toDataURL('image/png');
+
+    // Restore original size
+    this.renderer.setSize(originalWidth, originalHeight);
+    this.camera.aspect = originalWidth / originalHeight;
+    this.camera.updateProjectionMatrix();
+
+    return dataUrl;
+  }
 }

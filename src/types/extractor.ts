@@ -189,3 +189,133 @@ export const FRAME_LABELS: Record<FrameKey, string> = {
   centerCue: 'Full Cue',
   topCap: 'Top Cap',
 };
+
+// ==========================================
+// Image Extractor V3 Types (Frame Editor)
+// ==========================================
+
+/** Frame transform on 2048×2048 canvas */
+export interface FrameTransform {
+  x: number;      // X position (px, 0-2048)
+  y: number;      // Y position (px, 0-2048)
+  width: number;  // Width (px)
+  height: number; // Height (px)
+  rotation: number; // Rotation (degrees)
+}
+
+/** Cue settings within a frame */
+export interface CueSettings {
+  orbitX: number;   // Horizontal orbit angle (radians)
+  orbitY: number;   // Vertical orbit angle (radians)
+  zoom: number;     // Zoom multiplier
+  offsetX: number;  // Horizontal offset
+  offsetY: number;  // Vertical offset
+  lightAngle: number; // Light direction (degrees, 0-360)
+}
+
+/** Single frame in the editor */
+export interface ExtractorFrame {
+  id: string;
+  order: number;
+  transform: FrameTransform;
+  cue: CueSettings;
+}
+
+/** Saved reference (layout preset) */
+export interface ExtractorReference {
+  id: string;
+  name: string;
+  frames: ExtractorFrame[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Default frame transform */
+export const DEFAULT_FRAME_TRANSFORM: FrameTransform = {
+  x: 724,       // Centered horizontally (2048-600)/2
+  y: 724,       // Centered vertically
+  width: 600,
+  height: 600,
+  rotation: 0,
+};
+
+/** Default cue settings */
+export const DEFAULT_CUE_SETTINGS: CueSettings = {
+  orbitX: 0,
+  orbitY: Math.PI / 4, // 45°
+  zoom: 1,
+  offsetX: 0,
+  offsetY: 0,
+  lightAngle: 45,
+};
+
+/** Create a new frame with defaults */
+export function createDefaultFrame(id?: string, order: number = 0): ExtractorFrame {
+  return {
+    id: id || crypto.randomUUID(),
+    order,
+    transform: { ...DEFAULT_FRAME_TRANSFORM },
+    cue: { ...DEFAULT_CUE_SETTINGS },
+  };
+}
+
+// ==========================================
+// Frame Templates
+// ==========================================
+
+/** Template for 1 centered frame */
+export const TEMPLATE_1_FRAME: ExtractorFrame[] = [
+  {
+    id: 'frame-1',
+    order: 0,
+    transform: { x: 524, y: 524, width: 1000, height: 1000, rotation: 0 },
+    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.2 },
+  },
+];
+
+/** Template for 2 frames side by side */
+export const TEMPLATE_2_FRAMES: ExtractorFrame[] = [
+  {
+    id: 'frame-1',
+    order: 0,
+    transform: { x: 100, y: 524, width: 800, height: 1000, rotation: 0 },
+    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.5, orbitY: Math.PI / 4 },
+  },
+  {
+    id: 'frame-2',
+    order: 1,
+    transform: { x: 1148, y: 524, width: 800, height: 1000, rotation: 0 },
+    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.5, orbitY: Math.PI / 4 },
+  },
+];
+
+/** Template for 3 frames diagonal (like original design) */
+export const TEMPLATE_3_DIAGONAL: ExtractorFrame[] = [
+  {
+    id: 'frame-bottom',
+    order: 0,
+    transform: { x: 100, y: 1448, width: 500, height: 500, rotation: 0 },
+    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 2.5, orbitY: Math.PI / 4 },
+  },
+  {
+    id: 'frame-center',
+    order: 1,
+    transform: { x: 574, y: 374, width: 900, height: 1300, rotation: 0 },
+    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1, orbitY: Math.PI / 4 },
+  },
+  {
+    id: 'frame-top',
+    order: 2,
+    transform: { x: 1448, y: 100, width: 500, height: 500, rotation: 0 },
+    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 2.5, orbitY: Math.PI / 4 },
+  },
+];
+
+/** All available templates */
+export const FRAME_TEMPLATES = {
+  '1-frame': { name: '1 Frame', frames: TEMPLATE_1_FRAME },
+  '2-frames': { name: '2 Frames', frames: TEMPLATE_2_FRAMES },
+  '3-diagonal': { name: '3 Diagonal', frames: TEMPLATE_3_DIAGONAL },
+} as const;
+
+export type TemplateKey = keyof typeof FRAME_TEMPLATES;

@@ -14,7 +14,7 @@ import {
 /**
  * Detect best supported video format for MediaRecorder
  */
-function getSupportedMimeType(): string {
+export function getSupportedMimeType(): string {
   const types = [
     'video/webm;codecs=vp9',
     'video/webm;codecs=vp8',

@@ -1,12 +1,9 @@
-// src/components/editor/image-extractor.tsx
-
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import {
   Dialog,
@@ -16,11 +13,12 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Camera, Download, RefreshCw, ZoomIn, Move, RotateCcw, Loader2 } from "lucide-react";
+import { Camera, Download, RefreshCw, AlignCenter, Save, Loader2, Sun } from "lucide-react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
-import type { ImageExtractorConfig, PartViewConfig } from "@/types/extractor";
-import { DEFAULT_IMAGE_CONFIG } from "@/types/extractor";
+import { InteractiveFrame } from "@/components/editor/interactive-frame";
+import type { FramePosition, FrameKey, ImageExtractorPreset } from "@/types/extractor";
+import { DEFAULT_IMAGE_EXTRACTOR_PRESET, FRAME_LABELS } from "@/types/extractor";
 
 interface ImageExtractorProps {
   sceneManager: SceneManager | null;
@@ -29,298 +27,334 @@ interface ImageExtractorProps {
   open: boolean;
 }
 
-type PartKey = "bottomBump" | "centerCue" | "topCap";
-
-const PART_LABELS: Record<PartKey, string> = {
-  bottomBump: "Bottom Bump",
-  centerCue: "Full Cue",
-  topCap: "Top Cap",
-};
+const FRAME_SIZE = 280; // Size of each interactive frame in pixels
 
 export function ImageExtractor({ sceneManager, productName, onClose, open }: ImageExtractorProps) {
-  const [config, setConfig] = useState<ImageExtractorConfig>(DEFAULT_IMAGE_CONFIG);
-  const [selectedPart, setSelectedPart] = useState<PartKey>("centerCue");
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [preset, setPreset] = useState<ImageExtractorPreset>(DEFAULT_IMAGE_EXTRACTOR_PRESET);
+  const [selectedFrame, setSelectedFrame] = useState<FrameKey>("centerCue");
+  const [isExporting, setIsExporting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
-  const extractorRef = useRef<ExtractorSceneManager | null>(null);
-  const previewContainerRef = useRef<HTMLDivElement>(null);
+  // Refs for each frame's extractor (for composite capture)
+  const extractorRefs = useRef<Record<FrameKey, ExtractorSceneManager | null>>({
+    bottomBump: null,
+    centerCue: null,
+    topCap: null,
+  });
 
-  // Initialize extractor when dialog opens
+  // Load saved preset on open
   useEffect(() => {
-    if (!open || !sceneManager) return;
+    if (!open) return;
+    loadPreset();
+  }, [open]);
 
-    const initExtractor = async () => {
-      try {
-        setError(null);
-        // Create extractor with preview size
-        const extractor = new ExtractorSceneManager(800, 800);
-        extractorRef.current = extractor;
-
-        // Clone model from main scene
-        const model = sceneManager.getModelForClone();
-        if (model) {
-          extractor.setModel(model);
-        }
-
-        // Load same HDRI
-        const hdriUrl = sceneManager.getCurrentHdriUrl();
-        await extractor.loadHDRI(hdriUrl);
-
-        // Generate initial preview
-        const url = await extractor.captureImageParts(config);
-        setPreviewUrl(url);
-      } catch (err) {
-        setError("Failed to initialize extractor");
-        console.error(err);
+  const loadPreset = async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch("/api/extractor-presets");
+      if (res.ok) {
+        const data = await res.json();
+        setPreset(data);
       }
-    };
+    } catch (err) {
+      console.error("Failed to load preset:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-    initExtractor();
+  const savePreset = async () => {
+    setIsSaving(true);
+    try {
+      const res = await fetch("/api/extractor-presets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(preset),
+      });
+      if (!res.ok) throw new Error("Save failed");
+    } catch (err) {
+      setError("Failed to save preset");
+      console.error(err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
-    return () => {
-      if (extractorRef.current) {
-        extractorRef.current.dispose();
-        extractorRef.current = null;
-      }
-      setPreviewUrl(null);
-    };
-  }, [open, sceneManager]);
+  const resetPreset = () => {
+    setPreset(DEFAULT_IMAGE_EXTRACTOR_PRESET);
+  };
 
-  // Update preview when config changes
-  useEffect(() => {
-    if (!extractorRef.current || !open) return;
-    
-    const updatePreview = async () => {
-      try {
-        const url = await extractorRef.current!.captureImageParts(config);
-        setPreviewUrl(url);
-      } catch (err) {
-        console.error("Preview update failed:", err);
-      }
-    };
-    
-    updatePreview();
-  }, [config, open]);
-
-  const updatePartConfig = (part: PartKey, updates: Partial<PartViewConfig>) => {
-    setConfig(prev => ({
+  const alignCenter = () => {
+    // Reset model offsets and camera orbits to centered
+    setPreset(prev => ({
       ...prev,
-      parts: {
-        ...prev.parts,
-        [part]: { ...prev.parts[part], ...updates },
+      frames: {
+        bottomBump: { ...prev.frames.bottomBump, modelOffsetX: 0, modelOffsetY: 0, cameraOrbitX: 0 },
+        centerCue: { ...prev.frames.centerCue, modelOffsetX: 0, modelOffsetY: 0, cameraOrbitX: 0 },
+        topCap: { ...prev.frames.topCap, modelOffsetX: 0, modelOffsetY: 0, cameraOrbitX: 0 },
       },
     }));
   };
 
-  const handleGenerate = async () => {
-    if (!extractorRef.current) return;
+  const updateFramePosition = (frameKey: FrameKey, position: FramePosition) => {
+    setPreset(prev => ({
+      ...prev,
+      frames: { ...prev.frames, [frameKey]: position },
+    }));
+  };
 
-    setIsGenerating(true);
+  const updateGap = (gap: number) => {
+    setPreset(prev => ({ ...prev, gap: Math.max(0, Math.min(100, gap)) }));
+  };
+
+  const updateLightAngle = (angle: number) => {
+    setPreset(prev => ({
+      ...prev,
+      frames: {
+        ...prev.frames,
+        [selectedFrame]: { ...prev.frames[selectedFrame], lightAngle: angle },
+      },
+    }));
+  };
+
+  const handleExport = async () => {
+    if (!sceneManager) return;
+    
+    setIsExporting(true);
     setError(null);
 
     try {
-      const dataUrl = await extractorRef.current.captureImageParts({
-        ...config,
-        width: config.width,
-        height: config.height,
-      });
-      setPreviewUrl(dataUrl);
+      // Create high-res extractors for each frame
+      const frameSize = Math.floor((2048 - preset.gap * 2) / 2);
+      const extractors: Record<FrameKey, ExtractorSceneManager> = {
+        bottomBump: new ExtractorSceneManager(frameSize, frameSize),
+        centerCue: new ExtractorSceneManager(frameSize, Math.floor(frameSize * 1.4)),
+        topCap: new ExtractorSceneManager(frameSize, frameSize),
+      };
+
+      // Setup each extractor
+      const model = sceneManager.getModelForClone();
+      const hdriUrl = sceneManager.getCurrentHdriUrl();
+      
+      for (const key of Object.keys(extractors) as FrameKey[]) {
+        const extractor = extractors[key];
+        const pos = preset.frames[key];
+        
+        if (model) extractor.setModel(model);
+        await extractor.loadHDRI(hdriUrl);
+        extractor.setTransparentBackground(true);
+        
+        const targetY = key === 'bottomBump' ? -1 : key === 'topCap' ? 1 : 0;
+        extractor.setCameraOrbit(pos.cameraOrbitX, pos.cameraOrbitY, pos.cameraDistance, targetY);
+        extractor.setCameraZoom(pos.zoom);
+        extractor.setModelOffset(pos.modelOffsetX, pos.modelOffsetY);
+        extractor.setDirectionalLight(pos.lightAngle);
+      }
+
+      // Create composite canvas
+      const canvas = document.createElement('canvas');
+      canvas.width = 2048;
+      canvas.height = 2048;
+      const ctx = canvas.getContext('2d')!;
+      
+      // Clear with transparency
+      ctx.clearRect(0, 0, 2048, 2048);
+
+      // Capture and draw each frame
+      // Position: bottomBump (bottom-left), centerCue (center), topCap (top-right)
+      const gap = preset.gap;
+      
+      // Bottom Bump - bottom left
+      const bbImg = new Image();
+      bbImg.src = extractors.bottomBump.captureFrame('png');
+      await new Promise(r => bbImg.onload = r);
+      ctx.drawImage(bbImg, 0, 2048 - frameSize, frameSize, frameSize);
+      
+      // Center Cue - center (taller frame)
+      const ccImg = new Image();
+      ccImg.src = extractors.centerCue.captureFrame('png');
+      await new Promise(r => ccImg.onload = r);
+      const ccHeight = Math.floor(frameSize * 1.4);
+      ctx.drawImage(ccImg, frameSize / 2 + gap / 2, (2048 - ccHeight) / 2, frameSize, ccHeight);
+      
+      // Top Cap - top right
+      const tcImg = new Image();
+      tcImg.src = extractors.topCap.captureFrame('png');
+      await new Promise(r => tcImg.onload = r);
+      ctx.drawImage(tcImg, 2048 - frameSize, 0, frameSize, frameSize);
+
+      // Download
+      const link = document.createElement('a');
+      link.href = canvas.toDataURL('image/png');
+      link.download = `${productName.replace(/\s+/g, '-')}-cue-parts.png`;
+      link.click();
+
+      // Cleanup
+      Object.values(extractors).forEach(e => e.dispose());
     } catch (err) {
-      setError("Failed to generate image");
+      setError("Export failed");
       console.error(err);
     } finally {
-      setIsGenerating(false);
+      setIsExporting(false);
     }
   };
 
-  const handleDownload = () => {
-    if (!previewUrl) return;
-
-    const link = document.createElement("a");
-    link.href = previewUrl;
-    link.download = `${productName.replace(/\s+/g, "-")}-cue-parts.${config.format}`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const handleReset = () => {
-    setConfig(DEFAULT_IMAGE_CONFIG);
-  };
-
-  const currentPart = config.parts[selectedPart];
-
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+      <DialogContent className="max-w-5xl max-h-[95vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Camera className="h-5 w-5" />
             Image Extractor
           </DialogTitle>
           <DialogDescription>
-            Generate a 2048×2048 image with 3 views of your cue at 45° angle
+            Click frames to select • Left-drag: orbit camera • Right-drag: move cue • Scroll: zoom
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 flex gap-4 min-h-0 overflow-hidden">
-          {/* Preview Panel */}
-          <div className="flex-1 flex flex-col min-w-0">
-            <div
-              ref={previewContainerRef}
-              className="flex-1 bg-muted rounded-lg overflow-hidden relative"
-              style={{ minHeight: 400 }}
-            >
-              {previewUrl && (
-                <img
-                  src={previewUrl}
-                  alt="Preview"
-                  className="w-full h-full object-contain"
-                />
-              )}
-              {isGenerating && (
-                <div className="absolute inset-0 bg-background/80 flex items-center justify-center">
-                  <Loader2 className="h-8 w-8 animate-spin" />
-                </div>
-              )}
-              {error && (
-                <div className="absolute inset-0 flex items-center justify-center text-destructive">
-                  {error}
-                </div>
-              )}
-            </div>
+        {isLoading ? (
+          <div className="flex-1 flex items-center justify-center">
+            <Loader2 className="h-8 w-8 animate-spin" />
           </div>
-
-          {/* Controls Panel */}
-          <div className="w-72 flex flex-col gap-4 overflow-y-auto">
-            {/* Output Settings */}
-            <div className="space-y-3">
-              <h4 className="font-medium text-sm">Output Settings</h4>
-              
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <Label className="text-xs">Width</Label>
-                  <Input
-                    type="number"
-                    value={config.width}
-                    onChange={(e) => setConfig(prev => ({ ...prev, width: parseInt(e.target.value) || 2048 }))}
-                    className="h-8 text-sm"
+        ) : (
+          <div className="flex-1 flex gap-4 min-h-0 overflow-hidden">
+            {/* Frames Preview Area */}
+            <div className="flex-1 relative bg-muted/30 rounded-lg p-4 overflow-auto">
+              {/* Diagonal layout container */}
+              <div className="relative" style={{ width: FRAME_SIZE * 2.5, height: FRAME_SIZE * 2.5, margin: '0 auto' }}>
+                {/* Top Cap - top right */}
+                <div className="absolute" style={{ top: 0, right: 0 }}>
+                  <InteractiveFrame
+                    frameKey="topCap"
+                    position={preset.frames.topCap}
+                    onPositionChange={(pos) => updateFramePosition('topCap', pos)}
+                    sceneManager={sceneManager}
+                    selected={selectedFrame === 'topCap'}
+                    onSelect={() => setSelectedFrame('topCap')}
+                    size={FRAME_SIZE}
                   />
                 </div>
-                <div>
-                  <Label className="text-xs">Height</Label>
-                  <Input
-                    type="number"
-                    value={config.height}
-                    onChange={(e) => setConfig(prev => ({ ...prev, height: parseInt(e.target.value) || 2048 }))}
-                    className="h-8 text-sm"
+                
+                {/* Center Cue - center */}
+                <div className="absolute" style={{ top: FRAME_SIZE * 0.5, left: FRAME_SIZE * 0.75 }}>
+                  <InteractiveFrame
+                    frameKey="centerCue"
+                    position={preset.frames.centerCue}
+                    onPositionChange={(pos) => updateFramePosition('centerCue', pos)}
+                    sceneManager={sceneManager}
+                    selected={selectedFrame === 'centerCue'}
+                    onSelect={() => setSelectedFrame('centerCue')}
+                    size={FRAME_SIZE}
                   />
                 </div>
-              </div>
-
-              <div>
-                <Label className="text-xs">Format</Label>
-                <Select
-                  value={config.format}
-                  onValueChange={(v) => setConfig(prev => ({ ...prev, format: v as "png" | "jpeg" | "webp" }))}
-                >
-                  <SelectTrigger className="h-8 text-sm">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="png">PNG (lossless)</SelectItem>
-                    <SelectItem value="jpeg">JPEG (smaller)</SelectItem>
-                    <SelectItem value="webp">WebP (modern)</SelectItem>
-                  </SelectContent>
-                </Select>
+                
+                {/* Bottom Bump - bottom left */}
+                <div className="absolute" style={{ bottom: 0, left: 0 }}>
+                  <InteractiveFrame
+                    frameKey="bottomBump"
+                    position={preset.frames.bottomBump}
+                    onPositionChange={(pos) => updateFramePosition('bottomBump', pos)}
+                    sceneManager={sceneManager}
+                    selected={selectedFrame === 'bottomBump'}
+                    onSelect={() => setSelectedFrame('bottomBump')}
+                    size={FRAME_SIZE}
+                  />
+                </div>
               </div>
             </div>
 
-            {/* Part Selection */}
-            <div className="space-y-3">
-              <h4 className="font-medium text-sm">Adjust Part View</h4>
-              
-              <div className="flex gap-1">
-                {(Object.keys(PART_LABELS) as PartKey[]).map((part) => (
-                  <Button
-                    key={part}
-                    variant={selectedPart === part ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setSelectedPart(part)}
-                    className="flex-1 text-xs px-2"
-                  >
-                    {PART_LABELS[part]}
-                  </Button>
-                ))}
-              </div>
-
-              {/* Part Controls */}
-              <div className="space-y-3 p-3 bg-muted/50 rounded-lg">
+            {/* Controls Panel */}
+            <div className="w-64 flex flex-col gap-4 overflow-y-auto">
+              {/* Selected Frame Info */}
+              <div className="p-3 bg-muted/50 rounded-lg">
+                <h4 className="font-medium text-sm mb-2">Selected: {FRAME_LABELS[selectedFrame]}</h4>
+                
+                {/* Light Direction */}
                 <div>
                   <Label className="text-xs flex items-center gap-1">
-                    <ZoomIn className="h-3 w-3" /> Zoom
+                    <Sun className="h-3 w-3" /> Light Direction
                   </Label>
                   <Slider
-                    value={[currentPart.zoom]}
-                    min={0.5}
-                    max={5}
-                    step={0.1}
-                    onValueChange={([v]) => updatePartConfig(selectedPart, { zoom: v })}
-                    className="mt-1"
-                  />
-                  <span className="text-xs text-muted-foreground">{currentPart.zoom.toFixed(1)}x</span>
-                </div>
-
-                <div>
-                  <Label className="text-xs flex items-center gap-1">
-                    <Move className="h-3 w-3" /> Distance
-                  </Label>
-                  <Slider
-                    value={[currentPart.cameraDistance]}
-                    min={0.5}
-                    max={5}
-                    step={0.1}
-                    onValueChange={([v]) => updatePartConfig(selectedPart, { cameraDistance: v })}
-                    className="mt-1"
-                  />
-                  <span className="text-xs text-muted-foreground">{currentPart.cameraDistance.toFixed(1)}</span>
-                </div>
-
-                <div>
-                  <Label className="text-xs flex items-center gap-1">
-                    <RotateCcw className="h-3 w-3" /> Angle (Y)
-                  </Label>
-                  <Slider
-                    value={[currentPart.cameraAngleY * (180 / Math.PI)]}
-                    min={-90}
-                    max={90}
+                    value={[preset.frames[selectedFrame].lightAngle]}
+                    min={0}
+                    max={360}
                     step={5}
-                    onValueChange={([v]) => updatePartConfig(selectedPart, { cameraAngleY: v * (Math.PI / 180) })}
+                    onValueChange={([v]) => updateLightAngle(v)}
                     className="mt-1"
                   />
-                  <span className="text-xs text-muted-foreground">{Math.round(currentPart.cameraAngleY * (180 / Math.PI))}°</span>
+                  <span className="text-xs text-muted-foreground">{preset.frames[selectedFrame].lightAngle}°</span>
                 </div>
               </div>
+
+              {/* Layout Settings */}
+              <div className="space-y-3">
+                <h4 className="font-medium text-sm">Layout</h4>
+                
+                <div>
+                  <Label className="text-xs">Gap (px)</Label>
+                  <Input
+                    type="number"
+                    value={preset.gap}
+                    onChange={(e) => updateGap(parseInt(e.target.value) || 0)}
+                    className="h-8 text-sm"
+                    min={0}
+                    max={100}
+                  />
+                </div>
+
+                <Button variant="outline" size="sm" onClick={alignCenter} className="w-full">
+                  <AlignCenter className="h-4 w-4 mr-1" />
+                  Align Center
+                </Button>
+              </div>
+
+              {/* Preset Actions */}
+              <div className="space-y-2">
+                <h4 className="font-medium text-sm">Presets</h4>
+                
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={savePreset} 
+                  disabled={isSaving}
+                  className="w-full"
+                >
+                  {isSaving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
+                  Save as Default
+                </Button>
+                
+                <Button variant="outline" size="sm" onClick={resetPreset} className="w-full">
+                  <RefreshCw className="h-4 w-4 mr-1" />
+                  Reset to Default
+                </Button>
+              </div>
+
+              {error && (
+                <div className="text-sm text-destructive">{error}</div>
+              )}
             </div>
           </div>
-        </div>
+        )}
 
         <DialogFooter className="flex justify-between sm:justify-between">
-          <Button variant="outline" onClick={handleReset} size="sm">
-            <RefreshCw className="h-4 w-4 mr-1" />
-            Reset
+          <Button variant="outline" onClick={onClose} size="sm">
+            Cancel
           </Button>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={onClose} size="sm">
-              Cancel
-            </Button>
-            <Button onClick={handleDownload} disabled={!previewUrl || isGenerating} size="sm">
-              <Download className="h-4 w-4 mr-1" />
-              Download
-            </Button>
-          </div>
+          <Button onClick={handleExport} disabled={isExporting || !sceneManager} size="sm">
+            {isExporting ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                Exporting...
+              </>
+            ) : (
+              <>
+                <Download className="h-4 w-4 mr-1" />
+                Download 2048×2048
+              </>
+            )}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

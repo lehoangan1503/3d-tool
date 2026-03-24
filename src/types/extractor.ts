@@ -114,3 +114,78 @@ export const QUALITY_PRESETS: Record<
   hd: { width: 1920, height: 1080, bitrate: 8000000 },
   '2k': { width: 2560, height: 1440, bitrate: 16000000 },
 };
+
+// ==========================================
+// Image Extractor V2 Types (Interactive Frames)
+// ==========================================
+
+/** Position and settings for a single interactive frame */
+export interface FramePosition {
+  // Camera orbit position (controlled by left-click drag)
+  cameraOrbitX: number; // Horizontal orbit angle (radians)
+  cameraOrbitY: number; // Vertical orbit angle (radians)
+  cameraDistance: number; // Distance from target
+
+  // Model offset (controlled by right-click drag)
+  modelOffsetX: number; // Horizontal offset in scene units
+  modelOffsetY: number; // Vertical offset in scene units
+
+  // Zoom (controlled by scroll wheel)
+  zoom: number;
+
+  // Light direction (0-360 degrees, like sun position)
+  lightAngle: number;
+}
+
+/** Complete preset for Image Extractor with all 3 frames */
+export interface ImageExtractorPreset {
+  gap: number; // Pixel gap between frames
+  frames: {
+    bottomBump: FramePosition;
+    centerCue: FramePosition;
+    topCap: FramePosition;
+  };
+}
+
+/** Default values for a single frame */
+export const DEFAULT_FRAME_POSITION: FramePosition = {
+  cameraOrbitX: 0,
+  cameraOrbitY: Math.PI / 4, // 45° tilt
+  cameraDistance: 2,
+  modelOffsetX: 0,
+  modelOffsetY: 0,
+  zoom: 1,
+  lightAngle: 45, // degrees
+};
+
+/** Default preset for Image Extractor V2 */
+export const DEFAULT_IMAGE_EXTRACTOR_PRESET: ImageExtractorPreset = {
+  gap: 20,
+  frames: {
+    bottomBump: {
+      ...DEFAULT_FRAME_POSITION,
+      zoom: 2.5,
+      cameraDistance: 1.5,
+    },
+    centerCue: {
+      ...DEFAULT_FRAME_POSITION,
+      zoom: 1,
+      cameraDistance: 3,
+    },
+    topCap: {
+      ...DEFAULT_FRAME_POSITION,
+      zoom: 2.5,
+      cameraDistance: 1.5,
+    },
+  },
+};
+
+/** Frame keys type */
+export type FrameKey = 'bottomBump' | 'centerCue' | 'topCap';
+
+/** Frame labels for UI */
+export const FRAME_LABELS: Record<FrameKey, string> = {
+  bottomBump: 'Bottom Bump',
+  centerCue: 'Full Cue',
+  topCap: 'Top Cap',
+};

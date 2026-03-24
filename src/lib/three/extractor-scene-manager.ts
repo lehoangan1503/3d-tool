@@ -50,6 +50,7 @@ export class ExtractorSceneManager {
   private shadowFloor: THREE.Mesh | null = null;
   private spotLight: THREE.SpotLight | null = null;
   private fillLights: THREE.PointLight[] = [];
+  private directionalLight: THREE.DirectionalLight | null = null;
 
   // Animation state
   private animationFrameId: number | null = null;
@@ -238,9 +239,85 @@ export class ExtractorSceneManager {
     this.camera.updateProjectionMatrix();
   }
 
-  captureFrame(): string {
+  /**
+   * Set model offset within the frame (for right-click drag positioning)
+   */
+  setModelOffset(offsetX: number, offsetY: number): void {
+    if (this.clonedModel) {
+      this.clonedModel.position.x = offsetX;
+      this.clonedModel.position.y = offsetY;
+    }
+  }
+
+  /**
+   * Set directional light angle (0-360 degrees, like sun position)
+   * Light orbits around the model at a fixed elevation
+   */
+  setDirectionalLight(angleDegrees: number): void {
+    if (!this.directionalLight) {
+      this.directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+      this.directionalLight.castShadow = true;
+      this.scene.add(this.directionalLight);
+    }
+
+    const angleRad = (angleDegrees * Math.PI) / 180;
+    const radius = 5;
+    const elevation = 3;
+
+    this.directionalLight.position.set(
+      Math.cos(angleRad) * radius,
+      elevation,
+      Math.sin(angleRad) * radius
+    );
+    this.directionalLight.target.position.set(0, 0, 0);
+  }
+
+  /**
+   * Set scene background to transparent (for PNG export with alpha)
+   */
+  setTransparentBackground(transparent: boolean): void {
+    this.scene.background = transparent ? null : new THREE.Color(0x1a1a1a);
+  }
+
+  /**
+   * Capture current view as data URL with transparency
+   */
+  captureFrame(format: 'png' | 'jpeg' | 'webp' = 'png'): string {
     this.renderer.render(this.scene, this.camera);
-    return this.renderer.domElement.toDataURL('image/png');
+    const mimeType =
+      format === 'jpeg'
+        ? 'image/jpeg'
+        : format === 'webp'
+          ? 'image/webp'
+          : 'image/png';
+    return this.renderer.domElement.toDataURL(mimeType);
+  }
+
+  /**
+   * Position camera using spherical coordinates (for orbit-style controls)
+   */
+  setCameraOrbit(
+    orbitX: number,
+    orbitY: number,
+    distance: number,
+    targetY: number = 0
+  ): void {
+    // orbitX = horizontal angle, orbitY = vertical angle (tilt)
+    const x = distance * Math.sin(orbitX) * Math.cos(orbitY);
+    const y = distance * Math.sin(orbitY) + targetY;
+    const z = distance * Math.cos(orbitX) * Math.cos(orbitY);
+
+    this.camera.position.set(x, y, z);
+    this.camera.lookAt(0, targetY, 0);
+  }
+
+  /**
+   * Set camera zoom (adjusts FOV)
+   */
+  setCameraZoom(zoom: number): void {
+    // Zoom by adjusting FOV inversely
+    this.camera.fov = 50 / zoom;
+    this.camera.updateProjectionMatrix();
   }
 
   async captureImageParts(config: ImageExtractorConfig): Promise<string> {
@@ -418,6 +495,12 @@ export class ExtractorSceneManager {
 
     if (this.envRenderTarget) {
       this.envRenderTarget.dispose();
+    }
+
+    if (this.directionalLight) {
+      this.scene.remove(this.directionalLight);
+      this.directionalLight.dispose();
+      this.directionalLight = null;
     }
 
     this.pmremGenerator.dispose();

@@ -39,6 +39,7 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
 
   const extractorRef = useRef<ExtractorSceneManager | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
+  const videoUrlRef = useRef<string | null>(null);
 
   // Initialize extractor when dialog opens
   useEffect(() => {
@@ -85,9 +86,9 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
         extractorRef.current.dispose();
         extractorRef.current = null;
       }
-      if (videoUrl) {
-        URL.revokeObjectURL(videoUrl);
-        setVideoUrl(null);
+      if (videoUrlRef.current) {
+        URL.revokeObjectURL(videoUrlRef.current);
+        videoUrlRef.current = null;
       }
     };
   }, [open, sceneManager]);
@@ -115,10 +116,11 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
       );
 
       // Create URL for download/preview
-      if (videoUrl) {
-        URL.revokeObjectURL(videoUrl);
+      if (videoUrlRef.current) {
+        URL.revokeObjectURL(videoUrlRef.current);
       }
       const url = URL.createObjectURL(blob);
+      videoUrlRef.current = url;
       setVideoUrl(url);
     } catch (err) {
       setError("Recording failed. Try reducing quality or duration.");
@@ -153,8 +155,9 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
   const handleReset = () => {
     setConfig(DEFAULT_VIDEO_CONFIG);
     setQuality("hd");
-    if (videoUrl) {
-      URL.revokeObjectURL(videoUrl);
+    if (videoUrlRef.current) {
+      URL.revokeObjectURL(videoUrlRef.current);
+      videoUrlRef.current = null;
       setVideoUrl(null);
     }
   };

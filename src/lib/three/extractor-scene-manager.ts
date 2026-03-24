@@ -154,7 +154,11 @@ export class ExtractorSceneManager {
     this.fillLights = [];
     if (this.backdrop) {
       this.scene.remove(this.backdrop);
-      (this.backdrop.material as THREE.Material).dispose();
+      const material = this.backdrop.material as THREE.MeshStandardMaterial;
+      if (material.map) {
+        material.map.dispose();
+      }
+      material.dispose();
       this.backdrop.geometry.dispose();
       this.backdrop = null;
     }

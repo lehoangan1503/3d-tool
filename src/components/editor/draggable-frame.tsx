@@ -51,11 +51,18 @@ export function DraggableFrame({
     extractorRef.current = extractor;
 
     const model = sceneManager.getModelForClone();
-    if (model) extractor.setModel(model);
+    console.log('[DraggableFrame] Model from sceneManager:', model);
+    if (model) {
+      extractor.setModel(model);
+      console.log('[DraggableFrame] Model set on extractor');
+    } else {
+      console.warn('[DraggableFrame] No model available from sceneManager');
+    }
 
     const hdriUrl = sceneManager.getCurrentHdriUrl();
+    console.log('[DraggableFrame] Loading HDRI:', hdriUrl);
     extractor.loadHDRI(hdriUrl).then(() => {
-      // Render after HDRI loads
+      console.log('[DraggableFrame] HDRI loaded, rendering');
       if (extractorRef.current) {
         extractorRef.current.render();
       }
@@ -72,8 +79,12 @@ export function DraggableFrame({
       const canvas = extractor.getCanvas();
       canvas.style.width = '100%';
       canvas.style.height = '100%';
-      canvas.style.pointerEvents = 'none'; // Let parent handle events
+      canvas.style.pointerEvents = 'none';
+      canvas.style.position = 'absolute';
+      canvas.style.top = '0';
+      canvas.style.left = '0';
       containerRef.current.appendChild(canvas);
+      console.log('[DraggableFrame] Canvas appended to container');
     }
     
     // Initial render
@@ -277,18 +288,20 @@ export function DraggableFrame({
         transformOrigin: 'center center',
       }}
     >
-      {/* Frame border */}
+      {/* Frame border with WebGL canvas */}
       <div
         ref={containerRef}
         className={cn(
-          "absolute inset-0 overflow-hidden rounded",
+          "absolute inset-0 overflow-hidden rounded relative",
           "border-2 transition-colors",
           selected ? "border-primary" : "border-muted-foreground/30 hover:border-muted-foreground/50"
         )}
         onMouseDown={(e) => handleMouseDown(e, 'cue')}
         onWheel={handleWheel}
         onContextMenu={(e) => e.preventDefault()}
-      />
+      >
+        {/* Canvas will be appended here by useEffect */}
+      </div>
 
       {/* Move handle (whole frame) */}
       <div

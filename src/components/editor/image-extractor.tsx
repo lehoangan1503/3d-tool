@@ -128,7 +128,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
   const handleAlignFrames = () => {
     if (frames.length === 0) return;
     
-    // Auto-distribute frames horizontally with gap
+    // Auto-distribute frames horizontally with gap, preserving rotation
     const totalWidth = frames.reduce((sum, f) => sum + f.transform.width, 0);
     const totalGaps = (frames.length - 1) * gap;
     const startX = (CANVAS_SIZE - totalWidth - totalGaps) / 2;
@@ -141,7 +141,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           ...f.transform,
           x: currentX,
           y: (CANVAS_SIZE - f.transform.height) / 2, // Center vertically
-          rotation: 0, // Reset rotation
+          // Keep existing rotation - don't reset
         },
       };
       currentX += f.transform.width + gap;

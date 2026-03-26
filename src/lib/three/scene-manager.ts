@@ -27,8 +27,38 @@ export interface SurfaceOptions {
   textureScale?: number; // How many times to tile the normal map texture (1-8)
 }
 
-// Canvas size for texture maps
-const TEXTURE_CANVAS_SIZE = 4096;
+/**
+ * Get optimal texture size based on device capabilities.
+ * Mobile devices with limited RAM get smaller textures to prevent crashes.
+ */
+function getOptimalTextureSize(): number {
+  // Check if running in browser
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    return 4096; // Server-side: assume desktop
+  }
+  
+  const deviceMemoryGB = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  
+  // Mobile devices or low memory: use 2048
+  // This reduces canvas texture VRAM from ~340MB to ~85MB (4x reduction)
+  if (isMobile) {
+    console.log('[SceneManager] 📱 Mobile detected → using 2048px textures');
+    return 2048;
+  }
+  
+  if (deviceMemoryGB !== undefined && deviceMemoryGB <= 4) {
+    console.log(`[SceneManager] 💾 Low memory device (${deviceMemoryGB}GB) → using 2048px textures`);
+    return 2048;
+  }
+  
+  // Desktop with sufficient memory: use 4096 for best quality
+  console.log('[SceneManager] 💻 Desktop with sufficient memory → using 4096px textures');
+  return 4096;
+}
+
+// Canvas size for texture maps (adaptive based on device)
+const TEXTURE_CANVAS_SIZE = getOptimalTextureSize();
 
 // Instance counter for debugging
 let sceneManagerInstanceId = 0;

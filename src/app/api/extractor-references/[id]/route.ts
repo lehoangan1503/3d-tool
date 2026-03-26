@@ -31,6 +31,7 @@ export async function GET(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "Reference not found" }, { status: 404 });
     }
 
+    // Map DB fields to new CueSettings structure (spinY, phi, hdriLayers)
     const result = {
       id: reference.id,
       name: reference.name,
@@ -38,12 +39,33 @@ export async function GET(request: Request, { params }: RouteParams) {
       updatedAt: reference.updated_at,
       frames: (reference.extractor_frames || [])
         .sort((a: any, b: any) => a.frame_order - b.frame_order)
-        .map((f: any) => ({
-          id: f.id,
-          order: f.frame_order,
-          transform: { x: f.pos_x, y: f.pos_y, width: f.width, height: f.height, rotation: f.rotation },
-          cue: { orbitX: f.cue_orbit_x, orbitY: f.cue_orbit_y, zoom: f.cue_zoom, offsetX: f.cue_offset_x, offsetY: f.cue_offset_y, lightAngle: f.light_angle },
-        })),
+        .map((f: any) => {
+          // Parse hdriLayers from DB if available, otherwise migrate from lightAngle
+          let hdriLayers = f.hdri_layers;
+          if (!hdriLayers || (Array.isArray(hdriLayers) && hdriLayers.length === 0)) {
+            hdriLayers = [{
+              id: crypto.randomUUID(),
+              hdriType: 'bloem_train_track_clear_2k.hdr',
+              rotationX: 0,
+              rotationY: f.light_angle ?? 0,
+            }];
+          }
+          
+          return {
+            id: f.id,
+            order: f.frame_order,
+            transform: { x: f.pos_x, y: f.pos_y, width: f.width, height: f.height, rotation: f.rotation },
+            cue: { 
+              spinY: f.cue_orbit_x ?? 0,
+              phi: f.cue_orbit_y ?? Math.PI / 2,
+              zoom: f.cue_zoom, 
+              offsetX: f.cue_offset_x, 
+              offsetY: f.cue_offset_y, 
+              hdriLayers,
+              lightAngle: f.light_angle,
+            },
+          };
+        }),
     };
 
     return NextResponse.json(result);
@@ -92,7 +114,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
       // Delete existing frames
       await supabase.from("extractor_frames").delete().eq("reference_id", id);
 
-      // Insert new frames
+      // Insert new frames - map new CueSettings to DB columns
       const frameRows = frames.map((f, idx) => ({
         reference_id: id,
         frame_order: f.order ?? idx,
@@ -101,12 +123,13 @@ export async function PUT(request: Request, { params }: RouteParams) {
         width: f.transform.width,
         height: f.transform.height,
         rotation: f.transform.rotation,
-        cue_orbit_x: f.cue.orbitX,
-        cue_orbit_y: f.cue.orbitY,
+        cue_orbit_x: f.cue.spinY,
+        cue_orbit_y: f.cue.phi,
         cue_zoom: f.cue.zoom,
         cue_offset_x: f.cue.offsetX,
         cue_offset_y: f.cue.offsetY,
-        light_angle: f.cue.lightAngle,
+        light_angle: f.cue.hdriLayers?.[0]?.rotationY ?? f.cue.lightAngle ?? 0,
+        hdri_layers: f.cue.hdriLayers,
       }));
 
       await supabase.from("extractor_frames").insert(frameRows);

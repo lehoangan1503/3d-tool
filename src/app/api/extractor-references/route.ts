@@ -45,7 +45,8 @@ export async function GET() {
       return NextResponse.json({ error: "Failed to fetch references" }, { status: 500 });
     }
 
-    // Transform to match our types
+    // Transform to match our types - map DB columns to new CueSettings (spinY, phi)
+    // Apply migration for old data to new hdriLayers format
     const result: ExtractorReference[] = (references || []).map((ref) => ({
       id: ref.id,
       name: ref.name,
@@ -53,25 +54,40 @@ export async function GET() {
       updatedAt: ref.updated_at,
       frames: (ref.extractor_frames || [])
         .sort((a: any, b: any) => a.frame_order - b.frame_order)
-        .map((f: any) => ({
-          id: f.id,
-          order: f.frame_order,
-          transform: {
-            x: f.pos_x,
-            y: f.pos_y,
-            width: f.width,
-            height: f.height,
-            rotation: f.rotation,
-          },
-          cue: {
-            orbitX: f.cue_orbit_x,
-            orbitY: f.cue_orbit_y,
-            zoom: f.cue_zoom,
-            offsetX: f.cue_offset_x,
-            offsetY: f.cue_offset_y,
-            lightAngle: f.light_angle,
-          },
-        })),
+        .map((f: any) => {
+          // Parse hdriLayers from DB if available, otherwise migrate from lightAngle
+          let hdriLayers = f.hdri_layers;
+          if (!hdriLayers || (Array.isArray(hdriLayers) && hdriLayers.length === 0)) {
+            // Migrate old format to new
+            hdriLayers = [{
+              id: crypto.randomUUID(),
+              hdriType: 'bloem_train_track_clear_2k.hdr',
+              rotationX: 0,
+              rotationY: f.light_angle ?? 0,
+            }];
+          }
+          
+          return {
+            id: f.id,
+            order: f.frame_order,
+            transform: {
+              x: f.pos_x,
+              y: f.pos_y,
+              width: f.width,
+              height: f.height,
+              rotation: f.rotation,
+            },
+            cue: {
+              spinY: f.cue_orbit_x ?? 0,  // Model Y rotation
+              phi: f.cue_orbit_y ?? Math.PI / 2, // Camera vertical angle
+              zoom: f.cue_zoom,
+              offsetX: f.cue_offset_x,
+              offsetY: f.cue_offset_y,
+              hdriLayers,
+              lightAngle: f.light_angle, // Keep for backward compat
+            },
+          };
+        }),
     }));
 
     return NextResponse.json(result);
@@ -110,7 +126,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Failed to create reference" }, { status: 500 });
     }
 
-    // Create frames
+    // Create frames - map new CueSettings to DB columns
     const frameRows = frames.map((f, idx) => ({
       reference_id: reference.id,
       frame_order: f.order ?? idx,
@@ -119,12 +135,13 @@ export async function POST(request: Request) {
       width: f.transform.width,
       height: f.transform.height,
       rotation: f.transform.rotation,
-      cue_orbit_x: f.cue.orbitX,
-      cue_orbit_y: f.cue.orbitY,
+      cue_orbit_x: f.cue.spinY,  // Store spinY in cue_orbit_x
+      cue_orbit_y: f.cue.phi,    // Store phi in cue_orbit_y
       cue_zoom: f.cue.zoom,
       cue_offset_x: f.cue.offsetX,
       cue_offset_y: f.cue.offsetY,
-      light_angle: f.cue.lightAngle,
+      light_angle: f.cue.hdriLayers?.[0]?.rotationY ?? f.cue.lightAngle ?? 0, // Backward compat
+      hdri_layers: f.cue.hdriLayers, // Store full hdriLayers array
     }));
 
     const { error: framesError } = await supabase

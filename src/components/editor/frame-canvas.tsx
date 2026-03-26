@@ -1,9 +1,12 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useCallback, useEffect, useState, useMemo } from "react";
 import type { SceneManager } from "@/lib/three/scene-manager";
-import type { ExtractorFrame } from "@/types/extractor";
-import { DraggableFrame } from "./draggable-frame";
+import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
+import type { ExtractorFrame, HdriLayer } from "@/types/extractor";
+import { StaticFrame } from "./static-frame";
+import { cn } from "@/lib/utils";
+import { RotateCw } from "lucide-react";
 
 interface FrameCanvasProps {
   frames: ExtractorFrame[];
@@ -11,10 +14,14 @@ interface FrameCanvasProps {
   onSelectFrame: (id: string | null) => void;
   onFrameChange: (frame: ExtractorFrame) => void;
   sceneManager: SceneManager | null;
+  frameScreenshots: Record<string, string>;
+  onScreenshotCapture: (frameId: string, dataUrl: string) => void;
+  extractorRef: React.MutableRefObject<ExtractorSceneManager | null>;
+  extractorReady: boolean;
 }
 
 const CANVAS_SIZE = 2048;
-const DISPLAY_SIZE = 600; // Display size in pixels
+const DISPLAY_SIZE = 600;
 
 export function FrameCanvas({
   frames,
@@ -22,25 +29,413 @@ export function FrameCanvas({
   onSelectFrame,
   onFrameChange,
   sceneManager,
+  frameScreenshots,
+  onScreenshotCapture,
+  extractorRef,
+  extractorReady,
 }: FrameCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const activeCanvasContainerRef = useRef<HTMLDivElement>(null);
+  const canvasAttachedRef = useRef(false);
+  const previousSelectedIdRef = useRef<string | null>(null);
+  const wasDraggingRef = useRef(false);
   
-  // Scale factor: how much to shrink 2048 to fit display
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragType, setDragType] = useState<'move' | 'resize' | 'rotate' | 'cue-3d' | 'cue-pan' | null>(null);
+  const [activeHandle, setActiveHandle] = useState<string | null>(null);
+  const [axisConstraint, setAxisConstraint] = useState<'x' | 'y' | null>(null);
+  const dragStartRef = useRef({
+    x: 0, y: 0,
+    frameX: 0, frameY: 0, frameW: 0, frameH: 0, frameR: 0,
+    centerX: 0, centerY: 0, startAngle: 0,
+    cueSpinY: 0, cuePhi: 0, cueOffsetX: 0, cueOffsetY: 0,
+    frameId: '',
+  });
+  
+  // Track pressed keys for axis constraint (X or Y)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === 'x' && !axisConstraint) {
+        setAxisConstraint('x');
+      } else if (e.key.toLowerCase() === 'y' && !axisConstraint) {
+        setAxisConstraint('y');
+      }
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === 'x' && axisConstraint === 'x') {
+        setAxisConstraint(null);
+      } else if (e.key.toLowerCase() === 'y' && axisConstraint === 'y') {
+        setAxisConstraint(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [axisConstraint]);
+  
   const scale = DISPLAY_SIZE / CANVAS_SIZE;
+  const selectedFrame = frames.find(f => f.id === selectedFrameId);
 
+  // Capture screenshot when selection changes (deselecting a frame)
+  useEffect(() => {
+    if (previousSelectedIdRef.current && previousSelectedIdRef.current !== selectedFrameId) {
+      // We're deselecting the previous frame - capture its screenshot
+      if (extractorRef.current) {
+        const screenshot = extractorRef.current.captureFrame('png');
+        onScreenshotCapture(previousSelectedIdRef.current, screenshot);
+      }
+    }
+    previousSelectedIdRef.current = selectedFrameId;
+  }, [selectedFrameId, extractorRef, onScreenshotCapture]);
+
+  // Attach/detach canvas to selected frame container
+  useEffect(() => {
+    const container = activeCanvasContainerRef.current;
+    const extractor = extractorRef.current;
+    
+    console.log('[FrameCanvas] useEffect: container=', !!container, 'extractor=', !!extractor, 'selectedFrameId=', selectedFrameId, 'extractorReady=', extractorReady);
+    
+    // Wait for extractor to be ready (model and HDRI loaded)
+    if (!container || !extractor || !selectedFrameId || !extractorReady) {
+      canvasAttachedRef.current = false;
+      return;
+    }
+
+    console.log('[FrameCanvas] All conditions met, applying frame settings...');
+    
+    // Attach canvas to the selected frame's container
+    const canvas = extractor.getCanvas();
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    canvas.style.position = 'absolute';
+    canvas.style.top = '0';
+    canvas.style.left = '0';
+    canvas.style.pointerEvents = 'none';
+    
+    // Remove from previous parent if any
+    if (canvas.parentElement && canvas.parentElement !== container) {
+      canvas.parentElement.removeChild(canvas);
+    }
+    
+    if (canvas.parentElement !== container) {
+      container.appendChild(canvas);
+    }
+    canvasAttachedRef.current = true;
+
+    // Apply frame settings to extractor (live preview loop handles rendering)
+    if (selectedFrame) {
+      extractor.resize(
+        Math.round(selectedFrame.transform.width),
+        Math.round(selectedFrame.transform.height)
+      );
+      extractor.setModelRotation(selectedFrame.cue.spinY);
+      extractor.setCameraPhi(selectedFrame.cue.phi, 2);
+      extractor.setCameraZoom(selectedFrame.cue.zoom);
+      extractor.setModelOffset(selectedFrame.cue.offsetX, selectedFrame.cue.offsetY);
+      // Use new multi-HDRI layers system
+      if (selectedFrame.cue.hdriLayers && selectedFrame.cue.hdriLayers.length > 0) {
+        extractor.setHdriLayers(selectedFrame.cue.hdriLayers);
+      } else if (selectedFrame.cue.lightAngle !== undefined) {
+        // Legacy fallback
+        extractor.setHdriRotation(selectedFrame.cue.lightAngle);
+      }
+    }
+
+    return () => {
+      // Don't remove canvas on cleanup - let it persist for next selection
+    };
+  }, [selectedFrameId, selectedFrame, extractorRef, extractorReady]);
+
+  // Memoize hdriLayers to detect actual changes (not just reference changes)
+  const hdriLayersKey = useMemo(() => {
+    if (!selectedFrame?.cue.hdriLayers) return '';
+    return JSON.stringify(selectedFrame.cue.hdriLayers);
+  }, [selectedFrame?.cue.hdriLayers]);
+
+  // Fast updates - model rotation, camera, zoom, offset (no HDRI)
+  useEffect(() => {
+    if (!extractorRef.current || !selectedFrame || !extractorReady) return;
+    
+    extractorRef.current.resize(
+      Math.round(selectedFrame.transform.width),
+      Math.round(selectedFrame.transform.height)
+    );
+    extractorRef.current.setModelRotation(selectedFrame.cue.spinY);
+    extractorRef.current.setCameraPhi(selectedFrame.cue.phi, 2);
+    extractorRef.current.setCameraZoom(selectedFrame.cue.zoom);
+    extractorRef.current.setModelOffset(selectedFrame.cue.offsetX, selectedFrame.cue.offsetY);
+  }, [
+    selectedFrame?.id,
+    selectedFrame?.transform.width,
+    selectedFrame?.transform.height,
+    selectedFrame?.cue.spinY,
+    selectedFrame?.cue.phi,
+    selectedFrame?.cue.zoom,
+    selectedFrame?.cue.offsetX,
+    selectedFrame?.cue.offsetY,
+    extractorRef,
+    extractorReady
+  ]);
+
+  // Slow updates - HDRI layers (debounced)
+  useEffect(() => {
+    if (!extractorRef.current || !selectedFrame || !extractorReady) return;
+    if (!hdriLayersKey) return;
+    
+    // Debounce HDRI updates to avoid lag during slider drag
+    const timeoutId = setTimeout(() => {
+      if (selectedFrame.cue.hdriLayers && selectedFrame.cue.hdriLayers.length > 0) {
+        extractorRef.current?.setHdriLayers(selectedFrame.cue.hdriLayers);
+      } else if (selectedFrame.cue.lightAngle !== undefined) {
+        // Legacy fallback
+        extractorRef.current?.setHdriRotation(selectedFrame.cue.lightAngle);
+      }
+    }, 100); // 100ms debounce
+    
+    return () => clearTimeout(timeoutId);
+  }, [hdriLayersKey, selectedFrame?.cue.lightAngle, extractorRef, extractorReady]);
+
+  // Only deselect on actual click (not after drag)
   const handleCanvasClick = (e: React.MouseEvent) => {
-    // Only deselect if clicking directly on canvas background
+    // Ignore if we just finished dragging
+    if (wasDraggingRef.current) {
+      wasDraggingRef.current = false;
+      return;
+    }
+    
     if (e.target === e.currentTarget || (e.target as HTMLElement).dataset.canvas === 'background') {
       onSelectFrame(null);
     }
   };
 
+  // Transform drag handlers
+  const handleTransformStart = useCallback((
+    e: React.MouseEvent, 
+    type: 'move' | 'resize' | 'rotate', 
+    handle?: string,
+    frame?: ExtractorFrame
+  ) => {
+    if (!frame) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+    setDragType(type);
+    setActiveHandle(handle || null);
+
+    let centerX = 0, centerY = 0;
+    if (containerRef.current) {
+      const frameEl = containerRef.current.querySelector(`[data-frame-id="${frame.id}"]`);
+      if (frameEl) {
+        const rect = frameEl.getBoundingClientRect();
+        centerX = rect.left + rect.width / 2;
+        centerY = rect.top + rect.height / 2;
+      }
+    }
+
+    const startAngle = Math.atan2(e.clientY - centerY, e.clientX - centerX);
+
+    dragStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      frameX: frame.transform.x,
+      frameY: frame.transform.y,
+      frameW: frame.transform.width,
+      frameH: frame.transform.height,
+      frameR: frame.transform.rotation,
+      centerX,
+      centerY,
+      startAngle,
+      cueSpinY: frame.cue.spinY,
+      cuePhi: frame.cue.phi,
+      cueOffsetX: frame.cue.offsetX,
+      cueOffsetY: frame.cue.offsetY,
+      frameId: frame.id,
+    };
+  }, []);
+
+  // Cue 3D manipulation handlers (for selected frame inside area)
+  // Like main preview: horizontal drag = model spin, vertical drag = camera up/down
+  const handleCueStart = useCallback((e: React.MouseEvent) => {
+    if (!selectedFrame) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+    
+    // Left click = 3D control (spin + camera), Right click = pan model
+    const type = e.button === 2 ? 'cue-pan' : 'cue-3d';
+    setDragType(type);
+
+    dragStartRef.current = {
+      ...dragStartRef.current,
+      x: e.clientX,
+      y: e.clientY,
+      cueSpinY: selectedFrame.cue.spinY,
+      cuePhi: selectedFrame.cue.phi,
+      cueOffsetX: selectedFrame.cue.offsetX,
+      cueOffsetY: selectedFrame.cue.offsetY,
+      frameId: selectedFrame.id,
+    };
+  }, [selectedFrame]);
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!isDragging || !dragType) return;
+
+    const dx = (e.clientX - dragStartRef.current.x) / scale;
+    const dy = (e.clientY - dragStartRef.current.y) / scale;
+    const frame = frames.find(f => f.id === dragStartRef.current.frameId);
+    if (!frame) return;
+
+    if (dragType === 'move') {
+      // Apply axis constraint along frame's LOCAL axes (respects rotation)
+      let finalDx = dx;
+      let finalDy = dy;
+      
+      if (axisConstraint) {
+        // Convert frame rotation to radians
+        const rotation = (frame.transform.rotation * Math.PI) / 180;
+        const cos = Math.cos(rotation);
+        const sin = Math.sin(rotation);
+        
+        // Project mouse delta onto frame's local axes
+        // Local X axis: (cos, sin), Local Y axis: (-sin, cos)
+        const localX = dx * cos + dy * sin;   // projection onto frame's X axis
+        const localY = -dx * sin + dy * cos;  // projection onto frame's Y axis
+        
+        if (axisConstraint === 'x') {
+          // Move only along frame's local X axis (horizontal in frame space)
+          finalDx = localX * cos;
+          finalDy = localX * sin;
+        } else {
+          // Move only along frame's local Y axis (vertical in frame space)
+          finalDx = localY * (-sin);
+          finalDy = localY * cos;
+        }
+      }
+      
+      onFrameChange({
+        ...frame,
+        transform: {
+          ...frame.transform,
+          x: dragStartRef.current.frameX + finalDx,
+          y: dragStartRef.current.frameY + finalDy,
+        },
+      });
+    } else if (dragType === 'rotate') {
+      const { centerX, centerY, startAngle, frameR } = dragStartRef.current;
+      const currentAngle = Math.atan2(e.clientY - centerY, e.clientX - centerX);
+      const deltaAngle = (currentAngle - startAngle) * (180 / Math.PI);
+      
+      onFrameChange({
+        ...frame,
+        transform: {
+          ...frame.transform,
+          rotation: frameR + deltaAngle,
+        },
+      });
+    } else if (dragType === 'resize' && activeHandle) {
+      let newX = dragStartRef.current.frameX;
+      let newY = dragStartRef.current.frameY;
+      let newW = dragStartRef.current.frameW;
+      let newH = dragStartRef.current.frameH;
+
+      if (activeHandle.includes('w')) { newX += dx; newW -= dx; }
+      if (activeHandle.includes('e')) { newW += dx; }
+      if (activeHandle.includes('n')) { newY += dy; newH -= dy; }
+      if (activeHandle.includes('s')) { newH += dy; }
+
+      newW = Math.max(100, newW);
+      newH = Math.max(100, newH);
+
+      onFrameChange({
+        ...frame,
+        transform: { ...frame.transform, x: newX, y: newY, width: newW, height: newH },
+      });
+    } else if (dragType === 'cue-3d') {
+      // Like main preview:
+      // Horizontal drag (dx) -> spin model around Y axis
+      // Vertical drag (dy) -> orbit camera up/down (phi angle)
+      const spinSensitivity = 0.005;  // model rotation
+      const phiSensitivity = 0.005;   // camera orbit
+      
+      const newSpinY = dragStartRef.current.cueSpinY + dx * spinSensitivity;
+      // Phi: drag DOWN moves camera DOWN (phi increases = camera goes down), drag UP moves camera UP
+      // This is NORMAL/intuitive: drag down = look down, drag up = look up
+      const newPhi = Math.max(0.1, Math.min(Math.PI - 0.1, dragStartRef.current.cuePhi - dy * phiSensitivity));
+      
+      onFrameChange({
+        ...frame,
+        cue: {
+          ...frame.cue,
+          spinY: newSpinY,
+          phi: newPhi,
+        },
+      });
+    } else if (dragType === 'cue-pan') {
+      // Right-drag: move model vertically only (Y axis), disable horizontal (X axis) movement
+      const sensitivity = 0.002;
+      onFrameChange({
+        ...frame,
+        cue: {
+          ...frame.cue,
+          // offsetX stays unchanged - no horizontal movement
+          offsetY: dragStartRef.current.cueOffsetY - dy * sensitivity,
+        },
+      });
+    }
+  }, [isDragging, dragType, activeHandle, frames, onFrameChange, scale, axisConstraint]);
+
+  const handleMouseUp = useCallback(() => {
+    if (isDragging) {
+      wasDraggingRef.current = true;
+    }
+    setIsDragging(false);
+    setDragType(null);
+    setActiveHandle(null);
+  }, [isDragging]);
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (!selectedFrame) return;
+    e.preventDefault();
+    const zoomDelta = e.deltaY > 0 ? -0.1 : 0.1;
+    onFrameChange({
+      ...selectedFrame,
+      cue: { ...selectedFrame.cue, zoom: Math.max(0.5, Math.min(5, selectedFrame.cue.zoom + zoomDelta)) },
+    });
+  }, [selectedFrame, onFrameChange]);
+
+  useEffect(() => {
+    if (isDragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [isDragging, handleMouseMove, handleMouseUp]);
+
+  const handles: string[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+  const handlePositions: Record<string, { top?: string; left?: string; right?: string; bottom?: string; cursor: string }> = {
+    nw: { top: '-4px', left: '-4px', cursor: 'nw-resize' },
+    n: { top: '-4px', left: '50%', cursor: 'n-resize' },
+    ne: { top: '-4px', right: '-4px', cursor: 'ne-resize' },
+    e: { top: '50%', right: '-4px', cursor: 'e-resize' },
+    se: { bottom: '-4px', right: '-4px', cursor: 'se-resize' },
+    s: { bottom: '-4px', left: '50%', cursor: 's-resize' },
+    sw: { bottom: '-4px', left: '-4px', cursor: 'sw-resize' },
+    w: { top: '50%', left: '-4px', cursor: 'w-resize' },
+  };
+
   return (
     <div className="flex-1 flex items-center justify-center p-4 bg-muted/20 overflow-auto">
-      {/* Outer container for centering */}
       <div
         ref={containerRef}
-        className="relative bg-background shadow-lg rounded-lg overflow-hidden"
+        className="relative bg-background shadow-lg rounded-lg"
         style={{
           width: DISPLAY_SIZE,
           height: DISPLAY_SIZE,
@@ -50,9 +445,8 @@ export function FrameCanvas({
         {/* Canvas boundary indicator */}
         <div
           data-canvas="background"
-          className="absolute inset-0 bg-[#1a1a1a]"
+          className="absolute inset-0 bg-[#1a1a1a] rounded-lg"
           style={{
-            // Checkerboard pattern to indicate transparency
             backgroundImage: `
               linear-gradient(45deg, #222 25%, transparent 25%),
               linear-gradient(-45deg, #222 25%, transparent 25%),
@@ -63,31 +457,176 @@ export function FrameCanvas({
             backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px',
           }}
         />
+        
+        {/* Clipping container for frame content - hides 3D content outside 2048x2048 bounds */}
+        <div data-canvas="background" className="absolute inset-0 overflow-hidden rounded-lg z-0">
+          {/* Render non-selected frames as static 2D (clipped) */}
+          {frames.filter(f => f.id !== selectedFrameId).map((frame) => (
+            <StaticFrame
+              key={frame.id}
+              frame={frame}
+              screenshot={frameScreenshots[frame.id] || null}
+              selected={false}
+              onSelect={() => onSelectFrame(frame.id)}
+              scale={scale}
+              onTransformStart={(e, type, handle) => handleTransformStart(e, type, handle, frame)}
+            />
+          ))}
+
+          {/* Selected frame 3D canvas container (clipped) */}
+          {selectedFrame && (
+            <div
+              data-frame-id={selectedFrame.id}
+              className="absolute"
+              style={{
+                left: selectedFrame.transform.x * scale,
+                top: selectedFrame.transform.y * scale,
+                width: selectedFrame.transform.width * scale,
+                height: selectedFrame.transform.height * scale,
+                transform: `rotate(${selectedFrame.transform.rotation}deg)`,
+                transformOrigin: 'center center',
+              }}
+            >
+              {/* 3D Canvas container */}
+              <div
+                ref={activeCanvasContainerRef}
+                className={cn(
+                  "absolute inset-0 overflow-hidden rounded",
+                  "border-2 border-primary pointer-events-none"
+                )}
+              >
+                {/* WebGL canvas attached here */}
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Canvas border */}
-        <div className="absolute inset-0 border-2 border-dashed border-muted-foreground/30 pointer-events-none" />
+        <div className="absolute inset-0 border-2 border-dashed border-muted-foreground/30 pointer-events-none rounded-lg z-10" />
 
         {/* Size indicator */}
-        <div className="absolute top-2 left-2 bg-black/60 text-white text-xs px-2 py-1 rounded pointer-events-none">
+        <div className="absolute top-2 left-2 bg-black/60 text-white text-xs px-2 py-1 rounded pointer-events-none z-30">
           2048 × 2048
         </div>
 
-        {/* Render all frames */}
-        {frames.map((frame) => (
-          <DraggableFrame
-            key={frame.id}
-            frame={frame}
-            onFrameChange={onFrameChange}
-            sceneManager={sceneManager}
-            selected={frame.id === selectedFrameId}
-            onSelect={() => onSelectFrame(frame.id)}
-            scale={scale}
-          />
-        ))}
+        {/* Selected frame controls overlay (NOT clipped - handles stay visible) */}
+        {selectedFrame && (
+          <div
+            className="absolute z-20 pointer-events-none"
+            style={{
+              left: selectedFrame.transform.x * scale,
+              top: selectedFrame.transform.y * scale,
+              width: selectedFrame.transform.width * scale,
+              height: selectedFrame.transform.height * scale,
+              transform: `rotate(${selectedFrame.transform.rotation}deg)`,
+              transformOrigin: 'center center',
+            }}
+          >
+            {/* Axis constraint lines - show when X or Y key is pressed */}
+            {axisConstraint && (
+              <>
+                {/* Horizontal axis line (red) - when X is pressed, move only horizontally */}
+                {axisConstraint === 'x' && (
+                  <div
+                    className="absolute pointer-events-none"
+                    style={{
+                      top: '50%',
+                      left: -((selectedFrame.transform.x * scale) + 1000),
+                      width: DISPLAY_SIZE + 2000,
+                      height: 2,
+                      backgroundColor: 'rgba(239, 68, 68, 0.8)',
+                      transform: 'translateY(-50%)',
+                    }}
+                  />
+                )}
+                {/* Vertical axis line (green) - when Y is pressed, move only vertically */}
+                {axisConstraint === 'y' && (
+                  <div
+                    className="absolute pointer-events-none"
+                    style={{
+                      left: '50%',
+                      top: -((selectedFrame.transform.y * scale) + 1000),
+                      width: 2,
+                      height: DISPLAY_SIZE + 2000,
+                      backgroundColor: 'rgba(34, 197, 94, 0.8)',
+                      transform: 'translateX(-50%)',
+                    }}
+                  />
+                )}
+              </>
+            )}
+
+            {/* 3D interaction area - INSIDE the frame (inset from border) */}
+            <div
+              className="absolute inset-3 cursor-grab active:cursor-grabbing pointer-events-auto rounded"
+              onMouseDown={handleCueStart}
+              onWheel={handleWheel}
+              onContextMenu={(e) => e.preventDefault()}
+            />
+
+            {/* Move border area - outer strip for dragging the frame */}
+            <div
+              className="absolute inset-0 pointer-events-auto cursor-move border-2 border-primary rounded"
+              style={{ 
+                clipPath: 'polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 0, 12px 12px, 12px calc(100% - 12px), calc(100% - 12px) calc(100% - 12px), calc(100% - 12px) 12px, 12px 12px)'
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleTransformStart(e, 'move', undefined, selectedFrame);
+              }}
+            />
+
+            {/* Resize handles */}
+            {handles.map((h) => (
+              <div
+                key={h}
+                className="absolute w-3 h-3 bg-primary rounded-sm border border-background z-20 pointer-events-auto"
+                style={{
+                  ...handlePositions[h],
+                  cursor: handlePositions[h].cursor,
+                  transform: h === 'n' || h === 's' ? 'translateX(-50%)' : h === 'e' || h === 'w' ? 'translateY(-50%)' : undefined,
+                }}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleTransformStart(e, 'resize', h, selectedFrame);
+                }}
+              />
+            ))}
+
+            {/* Rotation handles */}
+            <div
+              className="absolute -top-8 left-1/2 -translate-x-1/2 w-6 h-6 bg-primary rounded-full flex items-center justify-center cursor-grab active:cursor-grabbing z-20 pointer-events-auto"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleTransformStart(e, 'rotate', undefined, selectedFrame);
+              }}
+            >
+              <RotateCw className="w-3 h-3 text-primary-foreground" />
+            </div>
+            <div
+              className="absolute -bottom-8 left-1/2 -translate-x-1/2 w-6 h-6 bg-primary rounded-full flex items-center justify-center cursor-grab active:cursor-grabbing z-20 pointer-events-auto"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleTransformStart(e, 'rotate', undefined, selectedFrame);
+              }}
+            >
+              <RotateCw className="w-3 h-3 text-primary-foreground" />
+            </div>
+
+            {/* Frame label */}
+            <div className="absolute bottom-1 left-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded pointer-events-none z-10">
+              {selectedFrame.cue.zoom.toFixed(1)}x
+            </div>
+          </div>
+        )}
 
         {/* Empty state */}
         {frames.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center text-muted-foreground pointer-events-none">
+          <div className="absolute inset-0 flex items-center justify-center text-muted-foreground pointer-events-none z-10">
             <div className="text-center">
               <p className="text-lg">No frames yet</p>
               <p className="text-sm">Add a frame or select a template to start</p>
@@ -99,5 +638,4 @@ export function FrameCanvas({
   );
 }
 
-// Export constants for use in other components
 export { CANVAS_SIZE, DISPLAY_SIZE };

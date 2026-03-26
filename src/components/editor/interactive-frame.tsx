@@ -42,7 +42,7 @@ export function InteractiveFrame({
     extractorRef.current.setCameraOrbit(pos.cameraOrbitX, pos.cameraOrbitY, pos.cameraDistance, targetY);
     extractorRef.current.setCameraZoom(pos.zoom);
     extractorRef.current.setModelOffset(pos.modelOffsetX, pos.modelOffsetY);
-    extractorRef.current.setDirectionalLight(pos.lightAngle);
+    extractorRef.current.setHdriRotation(pos.lightAngle);
   }, [frameKey]);
 
   // Initialize extractor

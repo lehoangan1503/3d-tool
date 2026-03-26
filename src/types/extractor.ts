@@ -147,15 +147,15 @@ export interface ImageExtractorPreset {
   };
 }
 
-/** Default values for a single frame */
+/** Default values for a single frame - matches main preview */
 export const DEFAULT_FRAME_POSITION: FramePosition = {
   cameraOrbitX: 0,
-  cameraOrbitY: Math.PI / 4, // 45° tilt
-  cameraDistance: 2,
+  cameraOrbitY: 0,         // Side view (no tilt) - matches main preview
+  cameraDistance: 2.83,    // ~sqrt(2^2 + 2^2) - same as main preview camera
   modelOffsetX: 0,
   modelOffsetY: 0,
   zoom: 1,
-  lightAngle: 45, // degrees
+  lightAngle: 0,           // HDRI rotation - no rotation by default
 };
 
 /** Default preset for Image Extractor V2 */
@@ -203,14 +203,42 @@ export interface FrameTransform {
   rotation: number; // Rotation (degrees)
 }
 
+/** HDRI layer for multi-HDRI lighting */
+export interface HdriLayer {
+  id: string;           // Unique ID for this layer
+  hdriType: string;     // HDRI filename
+  rotationX: number;    // X-axis rotation (degrees, 0-360) - vertical shift
+  rotationY: number;    // Y-axis rotation (degrees, 0-360) - horizontal shift
+}
+
+/** Default HDRI layer */
+export const DEFAULT_HDRI_LAYER: Omit<HdriLayer, 'id'> = {
+  hdriType: 'bloem_train_track_clear_2k.hdr',
+  rotationX: 0,
+  rotationY: 300,  // Rotate 300° to center light in front of cue
+};
+
+/** Create a new HDRI layer with defaults */
+export function createDefaultHdriLayer(hdriType?: string): HdriLayer {
+  return {
+    id: crypto.randomUUID(),
+    hdriType: hdriType || DEFAULT_HDRI_LAYER.hdriType,
+    rotationX: DEFAULT_HDRI_LAYER.rotationX,
+    rotationY: DEFAULT_HDRI_LAYER.rotationY,
+  };
+}
+
 /** Cue settings within a frame */
 export interface CueSettings {
-  orbitX: number;   // Horizontal orbit angle (radians)
-  orbitY: number;   // Vertical orbit angle (radians)
+  spinY: number;    // Model Y-axis rotation (radians) - horizontal drag
+  phi: number;      // Camera vertical orbit (radians, 0=top, PI/2=side) - vertical drag
   zoom: number;     // Zoom multiplier
   offsetX: number;  // Horizontal offset
   offsetY: number;  // Vertical offset
-  lightAngle: number; // Light direction (degrees, 0-360)
+  hdriLayers: HdriLayer[];  // 1-2 HDRI layers with independent rotation
+  // Legacy fields (for backward compatibility during migration)
+  lightAngle?: number;
+  hdriType?: string;
 }
 
 /** Single frame in the editor */
@@ -239,14 +267,14 @@ export const DEFAULT_FRAME_TRANSFORM: FrameTransform = {
   rotation: 0,
 };
 
-/** Default cue settings */
+/** Default cue settings - matches main preview camera position */
 export const DEFAULT_CUE_SETTINGS: CueSettings = {
-  orbitX: 0,
-  orbitY: Math.PI / 4, // 45°
+  spinY: 0,           // Model facing front
+  phi: Math.PI / 2,   // Camera at side view (90°) - same as main preview y=0
   zoom: 1,
   offsetX: 0,
   offsetY: 0,
-  lightAngle: 45,
+  hdriLayers: [createDefaultHdriLayer()],  // Default: 1x bloem train track
 };
 
 /** Create a new frame with defaults */
@@ -255,7 +283,31 @@ export function createDefaultFrame(id?: string, order: number = 0): ExtractorFra
     id: id || crypto.randomUUID(),
     order,
     transform: { ...DEFAULT_FRAME_TRANSFORM },
-    cue: { ...DEFAULT_CUE_SETTINGS },
+    cue: { 
+      ...DEFAULT_CUE_SETTINGS,
+      hdriLayers: [createDefaultHdriLayer()],  // Fresh layer with new ID
+    },
+  };
+}
+
+/** Migrate old CueSettings format to new format with hdriLayers */
+export function migrateCueSettings(cue: CueSettings): CueSettings {
+  // Already has hdriLayers - no migration needed
+  if (cue.hdriLayers && cue.hdriLayers.length > 0) {
+    return cue;
+  }
+  
+  // Migrate from old format
+  const layer: HdriLayer = {
+    id: crypto.randomUUID(),
+    hdriType: cue.hdriType || DEFAULT_HDRI_LAYER.hdriType,
+    rotationX: 0,
+    rotationY: cue.lightAngle || 0,
+  };
+  
+  return {
+    ...cue,
+    hdriLayers: [layer],
   };
 }
 
@@ -269,7 +321,7 @@ export const TEMPLATE_1_FRAME: ExtractorFrame[] = [
     id: 'frame-1',
     order: 0,
     transform: { x: 524, y: 524, width: 1000, height: 1000, rotation: 0 },
-    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.2 },
+    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.2, hdriLayers: [createDefaultHdriLayer()] },
   },
 ];
 
@@ -279,13 +331,13 @@ export const TEMPLATE_2_FRAMES: ExtractorFrame[] = [
     id: 'frame-1',
     order: 0,
     transform: { x: 100, y: 524, width: 800, height: 1000, rotation: 0 },
-    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.5, orbitY: Math.PI / 4 },
+    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.5, hdriLayers: [createDefaultHdriLayer()] },
   },
   {
     id: 'frame-2',
     order: 1,
     transform: { x: 1148, y: 524, width: 800, height: 1000, rotation: 0 },
-    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.5, orbitY: Math.PI / 4 },
+    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.5, hdriLayers: [createDefaultHdriLayer()] },
   },
 ];
 
@@ -295,19 +347,19 @@ export const TEMPLATE_3_DIAGONAL: ExtractorFrame[] = [
     id: 'frame-bottom',
     order: 0,
     transform: { x: 100, y: 1448, width: 500, height: 500, rotation: 0 },
-    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 2.5, orbitY: Math.PI / 4 },
+    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 2.5, hdriLayers: [createDefaultHdriLayer()] },
   },
   {
     id: 'frame-center',
     order: 1,
     transform: { x: 574, y: 374, width: 900, height: 1300, rotation: 0 },
-    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1, orbitY: Math.PI / 4 },
+    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1, hdriLayers: [createDefaultHdriLayer()] },
   },
   {
     id: 'frame-top',
     order: 2,
     transform: { x: 1448, y: 100, width: 500, height: 500, rotation: 0 },
-    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 2.5, orbitY: Math.PI / 4 },
+    cue: { ...DEFAULT_CUE_SETTINGS, zoom: 2.5, hdriLayers: [createDefaultHdriLayer()] },
   },
 ];
 

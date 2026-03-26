@@ -760,21 +760,163 @@ function drawTopCapFaceLogoOnCanvas(ctx: CanvasRenderingContext2D, width: number
 // }
 
 /**
+ * Render a compressed texture (KTX2) to a canvas for further processing.
+ * Uses an offscreen WebGL renderer to decode the GPU texture.
+ */
+function renderCompressedTextureToCanvas(
+  compressedTexture: THREE.Texture,
+  width: number,
+  height: number
+): HTMLCanvasElement | null {
+  try {
+    // Create a small offscreen renderer
+    const renderer = new THREE.WebGLRenderer({
+      antialias: false,
+      alpha: true,
+      preserveDrawingBuffer: true,
+    });
+    renderer.setSize(width, height);
+
+    // Create a simple scene with a plane showing the texture
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0.1, 10);
+    camera.position.z = 1;
+
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    const material = new THREE.MeshBasicMaterial({
+      map: compressedTexture,
+      transparent: false,
+    });
+    const plane = new THREE.Mesh(geometry, material);
+    scene.add(plane);
+
+    // Render
+    renderer.render(scene, camera);
+
+    // Extract to canvas
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(renderer.domElement, 0, 0);
+
+    // Cleanup
+    renderer.dispose();
+    geometry.dispose();
+    material.dispose();
+
+    return canvas;
+  } catch (e) {
+    console.warn("[renderCompressedTextureToCanvas] Failed:", e);
+    return null;
+  }
+}
+
+/**
  * Apply logo overlay to an existing material's map texture.
  * Keeps the original GLB texture intact and only draws the logo on top.
+ *
+ * NOTE: For KTX2 compressed textures, we cannot use drawImage() because
+ * the image data is a CompressedTexture. Instead, we render the texture
+ * to a canvas first using WebGL, or create a new texture with just the logo.
  */
 export function applyLogoToExistingMaterial(mat: THREE.Material, type: "rubber" | "topCapFace"): void {
   const physMat = mat as THREE.MeshStandardMaterial;
   const originalMap = physMat.map;
 
-  if (!originalMap || !originalMap.image) {
+  if (!originalMap) {
     console.warn(`[applyLogo] No map texture found on material "${mat.name}", skipping logo`);
     return;
   }
 
-  const img = originalMap.image as HTMLImageElement | HTMLCanvasElement | ImageBitmap;
-  const width = (img as HTMLImageElement).width || 512;
-  const height = (img as HTMLImageElement).height || 512;
+  // Check if this is a KTX2 compressed texture
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const isCompressed = (originalMap as any).isCompressedTexture;
+
+  if (isCompressed) {
+    // For KTX2 textures, we can't extract the pixel data directly.
+    // Instead, render to canvas first using WebGL.
+    console.log(`[applyLogo] KTX2 compressed texture detected for "${mat.name}" - using logo overlay approach`);
+
+    // Get dimensions from mipmaps
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mipmaps = (originalMap as any).mipmaps;
+    const width = mipmaps?.[0]?.width || 2048;
+    const height = mipmaps?.[0]?.height || 2048;
+
+    // Create a logo canvas
+    const logoCanvas = document.createElement("canvas");
+    logoCanvas.width = width;
+    logoCanvas.height = height;
+    const logoCtx = logoCanvas.getContext("2d")!;
+
+    // Start with fully transparent
+    logoCtx.clearRect(0, 0, width, height);
+
+    // Try to render the compressed texture to a canvas
+    try {
+      const tempCanvas = renderCompressedTextureToCanvas(originalMap, width, height);
+      if (tempCanvas) {
+        logoCtx.drawImage(tempCanvas, 0, 0, width, height);
+
+        // Draw logo on top
+        if (type === "rubber") {
+          drawRubberLogoOnCanvas(logoCtx, width, height);
+        } else if (type === "topCapFace") {
+          drawTopCapFaceLogoOnCanvas(logoCtx, width, height);
+        }
+
+        // Create new texture
+        const newTexture = new THREE.CanvasTexture(logoCanvas);
+        newTexture.colorSpace = originalMap.colorSpace || THREE.SRGBColorSpace;
+        newTexture.flipY = originalMap.flipY ?? true;
+        newTexture.wrapS = originalMap.wrapS || THREE.RepeatWrapping;
+        newTexture.wrapT = originalMap.wrapT || THREE.RepeatWrapping;
+        newTexture.needsUpdate = true;
+
+        physMat.map = newTexture;
+        physMat.needsUpdate = true;
+        console.log(`[applyLogo] Applied ${type} logo to KTX2 texture "${mat.name}" (${width}x${height})`);
+        return;
+      }
+    } catch (e) {
+      console.warn(`[applyLogo] Failed to render KTX2 texture to canvas:`, e);
+    }
+
+    // Fallback: just draw logo on a solid background
+    logoCtx.fillStyle = physMat.color ? `#${physMat.color.getHexString()}` : "#1a1a1a";
+    logoCtx.fillRect(0, 0, width, height);
+
+    if (type === "rubber") {
+      drawRubberLogoOnCanvas(logoCtx, width, height);
+    } else if (type === "topCapFace") {
+      drawTopCapFaceLogoOnCanvas(logoCtx, width, height);
+    }
+
+    const fallbackTexture = new THREE.CanvasTexture(logoCanvas);
+    fallbackTexture.colorSpace = THREE.SRGBColorSpace;
+    fallbackTexture.flipY = originalMap.flipY ?? true;
+    fallbackTexture.wrapS = originalMap.wrapS || THREE.RepeatWrapping;
+    fallbackTexture.wrapT = originalMap.wrapT || THREE.RepeatWrapping;
+    fallbackTexture.needsUpdate = true;
+
+    physMat.map = fallbackTexture;
+    physMat.needsUpdate = true;
+    console.log(`[applyLogo] Applied ${type} logo with fallback background to "${mat.name}" (${width}x${height})`);
+    return;
+  }
+
+  // Standard uncompressed texture path
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const img = originalMap.image as any;
+
+  if (!img) {
+    console.warn(`[applyLogo] No image data in map texture for "${mat.name}", skipping logo`);
+    return;
+  }
+
+  const width = (img.width as number) || 512;
+  const height = (img.height as number) || 512;
 
   const canvas = document.createElement("canvas");
   canvas.width = width;

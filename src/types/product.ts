@@ -166,8 +166,8 @@ export const LEATHER_COLORS: Record<LeatherColor, { name: string; hex: string }>
 
 // Model paths per product type
 export const MODEL_PATHS: Record<ProductType, string> = {
-  smooth: "/models/cue-butt-leather.glb",
-  leather: "/models/cue-butt-leather-ver2.glb",
+  smooth: "/models/cue-butt-leather-ktx2.glb",
+  leather: "/models/cue-butt-leather-ver2-ktx2.glb",
 };
 
 // Default textures (normal maps for leather types)

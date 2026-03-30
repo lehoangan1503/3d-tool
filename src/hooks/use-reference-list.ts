@@ -1,0 +1,121 @@
+"use client";
+
+import { useState, useEffect, useCallback, useRef } from "react";
+import type { ExtractorReference } from "@/types/extractor";
+
+const PAGE_SIZE = 20;
+const SEARCH_DEBOUNCE_MS = 300;
+
+export interface UseReferenceListOptions {
+  enabled: boolean;
+  pageSize?: number;
+}
+
+export interface UseReferenceListResult {
+  references: ExtractorReference[];
+  total: number;
+  isLoading: boolean;
+  isFetchingMore: boolean;
+  hasMore: boolean;
+  search: string;
+  setSearch: (v: string) => void;
+  loadMore: () => void;
+  reload: () => void;
+  sentinelRef: (el: HTMLDivElement | null) => void;
+}
+
+export function useReferenceList({
+  enabled,
+  pageSize = PAGE_SIZE,
+}: UseReferenceListOptions): UseReferenceListResult {
+  const [references, setReferences] = useState<ExtractorReference[]>([]);
+  const [total, setTotal]           = useState(0);
+  const [isLoading, setIsLoading]   = useState(false);
+  const [isFetchingMore, setIsFetchingMore] = useState(false);
+  const [search, setSearchRaw]      = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const offsetRef = useRef(0);
+  const observer  = useRef<IntersectionObserver | null>(null);
+
+  // Debounce search input
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const fetchPage = useCallback(
+    async (offset: number, currentSearch: string, append: boolean) => {
+      if (offset === 0) setIsLoading(true);
+      else setIsFetchingMore(true);
+
+      try {
+        const params = new URLSearchParams({
+          limit:  String(pageSize),
+          offset: String(offset),
+        });
+        if (currentSearch) params.set("search", currentSearch);
+
+        const res = await fetch(`/api/extractor-references?${params}`);
+        if (!res.ok) throw new Error("Failed to fetch");
+
+        const { items, total: t }: { items: ExtractorReference[]; total: number } =
+          await res.json();
+
+        setReferences((prev) => (append ? [...prev, ...items] : items));
+        setTotal(t);
+        offsetRef.current = offset + items.length;
+      } catch (err) {
+        console.error("useReferenceList fetch error:", err);
+      } finally {
+        setIsLoading(false);
+        setIsFetchingMore(false);
+      }
+    },
+    [pageSize]
+  );
+
+  // Initial load + search reset
+  useEffect(() => {
+    if (!enabled) return;
+    offsetRef.current = 0;
+    setReferences([]);
+    fetchPage(0, debouncedSearch, false);
+  }, [enabled, debouncedSearch, fetchPage]);
+
+  const loadMore = useCallback(() => {
+    if (isLoading || isFetchingMore) return;
+    fetchPage(offsetRef.current, debouncedSearch, true);
+  }, [isLoading, isFetchingMore, fetchPage, debouncedSearch]);
+
+  const reload = useCallback(() => {
+    offsetRef.current = 0;
+    setReferences([]);
+    fetchPage(0, debouncedSearch, false);
+  }, [fetchPage, debouncedSearch]);
+
+  // IntersectionObserver — auto-loadMore when sentinel enters viewport
+  const sentinelRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (observer.current) observer.current.disconnect();
+      if (!el) return;
+      observer.current = new IntersectionObserver(
+        ([entry]) => { if (entry.isIntersecting) loadMore(); },
+        { threshold: 0.1 }
+      );
+      observer.current.observe(el);
+    },
+    [loadMore]
+  );
+
+  const hasMore = references.length < total;
+
+  const setSearch = useCallback((v: string) => {
+    setSearchRaw(v);
+  }, []);
+
+  return {
+    references, total, isLoading, isFetchingMore, hasMore,
+    search, setSearch,
+    loadMore, reload, sentinelRef,
+  };
+}

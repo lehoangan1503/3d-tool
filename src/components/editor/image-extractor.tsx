@@ -13,6 +13,7 @@ import { FrameControlsPanel } from "./frame-controls-panel";
 import { DownloadMultipleDialog } from "./download-multiple-dialog";
 import type { ExtractorFrame, ExtractorReference, TemplateKey, CueFrame, ImageFrame } from "@/types/extractor";
 import { createDefaultFrame, createDefaultImageFrame, FRAME_TEMPLATES, isCueFrame, isImageFrame } from "@/types/extractor";
+import { resolveStorageUrl } from "@/lib/resolve-storage-url";
 import { useUndoable } from "@/hooks/use-undoable";
 
 interface ImageExtractorProps {
@@ -514,7 +515,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           if (frame.imageSettings.imageUrl) {
             const img = new Image();
             img.crossOrigin = 'anonymous';
-            img.src = frame.imageSettings.imageUrl;
+            img.src = resolveStorageUrl(frame.imageSettings.imageUrl)!;
             await new Promise((r) => { img.onload = r; img.onerror = r; });
             ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
             const blendMode = frame.imageSettings.blendMode === 'normal' ? 'source-over' : frame.imageSettings.blendMode;
@@ -634,7 +635,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           if (frame.imageSettings.imageUrl) {
             const img = new Image();
             img.crossOrigin = 'anonymous';
-            img.src = frame.imageSettings.imageUrl;
+            img.src = resolveStorageUrl(frame.imageSettings.imageUrl)!;
             await new Promise((r) => { img.onload = r; img.onerror = r; });
             ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
             const blendMode = frame.imageSettings.blendMode === 'normal' ? 'source-over' : frame.imageSettings.blendMode;

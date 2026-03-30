@@ -31,6 +31,7 @@ import {
 import type { ExtractorFrame } from "@/types/extractor";
 import { isCueFrame } from "@/types/extractor";
 import { cn } from "@/lib/utils";
+import { resolveStorageUrl } from "@/lib/resolve-storage-url";
 
 interface FrameStripProps {
   frames: ExtractorFrame[];
@@ -96,7 +97,7 @@ function SortableStripItem({
       const s = frame.imageSettings;
       if (s.imageUrl) {
         return {
-          backgroundImage: `url(${s.imageUrl})`,
+          backgroundImage: `url(${resolveStorageUrl(s.imageUrl)})`,
           backgroundSize: "cover",
           backgroundPosition: "center",
         };

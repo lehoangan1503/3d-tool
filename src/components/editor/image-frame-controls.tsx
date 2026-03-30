@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Images, Trash2, Link2, Link2Off, Check } from "lucide-react";
 import type { ImageFrame, ObjectFit } from "@/types/extractor";
 import { ImagePickerDialog } from "./image-picker-dialog";
+import { resolveStorageUrl } from "@/lib/resolve-storage-url";
 
 interface ImageFrameControlsProps {
   frame: ImageFrame;
@@ -104,7 +105,7 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
         {imageSettings.imageUrl && (
           <div className="rounded border overflow-hidden bg-muted/30">
             <img
-              src={imageSettings.imageUrl}
+              src={resolveStorageUrl(imageSettings.imageUrl)!}
               alt="Preview"
               className="w-full h-16 object-cover"
             />

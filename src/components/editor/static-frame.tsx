@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { RotateCw, ImageIcon } from "lucide-react";
 import type { ExtractorFrame } from "@/types/extractor";
 import { isCueFrame, isImageFrame } from "@/types/extractor";
+import { resolveStorageUrl } from "@/lib/resolve-storage-url";
 
 interface StaticFrameProps {
   frame: ExtractorFrame;
@@ -100,7 +101,7 @@ export function StaticFrameInner({
             {/* Image content layer */}
             {frame.imageSettings.imageUrl ? (
               <img
-                src={frame.imageSettings.imageUrl}
+                src={resolveStorageUrl(frame.imageSettings.imageUrl)!}
                 alt={`Image Frame ${frame.order + 1}`}
                 className="absolute inset-0 w-full h-full pointer-events-none"
                 style={{

@@ -24,7 +24,7 @@ import {
 import { Plus, Sparkles, Layers } from "lucide-react";
 import type { ProductType } from "@/types/product";
 
-export function CreateProductDialog() {
+export function CreateProductDialog({ onCreated }: { onCreated?: () => void }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState("");
@@ -51,6 +51,7 @@ export function CreateProductDialog() {
       setOpen(false);
       setName("");
       setType("smooth");
+      onCreated?.();
       router.push(`/dashboard/products/${product.id}`);
       router.refresh();
     } catch (error) {

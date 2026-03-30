@@ -3,8 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import type { CreateProductInput } from "@/types/product";
 import { DEFAULT_SMOOTH_CONFIG, DEFAULT_LEATHER_CONFIG, configToSettingsJson } from "@/types/product";
 
-// GET /api/products - List all products for current user
-export async function GET() {
+// GET /api/products - List products for current user with pagination + search + type filter
+export async function GET(request: Request) {
   try {
     const supabase = await createClient();
     
@@ -13,17 +13,26 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { data, error } = await supabase
+    const { searchParams } = new URL(request.url);
+    const limit  = Math.min(parseInt(searchParams.get("limit")  ?? "20", 10), 50);
+    const offset = Math.max(parseInt(searchParams.get("offset") ?? "0",  10), 0);
+    const search = (searchParams.get("search") ?? "").trim();
+    const type   = searchParams.get("type") ?? "";
+
+    let query = supabase
       .from("products")
-      .select("*")
+      .select("*", { count: "exact" })
       .eq("user_id", user.id)
-      .order("created_at", { ascending: false });
+      .order("updated_at", { ascending: false })
+      .range(offset, offset + limit - 1);
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+    if (search) query = query.ilike("name", `%${search}%`);
+    if (type && ["smooth", "leather"].includes(type)) query = query.eq("type", type);
 
-    return NextResponse.json(data);
+    const { data, error, count } = await query;
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    return NextResponse.json({ items: data, total: count ?? 0 });
   } catch (error) {
     console.error("GET /api/products error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

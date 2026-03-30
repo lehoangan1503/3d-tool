@@ -12,4 +12,17 @@ services:
       - NODE_ENV=production
       - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
       - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+
+      - VIRTUAL_HOST=3d.next.lc
+      - VIRTUAL_PORT=3000
+      - LETSENCRYPT_HOST=3d.next.lc
+      - LETSENCRYPT_EMAIL=trong.bach053@gmail.com
+
     restart: unless-stopped
+    networks:
+      - b_nginx_network
+
+networks:
+  default:
+  b_nginx_network:
+    external: true

@@ -64,27 +64,34 @@ function LayoutPreviewSvg({ frames, size }: { frames: ExtractorFrame[]; size: nu
 interface DownloadMultipleDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  productId: string;
+  productName: string;
   onRenderReference: (reference: ExtractorReference) => Promise<Blob>;
+  /** Called before the export loop starts — use to pause the main scene / prepare a shared GPU context */
+  onExportStart?: () => Promise<void> | void;
+  /** Called after the export loop ends (success or failure) — use to resume the main scene */
+  onExportEnd?: () => void;
 }
 
 export function DownloadMultipleDialog({
   open,
   onOpenChange,
-  productId,
+  productName,
   onRenderReference,
+  onExportStart,
+  onExportEnd,
 }: DownloadMultipleDialogProps) {
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set());
   const [isExporting, setIsExporting]   = useState(false);
   const [exportProgress, setExportProgress] = useState({ current: 0, total: 0, status: "" });
   const [error, setError]               = useState<string | null>(null);
 
-  // thumbnail url cache: id → objectURL
+  // thumbnail url cache: id → objectURL (persists across open/close, cleared on unmount)
   const thumbnailUrls = useRef<Map<string, string>>(new Map());
   const [thumbnailVersion, setThumbnailVersion] = useState(0);
+  const renderPoolRunning = useRef(false);
 
   const { references, total, isLoading, isFetchingMore, hasMore,
-          search, setSearch, sentinelRef } =
+          search, setSearch, loadMore } =
     useReferenceList({ enabled: open });
 
   // Select-all when first page loads (only when search is empty and we're at page start)
@@ -95,36 +102,47 @@ export function DownloadMultipleDialog({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [references]);
 
-  // Render thumbnails for newly-arrived references
+  // Render thumbnails for newly-arrived references — serial to protect GPU
   useEffect(() => {
     if (references.length === 0) return;
-    const unrendered = references.filter(
-      (r) => !thumbnailUrls.current.has(r.id)
-    );
+    if (renderPoolRunning.current) return;
+    const unrendered = references.filter((r) => !thumbnailUrls.current.has(r.id));
     if (unrendered.length === 0) return;
 
-    renderPool(
-      unrendered,
-      onRenderReference,
-      (idx, url) => {
-        thumbnailUrls.current.set(unrendered[idx].id, url);
-        setThumbnailVersion((v) => v + 1);
-      },
-      3
-    );
+    renderPoolRunning.current = true;
+    renderPool(unrendered, onRenderReference, (idx, url) => {
+      thumbnailUrls.current.set(unrendered[idx].id, url);
+      setThumbnailVersion((v) => v + 1);
+    }, 1).finally(() => {
+      renderPoolRunning.current = false;
+      // Drain: handle refs that arrived while pool was running (scroll load-more)
+      const stillUnrendered = references.filter((r) => !thumbnailUrls.current.has(r.id));
+      if (stillUnrendered.length) {
+        renderPoolRunning.current = true;
+        renderPool(stillUnrendered, onRenderReference, (idx, url) => {
+          thumbnailUrls.current.set(stillUnrendered[idx].id, url);
+          setThumbnailVersion((v) => v + 1);
+        }, 1).finally(() => { renderPoolRunning.current = false; });
+      }
+    });
   }, [references, onRenderReference]);
 
-  // Revoke all blob URLs + reset state on close
+  // Reset UI state on close; keep thumbnail cache alive so re-open is instant
   useEffect(() => {
     if (!open) {
-      thumbnailUrls.current.forEach((url) => URL.revokeObjectURL(url));
-      thumbnailUrls.current.clear();
-      setThumbnailVersion(0);
       setSelectedIds(new Set());
       setExportProgress({ current: 0, total: 0, status: "" });
       setError(null);
     }
   }, [open]);
+
+  // Revoke blob URLs only on unmount
+  useEffect(() => {
+    return () => {
+      thumbnailUrls.current.forEach((url) => URL.revokeObjectURL(url));
+      thumbnailUrls.current.clear();
+    };
+  }, []);
 
   const handleSelectAll = () => {
     setSelectedIds(new Set(references.map((r) => r.id)));
@@ -156,6 +174,9 @@ export function DownloadMultipleDialog({
     const exportTotal = selectedRefs.length;
 
     try {
+      // Pause the main scene animation loop to free GPU memory for exports
+      await onExportStart?.();
+
       const zip = new JSZip();
 
       for (let i = 0; i < selectedRefs.length; i++) {
@@ -169,6 +190,11 @@ export function DownloadMultipleDialog({
         const blob = await onRenderReference(ref);
         const filename = `${ref.name.replace(/[^a-zA-Z0-9-_]/g, "-")}.png`;
         zip.file(filename, blob);
+
+        // Brief GPU cooldown between renders to avoid memory exhaustion
+        if (i < selectedRefs.length - 1) {
+          await new Promise((r) => setTimeout(r, 80));
+        }
       }
 
       setExportProgress({ current: exportTotal, total: exportTotal, status: "Creating ZIP..." });
@@ -179,10 +205,11 @@ export function DownloadMultipleDialog({
         compressionOptions: { level: 6 },
       });
 
-      const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+      const timestamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-");
+      const safeName = productName.replace(/[^a-zA-Z0-9-_]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "export";
       const link = document.createElement("a");
       link.href = URL.createObjectURL(zipBlob);
-      link.download = `cue-exports-${timestamp}.zip`;
+      link.download = `${safeName}-${timestamp}.zip`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -193,6 +220,8 @@ export function DownloadMultipleDialog({
       console.error("Export failed:", err);
       setError("Export failed. Please try again.");
     } finally {
+      // Always resume the main scene animation loop
+      onExportEnd?.();
       setIsExporting(false);
       setExportProgress({ current: 0, total: 0, status: "" });
     }
@@ -255,7 +284,19 @@ export function DownloadMultipleDialog({
               </Button>
             </div>
 
-            <div className="flex-1 overflow-y-auto space-y-1 py-2">
+            <div
+              className="flex-1 overflow-y-auto space-y-1 py-2"
+              onScroll={(e) => {
+                const el = e.currentTarget;
+                if (
+                  el.scrollHeight - el.scrollTop - el.clientHeight < 100 &&
+                  hasMore &&
+                  !isFetchingMore
+                ) {
+                  loadMore();
+                }
+              }}
+            >
               {references.map((ref) => {
                 const thumbUrl = thumbnailUrls.current.get(ref.id);
                 return (
@@ -284,10 +325,10 @@ export function DownloadMultipleDialog({
                 );
               })}
 
-              {/* Infinite scroll sentinel */}
-              {hasMore && (
-                <div ref={sentinelRef} className="py-2 flex justify-center">
-                  {isFetchingMore && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+              {/* Load-more spinner */}
+              {isFetchingMore && (
+                <div className="py-2 flex justify-center">
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                 </div>
               )}
             </div>

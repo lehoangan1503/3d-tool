@@ -129,6 +129,9 @@ export class SceneManager {
   private ktx2Loader: KTX2Loader | null = null;
   private currentHdriUrl = "/hdri/bloem_train_track_clear_2k.hdr";
   private hdriLoadSeq = 0;
+  private hdriRotationX = 0; // HDRI vertical rotation (degrees)
+  private hdriRotationY = 300; // HDRI horizontal rotation (degrees)
+  private cachedHdriTexture: THREE.DataTexture | null = null; // Cached source texture for rotation
   private isDisposed = false;
   private currentLeatherConfig = {
     roughness: LEATHER_CONFIG.roughness,
@@ -172,7 +175,7 @@ export class SceneManager {
   private cameraMaxPolarAngle = Math.PI - 0.001; // ~180° (bottom view)
 
   // Inertia / velocity
-  private inertiaDamping = 0.92; // closer to 1 = longer glide
+  private inertiaDamping = 0.85; // closer to 1 = longer glide (reduced from 0.92 for slower momentum)
   private inertiaGain = 0.18; // scale down release velocity vs. drag delta
   private maxSpinVelocityY = 0.025; // radians per frame
   private maxOrbitVelocityPhi = 0.025; // radians per frame
@@ -408,21 +411,31 @@ export class SceneManager {
           return;
         }
 
-        texture.mapping = THREE.EquirectangularReflectionMapping;
-
-        const rt = pmremGenerator.fromEquirectangular(texture);
-        texture.dispose();
-
-        if (this.envRenderTarget) {
-          this.envRenderTarget.dispose();
+        // Cache the source texture for rotation support
+        if (this.cachedHdriTexture) {
+          this.cachedHdriTexture.dispose();
         }
-        this.envRenderTarget = rt;
+        this.cachedHdriTexture = texture as THREE.DataTexture;
 
-        this.scene.environment = rt.texture;
-        // Keep solid background color (don't set scene.background to HDRI)
+        // Apply rotation if any, otherwise use original
+        if (Math.abs(this.hdriRotationX) > 0.1 || Math.abs(this.hdriRotationY) > 0.1) {
+          this.applyHdriRotation();
+        } else {
+          texture.mapping = THREE.EquirectangularReflectionMapping;
 
-        // Make sure any GLB-provided envMap doesn't override scene.environment
-        this.forceSceneEnvironmentOnMaterials();
+          const rt = pmremGenerator.fromEquirectangular(texture);
+
+          if (this.envRenderTarget) {
+            this.envRenderTarget.dispose();
+          }
+          this.envRenderTarget = rt;
+
+          this.scene.environment = rt.texture;
+          // Keep solid background color (don't set scene.background to HDRI)
+
+          // Make sure any GLB-provided envMap doesn't override scene.environment
+          this.forceSceneEnvironmentOnMaterials();
+        }
       },
       undefined,
       (error) => {
@@ -431,6 +444,167 @@ export class SceneManager {
         }
       }
     );
+  }
+
+  /**
+   * Update HDRI rotation (direction X and Y)
+   * X = vertical shift (0-360°), Y = horizontal shift (0-360°)
+   */
+  updateHdriRotation(rotationX: number, rotationY: number) {
+    if (this.isDisposed) return;
+    
+    // Only update if values changed
+    if (this.hdriRotationX === rotationX && this.hdriRotationY === rotationY) {
+      return;
+    }
+    
+    this.hdriRotationX = rotationX;
+    this.hdriRotationY = rotationY;
+    
+    // If we have a cached texture, apply rotation
+    if (this.cachedHdriTexture) {
+      this.applyHdriRotation();
+    }
+  }
+
+  /**
+   * Apply rotation to the cached HDRI texture
+   */
+  private applyHdriRotation() {
+    if (!this.cachedHdriTexture || this.isDisposed) return;
+    
+    const pmremGenerator = this.pmremGenerator;
+    if (!pmremGenerator) return;
+    
+    const rotatedTexture = this.createRotatedHdriTextureXY(
+      this.cachedHdriTexture, 
+      this.hdriRotationX, 
+      this.hdriRotationY
+    );
+    
+    if (!rotatedTexture) return;
+    
+    rotatedTexture.mapping = THREE.EquirectangularReflectionMapping;
+    
+    const rt = pmremGenerator.fromEquirectangular(rotatedTexture);
+    rotatedTexture.dispose();
+    
+    if (this.envRenderTarget) {
+      this.envRenderTarget.dispose();
+    }
+    this.envRenderTarget = rt;
+    this.scene.environment = rt.texture;
+    this.forceSceneEnvironmentOnMaterials();
+  }
+
+  /**
+   * Create a rotated copy of an HDRI texture with X and Y rotation
+   * X rotation = vertical shift (tilt up/down)
+   * Y rotation = horizontal shift (rotate around)
+   */
+  private createRotatedHdriTextureXY(
+    sourceTexture: THREE.DataTexture, 
+    rotationXDeg: number, 
+    rotationYDeg: number
+  ): THREE.DataTexture | null {
+    try {
+      const rotX = ((rotationXDeg % 360) + 360) % 360;
+      const rotY = ((rotationYDeg % 360) + 360) % 360;
+
+      if (!sourceTexture.image || !sourceTexture.image.width || !sourceTexture.image.height) {
+        return null;
+      }
+
+      const width = sourceTexture.image.width;
+      const height = sourceTexture.image.height;
+      const sourceData = sourceTexture.image.data as Float32Array | Uint8Array | Uint16Array | null;
+      
+      if (!sourceData || sourceData.length === 0) {
+        return null;
+      }
+      
+      const channels = sourceData.length / (width * height);
+      if (channels < 1 || channels > 4 || !Number.isInteger(channels)) {
+        return null;
+      }
+      
+      // If no rotation, create a deep copy
+      if (Math.abs(rotX) < 0.1 && Math.abs(rotY) < 0.1) {
+        return this.deepCloneDataTexture(sourceTexture);
+      }
+      
+      // Calculate pixel shifts
+      const shiftX = Math.round((rotY / 360) * width);
+      const shiftY = Math.round((rotX / 360) * height);
+      
+      // Create new data array matching source type
+      let newData: Float32Array | Uint8Array | Uint16Array;
+      if (sourceData instanceof Float32Array) {
+        newData = new Float32Array(sourceData.length);
+      } else if (sourceData instanceof Uint16Array) {
+        newData = new Uint16Array(sourceData.length);
+      } else {
+        newData = new Uint8Array(sourceData.length);
+      }
+      
+      // Shift pixels both horizontally (Y rot) and vertically (X rot)
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const sourceX = ((x + shiftX) % width + width) % width;
+          const sourceY = ((y + shiftY) % height + height) % height;
+          const sourceIdx = (sourceY * width + sourceX) * channels;
+          const destIdx = (y * width + x) * channels;
+          
+          for (let c = 0; c < channels; c++) {
+            newData[destIdx + c] = sourceData[sourceIdx + c];
+          }
+        }
+      }
+      
+      const rotatedTexture = new THREE.DataTexture(
+        newData,
+        width,
+        height,
+        sourceTexture.format as THREE.PixelFormat,
+        sourceTexture.type
+      );
+      rotatedTexture.colorSpace = sourceTexture.colorSpace;
+      rotatedTexture.needsUpdate = true;
+      
+      return rotatedTexture;
+    } catch (error) {
+      console.error("[SceneManager] Failed to rotate HDRI texture:", error);
+      return null;
+    }
+  }
+
+  /**
+   * Deep clone a DataTexture
+   */
+  private deepCloneDataTexture(source: THREE.DataTexture): THREE.DataTexture | null {
+    if (!source.image || !source.image.data) return null;
+    
+    const sourceData = source.image.data;
+    let newData: Float32Array | Uint8Array | Uint16Array;
+    
+    if (sourceData instanceof Float32Array) {
+      newData = new Float32Array(sourceData);
+    } else if (sourceData instanceof Uint16Array) {
+      newData = new Uint16Array(sourceData);
+    } else {
+      newData = new Uint8Array(sourceData);
+    }
+    
+    const clone = new THREE.DataTexture(
+      newData,
+      source.image.width,
+      source.image.height,
+      source.format as THREE.PixelFormat,
+      source.type
+    );
+    clone.colorSpace = source.colorSpace;
+    clone.needsUpdate = true;
+    return clone;
   }
 
   /**
@@ -746,7 +920,8 @@ export class SceneManager {
     if (event.deltaMode === 1) dy *= 16;
     if (event.deltaMode === 2) dy *= 100;
 
-    this.zoomVelocity = THREE.MathUtils.clamp(this.zoomVelocity + dy * this.wheelZoomSpeed, -this.maxZoomVelocity, this.maxZoomVelocity);
+    const wheelZoomSpeed = 0.001; // Reduced from 0.0015 for finer control
+    this.zoomVelocity = THREE.MathUtils.clamp(this.zoomVelocity + dy * wheelZoomSpeed, -this.maxZoomVelocity, this.maxZoomVelocity);
   };
 
   private applyCameraOrbitAndZoom(deltaPhi: number, deltaRadius: number) {
@@ -841,6 +1016,26 @@ export class SceneManager {
    */
   setAutoRotateSpeed(speed: number) {
     this.autoRotateSpeed = speed;
+  }
+
+  /**
+   * Pause the render/animation loop (e.g. during GPU-intensive export).
+   * Call resumeAnimation() to restart.
+   */
+  pauseAnimation(): void {
+    if (this.animationId !== null) {
+      cancelAnimationFrame(this.animationId);
+      this.animationId = null;
+    }
+  }
+
+  /**
+   * Resume the render/animation loop after a pause.
+   */
+  resumeAnimation(): void {
+    if (!this.isDisposed && this.animationId === null) {
+      this.animate();
+    }
   }
 
   async loadModel(modelPath: string): Promise<THREE.Group> {
@@ -1162,6 +1357,10 @@ export class SceneManager {
     }
 
     // Dispose HDRI environment map
+    if (this.cachedHdriTexture) {
+      this.cachedHdriTexture.dispose();
+      this.cachedHdriTexture = null;
+    }
     if (this.envRenderTarget) {
       this.envRenderTarget.dispose();
       this.envRenderTarget = null;

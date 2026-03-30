@@ -27,6 +27,8 @@ export interface ProductConfig {
   bodyRoughness: number; // 0-255 range for non-leather body parts
   hdriExposure: number; // 0-3 range — HDRI intensity control
   hdriType: string; // HDRI filename under /public/hdri (e.g. "bloem_train_track_clear_2k.hdr")
+  hdriRotationX: number; // 0-360 — HDRI vertical rotation (X-axis)
+  hdriRotationY: number; // 0-360 — HDRI horizontal rotation (Y-axis)
   // Leather material settings (only for leather type)
   leatherRoughness: number; // 0-255 range for leather wrap
   leatherSheen: number; // 0-100 range (hidden but in JSON)
@@ -55,6 +57,8 @@ export interface ThreeJSSettingsJson {
     bodyRoughness: number;
     hdriExposure?: number;
     hdriType?: string;
+    hdriRotationX?: number;
+    hdriRotationY?: number;
   };
   material: {
     leatherRoughness: number;
@@ -88,6 +92,8 @@ export function configToSettingsJson(config: ProductConfig): ThreeJSSettingsJson
       bodyRoughness: config.bodyRoughness,
       hdriExposure: config.hdriExposure,
       hdriType: config.hdriType,
+      hdriRotationX: config.hdriRotationX,
+      hdriRotationY: config.hdriRotationY,
     },
     material: {
       leatherRoughness: config.leatherRoughness,
@@ -121,6 +127,8 @@ export function settingsJsonToConfig(json: ThreeJSSettingsJson): ProductConfig {
     bodyRoughness: json.lighting.bodyRoughness,
     hdriExposure: json.lighting.hdriExposure ?? 1.0,
     hdriType: json.lighting.hdriType ?? "bloem_train_track_clear_2k.hdr",
+    hdriRotationX: json.lighting.hdriRotationX ?? 0,
+    hdriRotationY: json.lighting.hdriRotationY ?? 300,
     leatherRoughness: json.material.leatherRoughness,
     leatherSheen: json.material.sheen,
     normalStrength: json.material.normalStrength,
@@ -186,6 +194,8 @@ export const DEFAULT_SMOOTH_CONFIG: ProductConfig = {
   bodyRoughness: 0, // Smooth cue body (0 = very shiny)
   hdriExposure: 1.0, // HDRI intensity (1 = default)
   hdriType: "bloem_train_track_clear_2k.hdr",
+  hdriRotationX: 0, // HDRI vertical rotation
+  hdriRotationY: 300, // HDRI horizontal rotation (center light in front)
   leatherRoughness: 0, // Not used for smooth cue
   leatherSheen: 0, // Not used for smooth cue
   normalStrength: 0, // Not used for smooth cue
@@ -210,6 +220,8 @@ export const DEFAULT_LEATHER_CONFIG: ProductConfig = {
   bodyRoughness: 0, // Body roughness for "outside" mesh
   hdriExposure: 1.0, // HDRI intensity (1 = default)
   hdriType: "bloem_train_track_clear_2k.hdr",
+  hdriRotationX: 0, // HDRI vertical rotation
+  hdriRotationY: 300, // HDRI horizontal rotation (center light in front)
   leatherRoughness: 120, // Leather wrap roughness
   leatherSheen: 80, // Leather sheen
   normalStrength: 3.0, // Leather normal map strength

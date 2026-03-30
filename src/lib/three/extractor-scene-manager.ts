@@ -1202,6 +1202,22 @@ export class ExtractorSceneManager {
     }
 
     this.pmremGenerator.dispose();
+
+    // Shrink framebuffer to 1×1 before dispose to immediately free VRAM.
+    // Three.js dispose() alone only frees JS-side references; the GPU driver
+    // keeps the backing store until the context is actually lost.
+    this.renderer.setSize(1, 1);
+    this.renderer.renderLists.dispose();
     this.renderer.dispose();
+
+    // Force the WebGL context loss so the GPU driver releases memory right away
+    // rather than waiting for the JS garbage collector.
+    try {
+      const gl = this.renderer.getContext();
+      const ext = gl.getExtension("WEBGL_lose_context");
+      if (ext) ext.loseContext();
+    } catch {
+      // Ignore — some environments may not support WEBGL_lose_context
+    }
   }
 }

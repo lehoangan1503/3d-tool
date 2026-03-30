@@ -132,6 +132,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
     manager.updateToneMapping(); // Use original/no tone mapping
     manager.updateHdriExposure(currentConfig.hdriExposure);
     manager.updateHdriEnvironment(currentConfig.hdriType);
+    manager.updateHdriRotation(currentConfig.hdriRotationX, currentConfig.hdriRotationY);
     manager.updateClearcoat(currentConfig.clearcoat);
     manager.updateBodyRoughness(currentConfig.bodyRoughness);
     if (currentProduct.type === "leather") {
@@ -194,6 +195,12 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
     if (!sceneManager) return;
     sceneManager.updateHdriEnvironment(config.hdriType);
   }, [sceneManager, config.hdriType]);
+
+  // Update HDRI rotation when direction changes
+  useEffect(() => {
+    if (!sceneManager) return;
+    sceneManager.updateHdriRotation(config.hdriRotationX, config.hdriRotationY);
+  }, [sceneManager, config.hdriRotationX, config.hdriRotationY]);
 
   const updateProduct = (updates: Partial<Product>) => {
     setProduct((prev) => ({ ...prev, ...updates }));
@@ -573,6 +580,44 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                           hdriExposure: Math.min(3, Math.max(0, parseFloat(e.target.value) || 0)),
                         })
                       }
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="hdriRotationX-mobile">Direction X (Vertical)</Label>
+                      <span className="text-xs text-muted-foreground">{config.hdriRotationX}°</span>
+                    </div>
+                    <input
+                      id="hdriRotationX-mobile"
+                      type="range"
+                      min={0}
+                      max={360}
+                      step={1}
+                      value={config.hdriRotationX}
+                      onChange={(e) =>
+                        updateConfig({ hdriRotationX: parseFloat(e.target.value) })
+                      }
+                      className="w-full accent-primary"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="hdriRotationY-mobile">Direction Y (Horizontal)</Label>
+                      <span className="text-xs text-muted-foreground">{config.hdriRotationY}°</span>
+                    </div>
+                    <input
+                      id="hdriRotationY-mobile"
+                      type="range"
+                      min={0}
+                      max={360}
+                      step={1}
+                      value={config.hdriRotationY}
+                      onChange={(e) =>
+                        updateConfig({ hdriRotationY: parseFloat(e.target.value) })
+                      }
+                      className="w-full accent-primary"
                     />
                   </div>
                 </div>
@@ -1014,6 +1059,44 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                     }
                   />
                   <p className="text-xs text-muted-foreground">0 - 3 (default: 1.0)</p>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="hdriRotationX">Direction X (Vertical)</Label>
+                    <span className="text-xs text-muted-foreground">{config.hdriRotationX}°</span>
+                  </div>
+                  <input
+                    id="hdriRotationX"
+                    type="range"
+                    min={0}
+                    max={360}
+                    step={1}
+                    value={config.hdriRotationX}
+                    onChange={(e) =>
+                      updateConfig({ hdriRotationX: parseFloat(e.target.value) })
+                    }
+                    className="w-full accent-primary"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="hdriRotationY">Direction Y (Horizontal)</Label>
+                    <span className="text-xs text-muted-foreground">{config.hdriRotationY}°</span>
+                  </div>
+                  <input
+                    id="hdriRotationY"
+                    type="range"
+                    min={0}
+                    max={360}
+                    step={1}
+                    value={config.hdriRotationY}
+                    onChange={(e) =>
+                      updateConfig({ hdriRotationY: parseFloat(e.target.value) })
+                    }
+                    className="w-full accent-primary"
+                  />
                 </div>
               </div>
             </CollapsibleCard>

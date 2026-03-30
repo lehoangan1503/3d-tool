@@ -3,7 +3,8 @@
 import { useRef, useCallback, useEffect, useState, useMemo } from "react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
-import type { ExtractorFrame, HdriLayer } from "@/types/extractor";
+import type { ExtractorFrame, HdriLayer, CueFrame } from "@/types/extractor";
+import { isCueFrame, isImageFrame } from "@/types/extractor";
 import { StaticFrame } from "./static-frame";
 import { cn } from "@/lib/utils";
 import { RotateCw } from "lucide-react";
@@ -11,6 +12,7 @@ import { RotateCw } from "lucide-react";
 interface FrameCanvasProps {
   frames: ExtractorFrame[];
   selectedFrameId: string | null;
+  hiddenFrameIds?: Set<string>;
   onSelectFrame: (id: string | null) => void;
   onFrameChange: (frame: ExtractorFrame) => void;
   sceneManager: SceneManager | null;
@@ -18,6 +20,10 @@ interface FrameCanvasProps {
   onScreenshotCapture: (frameId: string, dataUrl: string) => void;
   extractorRef: React.MutableRefObject<ExtractorSceneManager | null>;
   extractorReady: boolean;
+  /** Called once when the user finishes a drag/transform — commit to undo history. */
+  onDragEnd?: () => void;
+  /** When true, hides all frame borders, handles, labels, and canvas UI chrome. */
+  previewMode?: boolean;
 }
 
 const CANVAS_SIZE = 2048;
@@ -26,6 +32,7 @@ const DISPLAY_SIZE = 600;
 export function FrameCanvas({
   frames,
   selectedFrameId,
+  hiddenFrameIds,
   onSelectFrame,
   onFrameChange,
   sceneManager,
@@ -33,6 +40,8 @@ export function FrameCanvas({
   onScreenshotCapture,
   extractorRef,
   extractorReady,
+  onDragEnd,
+  previewMode = false,
 }: FrameCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const activeCanvasContainerRef = useRef<HTMLDivElement>(null);
@@ -77,19 +86,35 @@ export function FrameCanvas({
   }, [axisConstraint]);
   
   const scale = DISPLAY_SIZE / CANVAS_SIZE;
-  const selectedFrame = frames.find(f => f.id === selectedFrameId);
+  const selectedFrame = frames.find(f => f.id === selectedFrameId && isCueFrame(f)) as CueFrame | undefined;
 
-  // Capture screenshot when selection changes (deselecting a frame)
+  // Pause the 60 FPS WebGL loop when no CUE frame is selected — image frames don't need 3D rendering.
+  // Use selectedFrame?.id (not the full object) so this only fires when frame identity changes,
+  // not on every property update during drag.
   useEffect(() => {
-    if (previousSelectedIdRef.current && previousSelectedIdRef.current !== selectedFrameId) {
-      // We're deselecting the previous frame - capture its screenshot
-      if (extractorRef.current) {
+    const extractor = extractorRef.current;
+    if (!extractor || !extractorReady) return;
+    if (selectedFrame) {
+      extractor.startLivePreview();   // resume (guard inside prevents double-start)
+    } else {
+      extractor.stopLivePreview();    // pause — nothing to render in 3D
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedFrame?.id, extractorReady]);  // intentionally omit extractorRef (stable ref object)
+
+  // Capture screenshot when selection changes (deselecting a CUE frame)
+  useEffect(() => {
+    const prevId = previousSelectedIdRef.current;
+    if (prevId && prevId !== selectedFrameId) {
+      // Only capture from the 3D extractor when the PREVIOUS frame was a CUE frame
+      const prevFrame = frames.find(f => f.id === prevId);
+      if (prevFrame && isCueFrame(prevFrame) && extractorRef.current) {
         const screenshot = extractorRef.current.captureFrame('png');
-        onScreenshotCapture(previousSelectedIdRef.current, screenshot);
+        onScreenshotCapture(prevId, screenshot);
       }
     }
     previousSelectedIdRef.current = selectedFrameId;
-  }, [selectedFrameId, extractorRef, onScreenshotCapture]);
+  }, [selectedFrameId, extractorRef, onScreenshotCapture, frames]);
 
   // Attach/detach canvas to selected frame container
   useEffect(() => {
@@ -211,7 +236,7 @@ export function FrameCanvas({
     }
   };
 
-  // Transform drag handlers
+  // Transform drag handlers (works for both CUE and IMAGE frames)
   const handleTransformStart = useCallback((
     e: React.MouseEvent, 
     type: 'move' | 'resize' | 'rotate', 
@@ -237,6 +262,7 @@ export function FrameCanvas({
     }
 
     const startAngle = Math.atan2(e.clientY - centerY, e.clientX - centerX);
+    const cue = isCueFrame(frame) ? frame.cue : null;
 
     dragStartRef.current = {
       x: e.clientX,
@@ -249,10 +275,10 @@ export function FrameCanvas({
       centerX,
       centerY,
       startAngle,
-      cueSpinY: frame.cue.spinY,
-      cuePhi: frame.cue.phi,
-      cueOffsetX: frame.cue.offsetX,
-      cueOffsetY: frame.cue.offsetY,
+      cueSpinY: cue?.spinY ?? 0,
+      cuePhi: cue?.phi ?? 0,
+      cueOffsetX: cue?.offsetX ?? 0,
+      cueOffsetY: cue?.offsetY ?? 0,
       frameId: frame.id,
     };
   }, []);
@@ -289,6 +315,9 @@ export function FrameCanvas({
     const dy = (e.clientY - dragStartRef.current.y) / scale;
     const frame = frames.find(f => f.id === dragStartRef.current.frameId);
     if (!frame) return;
+
+    // cue-3d and cue-pan only apply to CUE frames
+    if ((dragType === 'cue-3d' || dragType === 'cue-pan') && !isCueFrame(frame)) return;
 
     if (dragType === 'move') {
       // Apply axis constraint along frame's LOCAL axes (respects rotation)
@@ -355,7 +384,7 @@ export function FrameCanvas({
         ...frame,
         transform: { ...frame.transform, x: newX, y: newY, width: newW, height: newH },
       });
-    } else if (dragType === 'cue-3d') {
+    } else if (dragType === 'cue-3d' && isCueFrame(frame)) {
       // Like main preview:
       // Horizontal drag (dx) -> spin model around Y axis
       // Vertical drag (dy) -> orbit camera up/down (phi angle)
@@ -375,7 +404,7 @@ export function FrameCanvas({
           phi: newPhi,
         },
       });
-    } else if (dragType === 'cue-pan') {
+    } else if (dragType === 'cue-pan' && isCueFrame(frame)) {
       // Right-drag: move model vertically only (Y axis), disable horizontal (X axis) movement
       const sensitivity = 0.002;
       onFrameChange({
@@ -392,11 +421,12 @@ export function FrameCanvas({
   const handleMouseUp = useCallback(() => {
     if (isDragging) {
       wasDraggingRef.current = true;
+      onDragEnd?.(); // commit the drag as a single undo step
     }
     setIsDragging(false);
     setDragType(null);
     setActiveHandle(null);
-  }, [isDragging]);
+  }, [isDragging, onDragEnd]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (!selectedFrame) return;
@@ -460,21 +490,28 @@ export function FrameCanvas({
         
         {/* Clipping container for frame content - hides 3D content outside 2048x2048 bounds */}
         <div data-canvas="background" className="absolute inset-0 overflow-hidden rounded-lg z-0">
-          {/* Render non-selected frames as static 2D (clipped) */}
-          {frames.filter(f => f.id !== selectedFrameId).map((frame) => (
+          {/* Render frames as static 2D (clipped).
+              CUE frames that are selected are excluded here — handled by the 3D canvas below.
+              IMAGE frames that are selected remain here so they stay visible with selection handles. */}
+          {frames.filter(f => {
+            if (hiddenFrameIds?.has(f.id)) return false;
+            if (f.id === selectedFrameId && isCueFrame(f)) return false;
+            return true;
+          }).map((frame) => (
             <StaticFrame
               key={frame.id}
               frame={frame}
               screenshot={frameScreenshots[frame.id] || null}
-              selected={false}
+              selected={frame.id === selectedFrameId}
               onSelect={() => onSelectFrame(frame.id)}
               scale={scale}
               onTransformStart={(e, type, handle) => handleTransformStart(e, type, handle, frame)}
+              previewMode={previewMode}
             />
           ))}
 
           {/* Selected frame 3D canvas container (clipped) */}
-          {selectedFrame && (
+          {selectedFrame && !hiddenFrameIds?.has(selectedFrame.id) && (
             <div
               data-frame-id={selectedFrame.id}
               className="absolute"
@@ -492,7 +529,7 @@ export function FrameCanvas({
                 ref={activeCanvasContainerRef}
                 className={cn(
                   "absolute inset-0 overflow-hidden rounded",
-                  "border-2 border-primary pointer-events-none"
+                  !previewMode && "border-2 border-primary pointer-events-none"
                 )}
               >
                 {/* WebGL canvas attached here */}
@@ -502,15 +539,19 @@ export function FrameCanvas({
         </div>
 
         {/* Canvas border */}
-        <div className="absolute inset-0 border-2 border-dashed border-muted-foreground/30 pointer-events-none rounded-lg z-10" />
+        {!previewMode && (
+          <div className="absolute inset-0 border-2 border-dashed border-muted-foreground/30 pointer-events-none rounded-lg z-10" />
+        )}
 
         {/* Size indicator */}
-        <div className="absolute top-2 left-2 bg-black/60 text-white text-xs px-2 py-1 rounded pointer-events-none z-30">
-          2048 × 2048
-        </div>
+        {!previewMode && (
+          <div className="absolute top-2 left-2 bg-black/60 text-white text-xs px-2 py-1 rounded pointer-events-none z-30">
+            2048 × 2048
+          </div>
+        )}
 
         {/* Selected frame controls overlay (NOT clipped - handles stay visible) */}
-        {selectedFrame && (
+        {!previewMode && selectedFrame && !hiddenFrameIds?.has(selectedFrame.id) && (
           <div
             className="absolute z-20 pointer-events-none"
             style={{

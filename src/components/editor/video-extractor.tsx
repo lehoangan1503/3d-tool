@@ -45,6 +45,9 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
   useEffect(() => {
     if (!open || !sceneManager) return;
 
+    // Pause main scene so the video extractor has the GPU to itself
+    sceneManager.pauseAnimation();
+
     const initExtractor = async () => {
       try {
         setError(null);
@@ -90,6 +93,8 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
         URL.revokeObjectURL(videoUrlRef.current);
         videoUrlRef.current = null;
       }
+      // Resume main scene when video extractor is cleaned up
+      sceneManager?.resumeAnimation();
     };
   }, [open, sceneManager]);
 

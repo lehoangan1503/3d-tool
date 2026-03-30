@@ -31,6 +31,7 @@ export async function GET(request: Request) {
           id,
           frame_order,
           frame_type,
+          frame_name,
           pos_x,
           pos_y,
           width,
@@ -74,6 +75,7 @@ export async function GET(request: Request) {
           
           const baseFrame = {
             id: f.id,
+            name: f.frame_name ?? undefined,
             order: f.frame_order,
             transform: {
               x: f.pos_x,
@@ -170,6 +172,7 @@ export async function POST(request: Request) {
         reference_id: reference.id,
         frame_order: f.order ?? idx,
         frame_type: f.frameType,
+        frame_name: f.name ?? null,
         pos_x: f.transform.x,
         pos_y: f.transform.y,
         width: f.transform.width,

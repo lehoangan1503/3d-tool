@@ -241,12 +241,97 @@ export interface CueSettings {
   hdriType?: string;
 }
 
-/** Single frame in the editor */
-export interface ExtractorFrame {
+// ==========================================
+// Image Frame Types (for overlay layers)
+// ==========================================
+
+/** Blend modes for image frames */
+export type BlendMode = 
+  | 'normal' 
+  | 'multiply' 
+  | 'screen' 
+  | 'overlay' 
+  | 'darken' 
+  | 'lighten'
+  | 'color-dodge'
+  | 'color-burn'
+  | 'hard-light'
+  | 'soft-light';
+
+/** Object fit options for images */
+export type ObjectFit = 'custom' | 'cover' | 'contain';
+
+/** 3D rotation for image frames */
+export interface Rotation3D {
+  x: number; // degrees, -180 to 180
+  y: number; // degrees, -180 to 180
+  z: number; // degrees, -180 to 180
+}
+
+/** Settings specific to image frames */
+export interface ImageSettings {
+  imageUrl: string | null;       // Blob/data URL while editing; storage URL after save
+  backgroundColor: string;       // Hex color (#ffffff)
+  backgroundEnabled: boolean;    // Show background fill behind the image
+  backgroundOpacity: number;     // 0–1, opacity of the background fill layer
+  objectFit: ObjectFit;
+  rotation3d: Rotation3D;
+  imageOpacity: number;          // 0–1, applies to the image layer only
+  opacity: number;               // 0–1, whole-frame opacity (kept for compat)
+  blendMode: BlendMode;
+}
+
+/** Default image settings */
+export const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
+  imageUrl: null,
+  backgroundColor: '#2a2a2a',
+  backgroundEnabled: true,
+  backgroundOpacity: 1,
+  objectFit: 'cover',
+  rotation3d: { x: 0, y: 0, z: 0 },
+  imageOpacity: 1,
+  opacity: 1,
+  blendMode: 'normal',
+};
+
+/** Frame type discriminator */
+export type FrameType = 'cue' | 'image';
+
+// ==========================================
+// Frame Types (Discriminated Union)
+// ==========================================
+
+/** Base frame properties shared by all frame types */
+interface BaseFrame {
   id: string;
+  name?: string;   // Optional user-defined label (e.g. "Front View"); falls back to "Frame N"
   order: number;
   transform: FrameTransform;
+}
+
+/** Cue frame - displays 3D model view */
+export interface CueFrame extends BaseFrame {
+  frameType: 'cue';
   cue: CueSettings;
+}
+
+/** Image frame - displays uploaded image or solid color overlay */
+export interface ImageFrame extends BaseFrame {
+  frameType: 'image';
+  imageSettings: ImageSettings;
+}
+
+/** Single frame in the editor (discriminated union) */
+export type ExtractorFrame = CueFrame | ImageFrame;
+
+/** Type guard for cue frames */
+export function isCueFrame(frame: ExtractorFrame): frame is CueFrame {
+  return frame.frameType === 'cue';
+}
+
+/** Type guard for image frames */
+export function isImageFrame(frame: ExtractorFrame): frame is ImageFrame {
+  return frame.frameType === 'image';
 }
 
 /** Saved reference (layout preset) */
@@ -277,16 +362,28 @@ export const DEFAULT_CUE_SETTINGS: CueSettings = {
   hdriLayers: [createDefaultHdriLayer()],  // Default: 1x bloem train track
 };
 
-/** Create a new frame with defaults */
-export function createDefaultFrame(id?: string, order: number = 0): ExtractorFrame {
+/** Create a new cue frame with defaults */
+export function createDefaultFrame(id?: string, order: number = 0): CueFrame {
   return {
     id: id || crypto.randomUUID(),
     order,
+    frameType: 'cue',
     transform: { ...DEFAULT_FRAME_TRANSFORM },
     cue: { 
       ...DEFAULT_CUE_SETTINGS,
       hdriLayers: [createDefaultHdriLayer()],  // Fresh layer with new ID
     },
+  };
+}
+
+/** Create a new image frame with defaults */
+export function createDefaultImageFrame(id?: string, order: number = 0): ImageFrame {
+  return {
+    id: id || crypto.randomUUID(),
+    order,
+    frameType: 'image',
+    transform: { ...DEFAULT_FRAME_TRANSFORM },
+    imageSettings: { ...DEFAULT_IMAGE_SETTINGS },
   };
 }
 
@@ -316,48 +413,54 @@ export function migrateCueSettings(cue: CueSettings): CueSettings {
 // ==========================================
 
 /** Template for 1 centered frame */
-export const TEMPLATE_1_FRAME: ExtractorFrame[] = [
+export const TEMPLATE_1_FRAME: CueFrame[] = [
   {
     id: 'frame-1',
     order: 0,
+    frameType: 'cue',
     transform: { x: 524, y: 524, width: 1000, height: 1000, rotation: 0 },
     cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.2, hdriLayers: [createDefaultHdriLayer()] },
   },
 ];
 
 /** Template for 2 frames side by side */
-export const TEMPLATE_2_FRAMES: ExtractorFrame[] = [
+export const TEMPLATE_2_FRAMES: CueFrame[] = [
   {
     id: 'frame-1',
     order: 0,
+    frameType: 'cue',
     transform: { x: 100, y: 524, width: 800, height: 1000, rotation: 0 },
     cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.5, hdriLayers: [createDefaultHdriLayer()] },
   },
   {
     id: 'frame-2',
     order: 1,
+    frameType: 'cue',
     transform: { x: 1148, y: 524, width: 800, height: 1000, rotation: 0 },
     cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.5, hdriLayers: [createDefaultHdriLayer()] },
   },
 ];
 
 /** Template for 3 frames diagonal (like original design) */
-export const TEMPLATE_3_DIAGONAL: ExtractorFrame[] = [
+export const TEMPLATE_3_DIAGONAL: CueFrame[] = [
   {
     id: 'frame-bottom',
     order: 0,
+    frameType: 'cue',
     transform: { x: 100, y: 1448, width: 500, height: 500, rotation: 0 },
     cue: { ...DEFAULT_CUE_SETTINGS, zoom: 2.5, hdriLayers: [createDefaultHdriLayer()] },
   },
   {
     id: 'frame-center',
     order: 1,
+    frameType: 'cue',
     transform: { x: 574, y: 374, width: 900, height: 1300, rotation: 0 },
     cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1, hdriLayers: [createDefaultHdriLayer()] },
   },
   {
     id: 'frame-top',
     order: 2,
+    frameType: 'cue',
     transform: { x: 1448, y: 100, width: 500, height: 500, rotation: 0 },
     cue: { ...DEFAULT_CUE_SETTINGS, zoom: 2.5, hdriLayers: [createDefaultHdriLayer()] },
   },

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
-import { Camera, Download, Save, Loader2, HelpCircle, ChevronDown, FolderDown } from "lucide-react";
+import { Camera, Download, Save, Loader2, HelpCircle, ChevronDown, FolderDown, Undo2, Redo2, Eye, EyeOff } from "lucide-react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import { FrameCanvas, CANVAS_SIZE } from "./frame-canvas";
@@ -13,6 +13,7 @@ import { FrameControlsPanel } from "./frame-controls-panel";
 import { DownloadMultipleDialog } from "./download-multiple-dialog";
 import type { ExtractorFrame, ExtractorReference, TemplateKey, CueFrame, ImageFrame } from "@/types/extractor";
 import { createDefaultFrame, createDefaultImageFrame, FRAME_TEMPLATES, isCueFrame, isImageFrame } from "@/types/extractor";
+import { useUndoable } from "@/hooks/use-undoable";
 
 interface ImageExtractorProps {
   sceneManager: SceneManager | null;
@@ -22,8 +23,24 @@ interface ImageExtractorProps {
 }
 
 export function ImageExtractor({ sceneManager, productName, onClose, open }: ImageExtractorProps) {
-  // State
-  const [frames, setFrames] = useState<ExtractorFrame[]>([]);
+  // Frames state with full undo/redo support
+  const {
+    value: frames,
+    set: setFrames,        // discrete ops  → creates a history entry immediately
+    setLive: setFramesLive, // continuous ops → no history; call commitFrames when done
+    commit: commitFrames,  // flush a live interaction to a single history entry
+    reset: resetFrames,    // load new state & wipe history (reference load / new layout)
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+  } = useUndoable<ExtractorFrame[]>([]);
+  // Debounce for panel slider / input changes so rapid tweaks collapse into one undo step
+  const commitDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedCommit = useCallback(() => {
+    if (commitDebounceRef.current) clearTimeout(commitDebounceRef.current);
+    commitDebounceRef.current = setTimeout(commitFrames, 400);
+  }, [commitFrames]);
   const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
   const [references, setReferences] = useState<ExtractorReference[]>([]);
   const [selectedReferenceId, setSelectedReferenceId] = useState<string | null>(null);
@@ -35,6 +52,9 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
   // Shared extractor (ONE instance for all frames)
   const extractorRef = useRef<ExtractorSceneManager | null>(null);
   const [extractorReady, setExtractorReady] = useState(false);
+
+  // Shared extractor used during bulk export — reused across all references to avoid GPU OOM
+  const bulkExportExtractorRef = useRef<ExtractorSceneManager | null>(null);
 
   // HDRI state - matches main preview
   const [hdriOptions, setHdriOptions] = useState<Array<{ id: string; label: string }>>([]);
@@ -50,6 +70,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
   const [saveMode, setSaveMode] = useState<'new' | 'update' | 'choose'>('new');
   const [error, setError] = useState<string | null>(null);
   const [hiddenFrameIds, setHiddenFrameIds] = useState<Set<string>>(new Set());
+  const [previewMode, setPreviewMode] = useState(false);
 
   // Load HDRI options (same as editor-client)
   useEffect(() => {
@@ -80,9 +101,12 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
   useEffect(() => {
     if (!open || !sceneManager) return;
 
-    // Create ONE shared extractor at max resolution (2048x2048)
-    // Will be resized per frame but maintains quality
-    const extractor = new ExtractorSceneManager(2048, 2048);
+    // Pause the main 3D preview — the extractor needs the GPU exclusively
+    sceneManager.pauseAnimation();
+
+    // Create shared live-preview extractor at 1024×1024 (display-quality, not export-quality).
+    // A separate 2048×2048 extractor is created only for the actual export render.
+    const extractor = new ExtractorSceneManager(1024, 1024);
     extractorRef.current = extractor;
 
     // Load model from main scene (already in memory!)
@@ -109,8 +133,15 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
         extractorRef.current.dispose();
         extractorRef.current = null;
       }
+      // Clean up bulk export extractor if dialog closes mid-export
+      if (bulkExportExtractorRef.current) {
+        bulkExportExtractorRef.current.dispose();
+        bulkExportExtractorRef.current = null;
+      }
       setExtractorReady(false);
       setFrameScreenshots({});
+      // Resume main scene now that the extractor is fully gone
+      sceneManager?.resumeAnimation();
     };
   }, [open, sceneManager]);
 
@@ -147,7 +178,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       const res = await fetch(`/api/extractor-references/${id}`);
       if (res.ok) {
         const data: ExtractorReference = await res.json();
-        setFrames(data.frames);
+        resetFrames(data.frames); // load → clear history
         setSelectedReferenceId(id);
         setSelectedFrameId(null);
       }
@@ -164,7 +195,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       loadReference(id);
     } else {
       // New layout - clear frames and screenshots
-      setFrames([]);
+      resetFrames([]); // load → clear history
       setFrameScreenshots({});
       setSelectedReferenceId(null);
       setSelectedFrameId(null);
@@ -181,8 +212,8 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       transform: { ...f.transform },
       cue: { ...f.cue },
     }));
-    setFrames(newFrames);
-    setFrameScreenshots({}); // Clear old screenshots
+    setFrames(newFrames); // discrete — undoable
+    setFrameScreenshots({});
     setSelectedReferenceId(null);
     setSelectedFrameId(null);
   };
@@ -196,7 +227,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
     // Offset new frame slightly to avoid overlap
     newFrame.transform.x = 524 + frames.length * 50;
     newFrame.transform.y = 524 + frames.length * 50;
-    setFrames([...frames, newFrame]);
+    setFrames([...frames, newFrame]); // discrete — undoable
     setSelectedFrameId(newFrame.id);
   };
 
@@ -205,16 +236,19 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
     // Offset new frame slightly to avoid overlap
     newFrame.transform.x = 524 + frames.length * 50;
     newFrame.transform.y = 524 + frames.length * 50;
-    setFrames([...frames, newFrame]);
+    setFrames([...frames, newFrame]); // discrete — undoable
     setSelectedFrameId(newFrame.id);
   };
 
+  // Called on every mousemove/slider tick — live update, no immediate history entry.
+  // debouncedCommit collapses rapid panel changes into one undo step after 400 ms idle.
   const handleFrameChange = useCallback((updatedFrame: ExtractorFrame) => {
-    setFrames((prev) => prev.map((f) => (f.id === updatedFrame.id ? updatedFrame : f)));
-  }, []);
+    setFramesLive((prev) => prev.map((f) => (f.id === updatedFrame.id ? updatedFrame : f)));
+    debouncedCommit();
+  }, [setFramesLive, debouncedCommit]);
 
   const handleDeleteFrame = (id: string) => {
-    setFrames((prev) => prev.filter((f) => f.id !== id));
+    setFrames((prev) => prev.filter((f) => f.id !== id)); // discrete — undoable
     if (selectedFrameId === id) {
       setSelectedFrameId(null);
     }
@@ -238,33 +272,43 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
   };
 
   const handleReorderFrames = (reordered: ExtractorFrame[]) => {
-    setFrames(reordered.map((f, idx) => ({ ...f, order: idx })));
+    setFrames(reordered.map((f, idx) => ({ ...f, order: idx }))); // discrete — undoable
   };
 
   const handleAlignFrames = () => {
     if (frames.length === 0) return;
 
-    // Auto-distribute frames horizontally with gap, preserving rotation
-    const totalWidth = frames.reduce((sum, f) => sum + f.transform.width, 0);
-    const totalGaps = (frames.length - 1) * gap;
+    // Only auto-align cue frames; image frames stay in their current position
+    const cueFrames = frames.filter(isCueFrame);
+    if (cueFrames.length === 0) return;
+
+    const totalWidth = cueFrames.reduce((sum, f) => sum + f.transform.width, 0);
+    const totalGaps = (cueFrames.length - 1) * gap;
     const startX = (CANVAS_SIZE - totalWidth - totalGaps) / 2;
 
     let currentX = startX;
-    const alignedFrames = frames.map((f) => {
-      const aligned = {
+    const alignedById = new Map<string, ExtractorFrame>();
+    for (const f of cueFrames) {
+      alignedById.set(f.id, {
         ...f,
         transform: {
           ...f.transform,
           x: currentX,
-          y: (CANVAS_SIZE - f.transform.height) / 2, // Center vertically
-          // Keep existing rotation - don't reset
+          y: (CANVAS_SIZE - f.transform.height) / 2,
         },
-      };
+      });
       currentX += f.transform.width + gap;
-      return aligned;
-    });
+    }
 
-    setFrames(alignedFrames);
+    // Merge: cue frames updated, image frames untouched
+    const alignedFrames = frames.map((f) => alignedById.get(f.id) ?? f);
+    setFrames(alignedFrames); // discrete — undoable
+  };
+
+  const handleRenameFrame = (id: string, name: string) => {
+    setFrames((prev) =>
+      prev.map((f) => (f.id === id ? { ...f, name: name || undefined } : f))
+    );
   };
 
   const handleSave = async (mode: 'new' | 'update') => {
@@ -274,41 +318,60 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
 
     setIsSaving(true);
     try {
+      // Upload any locally-loaded images (data URLs) before persisting
+      const readyFrames = await Promise.all(
+        frames.map(async (frame) => {
+          if (isImageFrame(frame) && frame.imageSettings.imageUrl?.startsWith('data:')) {
+            try {
+              const blob = await fetch(frame.imageSettings.imageUrl).then((r) => r.blob());
+              const fd = new FormData();
+              fd.append('file', blob, 'overlay.png');
+              const res = await fetch('/api/upload-overlay', { method: 'POST', body: fd });
+              if (res.ok) {
+                const { url } = await res.json();
+                return { ...frame, imageSettings: { ...frame.imageSettings, imageUrl: url } };
+              }
+            } catch {
+              // keep the data URL if upload fails
+            }
+          }
+          return frame;
+        })
+      );
       if (mode === 'update' && selectedReferenceId) {
-        // Update existing reference
         const currentRef = references.find(r => r.id === selectedReferenceId);
         const res = await fetch(`/api/extractor-references/${selectedReferenceId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ 
-            name: currentRef?.name || saveName.trim(), 
-            frames 
-          }),
+          body: JSON.stringify({ name: currentRef?.name || saveName.trim(), frames: readyFrames }),
         });
 
         if (res.ok) {
+          // Update frame state so blob: URLs are replaced with storage URLs
+          setFrames(readyFrames);
           setShowSaveDialog(false);
           setSaveName("");
           setSaveMode('new');
-          loadReferences(); // Refresh list
+          loadReferences();
         } else {
           throw new Error("Update failed");
         }
       } else {
-        // Create new reference
         const res = await fetch("/api/extractor-references", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: saveName.trim(), frames }),
+          body: JSON.stringify({ name: saveName.trim(), frames: readyFrames }),
         });
 
         if (res.ok) {
           const data = await res.json();
+          // Update frame state so blob: URLs are replaced with storage URLs
+          setFrames(readyFrames);
           setSelectedReferenceId(data.id);
           setShowSaveDialog(false);
           setSaveName("");
           setSaveMode('new');
-          loadReferences(); // Refresh list
+          loadReferences();
         } else {
           throw new Error("Save failed");
         }
@@ -354,7 +417,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       if (res.ok) {
         if (selectedReferenceId === id) {
           setSelectedReferenceId(null);
-          setFrames([]);
+          resetFrames([]); // load → clear history
           setFrameScreenshots({});
         }
         loadReferences();
@@ -369,6 +432,9 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
 
     setIsExporting(true);
     setError(null);
+
+    // Stop live preview so the export extractor has the GPU to itself
+    extractorRef.current?.stopLivePreview();
 
     try {
       // Create composite canvas
@@ -392,46 +458,77 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       await exportExtractor.loadHDRI(defaultHdriUrl);
       exportExtractor.setTransparentBackground(true);
 
-      // Filter to cue frames only and render each
+      // Render all frames in order (cue frames via 3D extractor, image frames drawn directly)
       for (const frame of frames) {
-        // Skip non-cue frames (image frames don't render 3D)
-        if (!isCueFrame(frame)) continue;
-        
-        // Resize extractor for this frame's dimensions
-        exportExtractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
+        if (isCueFrame(frame)) {
+          // Resize extractor for this frame's dimensions
+          exportExtractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
 
-        // Apply frame's cue settings (new control scheme)
-        exportExtractor.setModelRotation(frame.cue.spinY);
-        exportExtractor.setCameraPhi(frame.cue.phi, 2);
-        exportExtractor.setCameraZoom(frame.cue.zoom);
-        exportExtractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
+          // Apply frame's cue settings (new control scheme)
+          exportExtractor.setModelRotation(frame.cue.spinY);
+          exportExtractor.setCameraPhi(frame.cue.phi, 2);
+          exportExtractor.setCameraZoom(frame.cue.zoom);
+          exportExtractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
 
-        // Apply HDRI layers (new multi-HDRI system)
-        if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
-          await exportExtractor.setHdriLayers(frame.cue.hdriLayers);
-        } else if (frame.cue.lightAngle !== undefined) {
-          // Legacy fallback
-          exportExtractor.setHdriRotation(frame.cue.lightAngle);
+          // Apply HDRI layers (new multi-HDRI system)
+          if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
+            await exportExtractor.setHdriLayers(frame.cue.hdriLayers);
+          } else if (frame.cue.lightAngle !== undefined) {
+            // Legacy fallback
+            exportExtractor.setHdriRotation(frame.cue.lightAngle);
+          }
+
+          // Capture frame
+          const frameDataUrl = exportExtractor.captureFrame("png");
+          const img = new Image();
+          img.src = frameDataUrl;
+          await new Promise((r) => (img.onload = r));
+
+          // Draw with rotation
+          ctx.save();
+          const centerX = frame.transform.x + frame.transform.width / 2;
+          const centerY = frame.transform.y + frame.transform.height / 2;
+          ctx.translate(centerX, centerY);
+          ctx.rotate((frame.transform.rotation * Math.PI) / 180);
+          ctx.drawImage(img, -frame.transform.width / 2, -frame.transform.height / 2, frame.transform.width, frame.transform.height);
+          ctx.restore();
+        } else if (isImageFrame(frame)) {
+          ctx.save();
+          const centerX = frame.transform.x + frame.transform.width / 2;
+          const centerY = frame.transform.y + frame.transform.height / 2;
+          ctx.translate(centerX, centerY);
+          ctx.rotate((frame.transform.rotation * Math.PI) / 180);
+
+          const hw = frame.transform.width / 2;
+          const hh = frame.transform.height / 2;
+
+          // Draw background fill
+          if (frame.imageSettings.backgroundEnabled) {
+            ctx.globalAlpha = frame.imageSettings.backgroundOpacity ?? 1;
+            ctx.fillStyle = frame.imageSettings.backgroundColor;
+            ctx.fillRect(-hw, -hh, frame.transform.width, frame.transform.height);
+            ctx.globalAlpha = 1;
+          }
+
+          // Draw image layer
+          if (frame.imageSettings.imageUrl) {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.src = frame.imageSettings.imageUrl;
+            await new Promise((r) => { img.onload = r; img.onerror = r; });
+            ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
+            const blendMode = frame.imageSettings.blendMode === 'normal' ? 'source-over' : frame.imageSettings.blendMode;
+            ctx.globalCompositeOperation = blendMode as GlobalCompositeOperation;
+            ctx.drawImage(img, -hw, -hh, frame.transform.width, frame.transform.height);
+            ctx.globalAlpha = 1;
+            ctx.globalCompositeOperation = 'source-over';
+          }
+
+          ctx.restore();
         }
-
-        // Capture frame
-        const frameDataUrl = exportExtractor.captureFrame("png");
-        const img = new Image();
-        img.src = frameDataUrl;
-        await new Promise((r) => (img.onload = r));
-
-        // Draw with rotation
-        ctx.save();
-        const centerX = frame.transform.x + frame.transform.width / 2;
-        const centerY = frame.transform.y + frame.transform.height / 2;
-        ctx.translate(centerX, centerY);
-        ctx.rotate((frame.transform.rotation * Math.PI) / 180);
-
-        ctx.drawImage(img, -frame.transform.width / 2, -frame.transform.height / 2, frame.transform.width, frame.transform.height);
-        ctx.restore();
       }
 
-      // Clean up export extractor
+      // Dispose export extractor before restarting live preview
       exportExtractor.dispose();
 
       // Download
@@ -444,6 +541,8 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       console.error(err);
     } finally {
       setIsExporting(false);
+      // Restart live preview now that export extractor is gone
+      extractorRef.current?.startLivePreview();
     }
   };
 
@@ -462,56 +561,99 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
     // Clear with transparency
     ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
 
-    // Get model from main scene
-    const model = sceneManager.getModelForClone();
+    // Reuse shared bulk extractor if one was prepared (avoids re-creating WebGL context per render)
+    const ownExtractor = !bulkExportExtractorRef.current;
+    let exportExtractor: ExtractorSceneManager;
 
-    // Create ONE extractor for export (full resolution)
-    const exportExtractor = new ExtractorSceneManager(2048, 2048);
-    if (model) exportExtractor.setModel(model);
-
-    // Load a default HDRI first (will be overridden per frame)
-    const defaultHdriUrl = `/hdri/${encodeURIComponent("bloem_train_track_clear_2k.hdr")}`;
-    await exportExtractor.loadHDRI(defaultHdriUrl);
-    exportExtractor.setTransparentBackground(true);
-
-    // Filter to cue frames only and render each
-    const cueFrames = reference.frames.filter(isCueFrame);
-    
-    for (const frame of cueFrames) {
-      // Resize extractor for this frame's dimensions
-      exportExtractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
-
-      // Apply frame's cue settings
-      exportExtractor.setModelRotation(frame.cue.spinY);
-      exportExtractor.setCameraPhi(frame.cue.phi, 2);
-      exportExtractor.setCameraZoom(frame.cue.zoom);
-      exportExtractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
-
-      // Apply HDRI layers
-      if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
-        await exportExtractor.setHdriLayers(frame.cue.hdriLayers);
-      } else if (frame.cue.lightAngle !== undefined) {
-        exportExtractor.setHdriRotation(frame.cue.lightAngle);
-      }
-
-      // Capture frame
-      const frameDataUrl = exportExtractor.captureFrame("png");
-      const img = new Image();
-      img.src = frameDataUrl;
-      await new Promise((r) => (img.onload = r));
-
-      // Draw with rotation
-      ctx.save();
-      const centerX = frame.transform.x + frame.transform.width / 2;
-      const centerY = frame.transform.y + frame.transform.height / 2;
-      ctx.translate(centerX, centerY);
-      ctx.rotate((frame.transform.rotation * Math.PI) / 180);
-      ctx.drawImage(img, -frame.transform.width / 2, -frame.transform.height / 2, frame.transform.width, frame.transform.height);
-      ctx.restore();
+    if (bulkExportExtractorRef.current) {
+      exportExtractor = bulkExportExtractorRef.current;
+    } else {
+      // Single render path — stop live preview so export has the GPU to itself
+      extractorRef.current?.stopLivePreview();
+      const model = sceneManager.getModelForClone();
+      exportExtractor = new ExtractorSceneManager(2048, 2048);
+      if (model) exportExtractor.setModel(model);
+      const defaultHdriUrl = `/hdri/${encodeURIComponent("bloem_train_track_clear_2k.hdr")}`;
+      await exportExtractor.loadHDRI(defaultHdriUrl);
+      exportExtractor.setTransparentBackground(true);
     }
 
-    // Clean up export extractor
-    exportExtractor.dispose();
+    // Render all frames in order (cue frames via 3D extractor, image frames drawn directly)
+    try {
+      for (const frame of reference.frames) {
+        if (isCueFrame(frame)) {
+          // Resize extractor for this frame's dimensions
+          exportExtractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
+
+          // Apply frame's cue settings
+          exportExtractor.setModelRotation(frame.cue.spinY);
+          exportExtractor.setCameraPhi(frame.cue.phi, 2);
+          exportExtractor.setCameraZoom(frame.cue.zoom);
+          exportExtractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
+
+          // Apply HDRI layers
+          if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
+            await exportExtractor.setHdriLayers(frame.cue.hdriLayers);
+          } else if (frame.cue.lightAngle !== undefined) {
+            exportExtractor.setHdriRotation(frame.cue.lightAngle);
+          }
+
+          // Capture frame
+          const frameDataUrl = exportExtractor.captureFrame("png");
+          const img = new Image();
+          img.src = frameDataUrl;
+          await new Promise((r) => (img.onload = r));
+
+          // Draw with rotation
+          ctx.save();
+          const centerX = frame.transform.x + frame.transform.width / 2;
+          const centerY = frame.transform.y + frame.transform.height / 2;
+          ctx.translate(centerX, centerY);
+          ctx.rotate((frame.transform.rotation * Math.PI) / 180);
+          ctx.drawImage(img, -frame.transform.width / 2, -frame.transform.height / 2, frame.transform.width, frame.transform.height);
+          ctx.restore();
+        } else if (isImageFrame(frame)) {
+          ctx.save();
+          const centerX = frame.transform.x + frame.transform.width / 2;
+          const centerY = frame.transform.y + frame.transform.height / 2;
+          ctx.translate(centerX, centerY);
+          ctx.rotate((frame.transform.rotation * Math.PI) / 180);
+
+          const hw = frame.transform.width / 2;
+          const hh = frame.transform.height / 2;
+
+          // Draw background fill
+          if (frame.imageSettings.backgroundEnabled) {
+            ctx.globalAlpha = frame.imageSettings.backgroundOpacity ?? 1;
+            ctx.fillStyle = frame.imageSettings.backgroundColor;
+            ctx.fillRect(-hw, -hh, frame.transform.width, frame.transform.height);
+            ctx.globalAlpha = 1;
+          }
+
+          // Draw image layer
+          if (frame.imageSettings.imageUrl) {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.src = frame.imageSettings.imageUrl;
+            await new Promise((r) => { img.onload = r; img.onerror = r; });
+            ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
+            const blendMode = frame.imageSettings.blendMode === 'normal' ? 'source-over' : frame.imageSettings.blendMode;
+            ctx.globalCompositeOperation = blendMode as GlobalCompositeOperation;
+            ctx.drawImage(img, -hw, -hh, frame.transform.width, frame.transform.height);
+            ctx.globalAlpha = 1;
+            ctx.globalCompositeOperation = 'source-over';
+          }
+
+          ctx.restore();
+        }
+      }
+    } finally {
+      if (ownExtractor) {
+        // Dispose the single-use export extractor and restore live preview
+        exportExtractor.dispose();
+        extractorRef.current?.startLivePreview();
+      }
+    }
 
     // Convert canvas to blob
     return new Promise((resolve, reject) => {
@@ -525,8 +667,59 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
     });
   }, [sceneManager]);
 
+  /**
+   * Called before bulk export begins.
+   * Stops the live preview loop and creates a shared ExtractorSceneManager
+   * reused across all renders — avoiding repeated WebGL context creation/destruction.
+   * NOTE: main scene is already paused while this dialog is open; don't re-pause here.
+   */
+  const handleBulkExportStart = useCallback(async () => {
+    if (!sceneManager) return;
+
+    // Stop live preview so export has exclusive GPU access
+    extractorRef.current?.stopLivePreview();
+
+    const model = sceneManager.getModelForClone();
+    const ext = new ExtractorSceneManager(2048, 2048);
+    if (model) ext.setModel(model);
+    const hdriUrl = sceneManager.getCurrentHdriUrl();
+    await ext.loadHDRI(hdriUrl);
+    ext.setTransparentBackground(true);
+    bulkExportExtractorRef.current = ext;
+  }, [sceneManager]);
+
+  /**
+   * Called after bulk export ends (success or error).
+   * Disposes the shared extractor and restarts the live preview.
+   * NOTE: main scene stays paused — it will resume when the dialog closes.
+   */
+  const handleBulkExportEnd = useCallback(() => {
+    bulkExportExtractorRef.current?.dispose();
+    bulkExportExtractorRef.current = null;
+    // Restart live preview now that no export extractor is competing for GPU
+    extractorRef.current?.startLivePreview();
+  }, []);
+
   const selectedFrame = frames.find((f) => f.id === selectedFrameId) || null;
   const [showHelp, setShowHelp] = useState(false);
+
+  // Keyboard shortcuts: Cmd/Ctrl+Z → undo, Shift+Cmd/Ctrl+Z or Ctrl+Y → redo
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      if (e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if ((e.key === "z" && e.shiftKey) || e.key === "y") {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, undo, redo]);
 
   return (
     <>
@@ -538,6 +731,30 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
                 <Camera className="h-5 w-5" />
                 Image Extractor
               </DialogTitle>
+
+              {/* Undo / Redo */}
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={undo}
+                  disabled={!canUndo}
+                  title="Undo (⌘Z)"
+                >
+                  <Undo2 className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={redo}
+                  disabled={!canRedo}
+                  title="Redo (⇧⌘Z)"
+                >
+                  <Redo2 className="h-4 w-4" />
+                </Button>
+              </div>
 
               {/* How to use dropdown */}
               <div className="relative mr-4">
@@ -651,6 +868,8 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
                   onScreenshotCapture={handleScreenshotCapture}
                   extractorRef={extractorRef}
                   extractorReady={extractorReady}
+                  onDragEnd={commitFrames}
+                  previewMode={previewMode}
                 />
 
                 {/* Controls Panel */}
@@ -676,6 +895,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
                   hdriOptions={hdriOptions}
                   onRenameReference={handleRenameReference}
                   onDeleteReference={handleDeleteReference}
+                  onRenameFrame={handleRenameFrame}
                   onRenderReference={handleRenderReference}
                 />
               </div>
@@ -684,7 +904,24 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
 
           {error && <div className="px-6 py-2 text-sm text-destructive">{error}</div>}
 
-          <DialogFooter className="px-6 py-4 border-t flex justify-end">
+          <DialogFooter className="px-6 py-4 border-t flex justify-between">
+            <Button
+              variant={previewMode ? "default" : "outline"}
+              onClick={() => setPreviewMode((v) => !v)}
+              disabled={frames.length === 0}
+            >
+              {previewMode ? (
+                <>
+                  <EyeOff className="h-4 w-4 mr-2" />
+                  Exit Preview
+                </>
+              ) : (
+                <>
+                  <Eye className="h-4 w-4 mr-2" />
+                  Preview Final
+                </>
+              )}
+            </Button>
             <div className="flex gap-2">
               <Button variant="outline" onClick={openSaveDialog} disabled={frames.length === 0}>
                 <Save className="h-4 w-4 mr-2" />
@@ -716,8 +953,10 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       <DownloadMultipleDialog
         open={showDownloadMultipleDialog}
         onOpenChange={setShowDownloadMultipleDialog}
-        productId=""
+        productName={productName}
         onRenderReference={handleRenderReference}
+        onExportStart={handleBulkExportStart}
+        onExportEnd={handleBulkExportEnd}
       />
 
       {/* Save Reference Dialog */}

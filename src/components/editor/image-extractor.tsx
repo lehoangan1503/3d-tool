@@ -5,13 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
-import { Camera, Download, Save, Loader2, HelpCircle, ChevronDown } from "lucide-react";
+import { Camera, Download, Save, Loader2, HelpCircle, ChevronDown, FolderDown } from "lucide-react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import { FrameCanvas, CANVAS_SIZE } from "./frame-canvas";
 import { FrameControlsPanel } from "./frame-controls-panel";
-import type { ExtractorFrame, ExtractorReference, TemplateKey } from "@/types/extractor";
-import { createDefaultFrame, FRAME_TEMPLATES } from "@/types/extractor";
+import { DownloadMultipleDialog } from "./download-multiple-dialog";
+import type { ExtractorFrame, ExtractorReference, TemplateKey, CueFrame, ImageFrame } from "@/types/extractor";
+import { createDefaultFrame, createDefaultImageFrame, FRAME_TEMPLATES, isCueFrame, isImageFrame } from "@/types/extractor";
 
 interface ImageExtractorProps {
   sceneManager: SceneManager | null;
@@ -44,9 +45,11 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
   const [isExporting, setIsExporting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [showDownloadMultipleDialog, setShowDownloadMultipleDialog] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [saveMode, setSaveMode] = useState<'new' | 'update' | 'choose'>('new');
   const [error, setError] = useState<string | null>(null);
+  const [hiddenFrameIds, setHiddenFrameIds] = useState<Set<string>>(new Set());
 
   // Load HDRI options (same as editor-client)
   useEffect(() => {
@@ -197,6 +200,15 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
     setSelectedFrameId(newFrame.id);
   };
 
+  const handleAddImageFrame = () => {
+    const newFrame = createDefaultImageFrame(undefined, frames.length);
+    // Offset new frame slightly to avoid overlap
+    newFrame.transform.x = 524 + frames.length * 50;
+    newFrame.transform.y = 524 + frames.length * 50;
+    setFrames([...frames, newFrame]);
+    setSelectedFrameId(newFrame.id);
+  };
+
   const handleFrameChange = useCallback((updatedFrame: ExtractorFrame) => {
     setFrames((prev) => prev.map((f) => (f.id === updatedFrame.id ? updatedFrame : f)));
   }, []);
@@ -206,6 +218,27 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
     if (selectedFrameId === id) {
       setSelectedFrameId(null);
     }
+    setHiddenFrameIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
+
+  const handleToggleVisibility = (id: string) => {
+    setHiddenFrameIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleReorderFrames = (reordered: ExtractorFrame[]) => {
+    setFrames(reordered.map((f, idx) => ({ ...f, order: idx })));
   };
 
   const handleAlignFrames = () => {
@@ -298,6 +331,39 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
     setShowSaveDialog(true);
   };
 
+  const handleRenameReference = async (id: string, newName: string) => {
+    try {
+      const res = await fetch(`/api/extractor-references/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName }),
+      });
+      if (res.ok) {
+        loadReferences();
+      }
+    } catch (err) {
+      console.error("Failed to rename reference:", err);
+    }
+  };
+
+  const handleDeleteReference = async (id: string) => {
+    try {
+      const res = await fetch(`/api/extractor-references/${id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        if (selectedReferenceId === id) {
+          setSelectedReferenceId(null);
+          setFrames([]);
+          setFrameScreenshots({});
+        }
+        loadReferences();
+      }
+    } catch (err) {
+      console.error("Failed to delete reference:", err);
+    }
+  };
+
   const handleExport = async () => {
     if (!sceneManager || frames.length === 0) return;
 
@@ -326,8 +392,11 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       await exportExtractor.loadHDRI(defaultHdriUrl);
       exportExtractor.setTransparentBackground(true);
 
-      // Render each frame sequentially using the same extractor
+      // Filter to cue frames only and render each
       for (const frame of frames) {
+        // Skip non-cue frames (image frames don't render 3D)
+        if (!isCueFrame(frame)) continue;
+        
         // Resize extractor for this frame's dimensions
         exportExtractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
 
@@ -377,6 +446,84 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       setIsExporting(false);
     }
   };
+
+  // Render a reference to a PNG blob (for batch export)
+  const handleRenderReference = useCallback(async (reference: ExtractorReference): Promise<Blob> => {
+    if (!sceneManager) {
+      throw new Error("Scene manager not available");
+    }
+
+    // Create composite canvas
+    const canvas = document.createElement("canvas");
+    canvas.width = CANVAS_SIZE;
+    canvas.height = CANVAS_SIZE;
+    const ctx = canvas.getContext("2d")!;
+
+    // Clear with transparency
+    ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+    // Get model from main scene
+    const model = sceneManager.getModelForClone();
+
+    // Create ONE extractor for export (full resolution)
+    const exportExtractor = new ExtractorSceneManager(2048, 2048);
+    if (model) exportExtractor.setModel(model);
+
+    // Load a default HDRI first (will be overridden per frame)
+    const defaultHdriUrl = `/hdri/${encodeURIComponent("bloem_train_track_clear_2k.hdr")}`;
+    await exportExtractor.loadHDRI(defaultHdriUrl);
+    exportExtractor.setTransparentBackground(true);
+
+    // Filter to cue frames only and render each
+    const cueFrames = reference.frames.filter(isCueFrame);
+    
+    for (const frame of cueFrames) {
+      // Resize extractor for this frame's dimensions
+      exportExtractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
+
+      // Apply frame's cue settings
+      exportExtractor.setModelRotation(frame.cue.spinY);
+      exportExtractor.setCameraPhi(frame.cue.phi, 2);
+      exportExtractor.setCameraZoom(frame.cue.zoom);
+      exportExtractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
+
+      // Apply HDRI layers
+      if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
+        await exportExtractor.setHdriLayers(frame.cue.hdriLayers);
+      } else if (frame.cue.lightAngle !== undefined) {
+        exportExtractor.setHdriRotation(frame.cue.lightAngle);
+      }
+
+      // Capture frame
+      const frameDataUrl = exportExtractor.captureFrame("png");
+      const img = new Image();
+      img.src = frameDataUrl;
+      await new Promise((r) => (img.onload = r));
+
+      // Draw with rotation
+      ctx.save();
+      const centerX = frame.transform.x + frame.transform.width / 2;
+      const centerY = frame.transform.y + frame.transform.height / 2;
+      ctx.translate(centerX, centerY);
+      ctx.rotate((frame.transform.rotation * Math.PI) / 180);
+      ctx.drawImage(img, -frame.transform.width / 2, -frame.transform.height / 2, frame.transform.width, frame.transform.height);
+      ctx.restore();
+    }
+
+    // Clean up export extractor
+    exportExtractor.dispose();
+
+    // Convert canvas to blob
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error("Failed to create blob"));
+        }
+      }, "image/png");
+    });
+  }, [sceneManager]);
 
   const selectedFrame = frames.find((f) => f.id === selectedFrameId) || null;
   const [showHelp, setShowHelp] = useState(false);
@@ -490,36 +637,48 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
               <Loader2 className="h-8 w-8 animate-spin" />
             </div>
           ) : (
-            <div className="flex-1 flex min-h-0 overflow-hidden">
-              {/* Canvas Area */}
-              <FrameCanvas
-                frames={frames}
-                selectedFrameId={selectedFrameId}
-                onSelectFrame={setSelectedFrameId}
-                onFrameChange={handleFrameChange}
-                sceneManager={sceneManager}
-                frameScreenshots={frameScreenshots}
-                onScreenshotCapture={handleScreenshotCapture}
-                extractorRef={extractorRef}
-                extractorReady={extractorReady}
-              />
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+              <div className="flex flex-1 min-h-0 overflow-hidden">
+                {/* Canvas Area */}
+                <FrameCanvas
+                  frames={frames}
+                  selectedFrameId={selectedFrameId}
+                  hiddenFrameIds={hiddenFrameIds}
+                  onSelectFrame={setSelectedFrameId}
+                  onFrameChange={handleFrameChange}
+                  sceneManager={sceneManager}
+                  frameScreenshots={frameScreenshots}
+                  onScreenshotCapture={handleScreenshotCapture}
+                  extractorRef={extractorRef}
+                  extractorReady={extractorReady}
+                />
 
-              {/* Controls Panel */}
-              <FrameControlsPanel
-                references={references}
-                selectedReferenceId={selectedReferenceId}
-                onSelectReference={handleSelectReference}
-                frames={frames}
-                selectedFrame={selectedFrame}
-                onFrameChange={handleFrameChange}
-                onDeleteFrame={handleDeleteFrame}
-                onAddFrame={handleAddFrame}
-                onDeselectFrame={() => setSelectedFrameId(null)}
-                onAlignFrames={handleAlignFrames}
-                gap={gap}
-                onGapChange={setGap}
-                hdriOptions={hdriOptions}
-              />
+                {/* Controls Panel */}
+                <FrameControlsPanel
+                  references={references}
+                  selectedReferenceId={selectedReferenceId}
+                  onSelectReference={handleSelectReference}
+                  frames={frames}
+                  selectedFrame={selectedFrame}
+                  onFrameChange={handleFrameChange}
+                  onDeleteFrame={handleDeleteFrame}
+                  onAddFrame={handleAddFrame}
+                  onAddImageFrame={handleAddImageFrame}
+                  onDeselectFrame={() => setSelectedFrameId(null)}
+                  selectedFrameId={selectedFrameId}
+                  hiddenFrameIds={hiddenFrameIds}
+                  onSelectFrame={setSelectedFrameId}
+                  onReorderFrames={handleReorderFrames}
+                  onToggleVisibility={handleToggleVisibility}
+                  onAlignFrames={handleAlignFrames}
+                  gap={gap}
+                  onGapChange={setGap}
+                  hdriOptions={hdriOptions}
+                  onRenameReference={handleRenameReference}
+                  onDeleteReference={handleDeleteReference}
+                  onRenderReference={handleRenderReference}
+                />
+              </div>
             </div>
           )}
 
@@ -530,6 +689,10 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
               <Button variant="outline" onClick={openSaveDialog} disabled={frames.length === 0}>
                 <Save className="h-4 w-4 mr-2" />
                 Save Reference
+              </Button>
+              <Button variant="outline" onClick={() => setShowDownloadMultipleDialog(true)}>
+                <FolderDown className="h-4 w-4 mr-2" />
+                Download Multiple
               </Button>
               <Button onClick={handleExport} disabled={isExporting || frames.length === 0 || !sceneManager}>
                 {isExporting ? (
@@ -548,6 +711,14 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Download Multiple Dialog */}
+      <DownloadMultipleDialog
+        open={showDownloadMultipleDialog}
+        onOpenChange={setShowDownloadMultipleDialog}
+        productId=""
+        onRenderReference={handleRenderReference}
+      />
 
       {/* Save Reference Dialog */}
       <Dialog open={showSaveDialog} onOpenChange={(open) => {

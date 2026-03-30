@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -21,14 +21,63 @@ import {
   Lightbulb,
   X,
   Check,
+  ImagePlus,
+  Pencil,
+  ChevronDown,
+  Search,
 } from "lucide-react";
-import type { ExtractorFrame, ExtractorReference, HdriLayer } from "@/types/extractor";
-import { createDefaultHdriLayer } from "@/types/extractor";
+import type { ExtractorFrame, ExtractorReference, HdriLayer, CueFrame, CueSettings, ImageFrame } from "@/types/extractor";
+import { createDefaultHdriLayer, isCueFrame, isImageFrame } from "@/types/extractor";
 import { cn } from "@/lib/utils";
+import { ImageFrameControls } from "./image-frame-controls";
+import { FramesList } from "./frames-list";
+import { useReferenceList } from "@/hooks/use-reference-list";
+import { renderPool } from "@/lib/render-pool";
 
 interface HdriOption {
   id: string;
   label: string;
+}
+
+const PREVIEW_CANVAS = 2048;
+
+function LayoutPreviewSvg({ frames, size }: { frames: ExtractorFrame[]; size: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${PREVIEW_CANVAS} ${PREVIEW_CANVAS}`}
+      style={{ background: "#111827" }}
+      className="rounded block flex-shrink-0"
+    >
+      {frames.map((frame, i) => {
+        const cx = frame.transform.x + frame.transform.width / 2;
+        const cy = frame.transform.y + frame.transform.height / 2;
+        const fill = isImageFrame(frame)
+          ? "#f87171"
+          : `hsl(${(i * 137) % 360}, 65%, 60%)`;
+        return (
+          <rect
+            key={frame.id}
+            x={frame.transform.x}
+            y={frame.transform.y}
+            width={frame.transform.width}
+            height={frame.transform.height}
+            fill={fill}
+            opacity={0.85}
+            stroke="rgba(255,255,255,0.35)"
+            strokeWidth={22}
+            rx={36}
+            transform={
+              frame.transform.rotation
+                ? `rotate(${frame.transform.rotation},${cx},${cy})`
+                : undefined
+            }
+          />
+        );
+      })}
+    </svg>
+  );
 }
 
 interface FrameControlsPanelProps {
@@ -43,7 +92,15 @@ interface FrameControlsPanelProps {
   onFrameChange: (frame: ExtractorFrame) => void;
   onDeleteFrame: (id: string) => void;
   onAddFrame: () => void;
+  onAddImageFrame: () => void;
   onDeselectFrame: () => void;
+  
+  // Frames list (inline panel)
+  selectedFrameId: string | null;
+  hiddenFrameIds: Set<string>;
+  onSelectFrame: (id: string) => void;
+  onReorderFrames: (frames: ExtractorFrame[]) => void;
+  onToggleVisibility: (id: string) => void;
   
   // Layout controls
   onAlignFrames: () => void;
@@ -52,6 +109,13 @@ interface FrameControlsPanelProps {
   
   // HDRI controls
   hdriOptions: HdriOption[];
+
+  // Reference rename / delete
+  onRenameReference?: (id: string, newName: string) => Promise<void>;
+  onDeleteReference?: (id: string) => Promise<void>;
+
+  // Render callback for thumbnails
+  onRenderReference?: (reference: ExtractorReference) => Promise<Blob>;
 }
 
 export function FrameControlsPanel({
@@ -63,15 +127,67 @@ export function FrameControlsPanel({
   onFrameChange,
   onDeleteFrame,
   onAddFrame,
+  onAddImageFrame,
   onDeselectFrame,
+  selectedFrameId,
+  hiddenFrameIds,
+  onSelectFrame,
+  onReorderFrames,
+  onToggleVisibility,
   onAlignFrames,
   gap,
   onGapChange,
   hdriOptions,
+  onRenameReference,
+  onDeleteReference,
+  onRenderReference,
 }: FrameControlsPanelProps) {
   // Track which HDRI layer is being edited (by layer id)
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const [addHdriOpen, setAddHdriOpen] = useState(false);
+
+  // Reference rename / delete state
+  const [isRenamingRef, setIsRenamingRef] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [confirmDeleteRef, setConfirmDeleteRef] = useState(false);
+
+  // Reference popover state
+  const [refPopoverOpen, setRefPopoverOpen] = useState(false);
+  const refThumbnailUrls = useRef<Map<string, string>>(new Map());
+  const [refThumbVersion, setRefThumbVersion] = useState(0);
+
+  const {
+    references: popoverRefs,
+    isLoading: popoverLoading,
+    isFetchingMore: popoverFetchingMore,
+    hasMore: popoverHasMore,
+    search: popoverSearch,
+    setSearch: setPopoverSearch,
+    sentinelRef: popoverSentinelRef,
+  } = useReferenceList({ enabled: refPopoverOpen });
+
+  // Render thumbnails for newly-arrived references in the popover
+  useEffect(() => {
+    if (!onRenderReference || popoverRefs.length === 0) return;
+    const unrendered = popoverRefs.filter((r) => !refThumbnailUrls.current.has(r.id));
+    if (!unrendered.length) return;
+    renderPool(unrendered, onRenderReference, (idx, url) => {
+      refThumbnailUrls.current.set(unrendered[idx].id, url);
+      setRefThumbVersion((v) => v + 1);
+    }, 3);
+  }, [popoverRefs, onRenderReference]);
+
+  // Clear thumbnail cache when popover closes
+  useEffect(() => {
+    if (!refPopoverOpen) {
+      refThumbnailUrls.current.forEach((u) => URL.revokeObjectURL(u));
+      refThumbnailUrls.current.clear();
+      setRefThumbVersion(0);
+    }
+  }, [refPopoverOpen]);
+
+  // refThumbVersion read to subscribe to updates
+  void refThumbVersion;
   
   // Local state for slider drag (for smooth UI, only commit on release)
   const [localRotationX, setLocalRotationX] = useState<number | null>(null);
@@ -85,8 +201,8 @@ export function FrameControlsPanel({
     });
   };
 
-  const updateCue = (key: keyof ExtractorFrame['cue'], value: number | string | HdriLayer[]) => {
-    if (!selectedFrame) return;
+  const updateCue = (key: keyof CueSettings, value: number | string | HdriLayer[]) => {
+    if (!selectedFrame || !isCueFrame(selectedFrame)) return;
     onFrameChange({
       ...selectedFrame,
       cue: { ...selectedFrame.cue, [key]: value },
@@ -99,8 +215,8 @@ export function FrameControlsPanel({
     return isNaN(parsed) ? fallback : parsed;
   };
 
-  // HDRI Layer management
-  const hdriLayers = selectedFrame?.cue.hdriLayers || [];
+  // HDRI Layer management (only for CueFrame)
+  const hdriLayers = selectedFrame && isCueFrame(selectedFrame) ? selectedFrame.cue.hdriLayers || [] : [];
   const canAddHdri = hdriLayers.length < 2;
   
   // Auto-select first layer for editing if none selected
@@ -145,6 +261,22 @@ export function FrameControlsPanel({
     return hdriType.split('_').slice(0, 2).join(' ');
   };
 
+  const submitRename = async () => {
+    if (!selectedReferenceId || !renameValue.trim() || !onRenameReference) return;
+    await onRenameReference(selectedReferenceId, renameValue.trim());
+    setIsRenamingRef(false);
+  };
+
+  const submitDelete = async () => {
+    if (!selectedReferenceId || !onDeleteReference) return;
+    await onDeleteReference(selectedReferenceId);
+    setConfirmDeleteRef(false);
+  };
+
+  const selectedRefName = selectedReferenceId
+    ? references.find((r) => r.id === selectedReferenceId)?.name ?? "Unnamed"
+    : null;
+
   // No frame selected - show reference/template controls
   if (!selectedFrame) {
     return (
@@ -152,29 +284,188 @@ export function FrameControlsPanel({
         {/* Reference Selector */}
         <div className="space-y-2">
           <Label className="text-sm font-medium">Load Reference</Label>
-          <Select
-            value={selectedReferenceId || "none"}
-            onValueChange={(v) => onSelectReference(v === "none" ? null : v)}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select a saved layout..." />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">New Layout</SelectItem>
-              {references.map((ref) => (
-                <SelectItem key={ref.id} value={ref.id}>
-                  {ref.name} ({ref.frames.length} frames)
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Popover open={refPopoverOpen} onOpenChange={setRefPopoverOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="w-full justify-between text-sm font-normal">
+                <span className="truncate">{selectedRefName ?? "New Layout"}</span>
+                <ChevronDown className="h-4 w-4 ml-2 flex-shrink-0" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-72 p-2 space-y-2" align="start">
+              {/* Search */}
+              <div className="relative">
+                <Search className="absolute left-2 top-2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  value={popoverSearch}
+                  onChange={(e) => setPopoverSearch(e.target.value)}
+                  placeholder="Search..."
+                  className="pl-7 h-8 text-sm"
+                />
+              </div>
+
+              {/* New Layout option */}
+              <button
+                className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-accent"
+                onClick={() => {
+                  setIsRenamingRef(false);
+                  setConfirmDeleteRef(false);
+                  onSelectReference(null);
+                  setRefPopoverOpen(false);
+                }}
+              >
+                + New Layout
+              </button>
+
+              {/* Scrollable thumbnail list */}
+              <div className="max-h-64 overflow-y-auto space-y-1">
+                {popoverLoading && popoverRefs.length === 0 ? (
+                  <div className="flex justify-center py-4">
+                    <Search className="h-4 w-4 animate-pulse text-muted-foreground" />
+                  </div>
+                ) : popoverRefs.length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-4">No references found</p>
+                ) : (
+                  popoverRefs.map((ref) => {
+                    const thumbUrl = refThumbnailUrls.current.get(ref.id);
+                    return (
+                      <button
+                        key={ref.id}
+                        className={`w-full flex items-center gap-2 p-1.5 rounded text-left hover:bg-accent ${
+                          selectedReferenceId === ref.id ? "bg-accent" : ""
+                        }`}
+                        onClick={() => {
+                          setIsRenamingRef(false);
+                          setConfirmDeleteRef(false);
+                          onSelectReference(ref.id);
+                          setRefPopoverOpen(false);
+                        }}
+                      >
+                        <div className="flex-shrink-0 w-12 h-12 rounded overflow-hidden bg-[#111827]">
+                          {thumbUrl ? (
+                            <img src={thumbUrl} alt={ref.name} className="w-full h-full object-contain" />
+                          ) : (
+                            <LayoutPreviewSvg frames={ref.frames} size={48} />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium truncate">{ref.name}</div>
+                          <div className="text-xs text-muted-foreground">{ref.frames.length} frames</div>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+
+                {/* Infinite scroll sentinel */}
+                {popoverHasMore && (
+                  <div ref={popoverSentinelRef} className="py-1 flex justify-center">
+                    {popoverFetchingMore && (
+                      <Search className="h-3 w-3 animate-pulse text-muted-foreground" />
+                    )}
+                  </div>
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
+
+          {/* Selected reference name + rename / delete */}
+          <div className="flex items-center gap-1 min-h-[28px] px-0.5">
+            {isRenamingRef ? (
+              <>
+                <Input
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  className="h-7 flex-1 text-sm"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submitRename();
+                    if (e.key === "Escape") setIsRenamingRef(false);
+                  }}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-green-500 hover:text-green-400"
+                  onClick={submitRename}
+                  disabled={!renameValue.trim()}
+                >
+                  <Check className="w-3.5 h-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => setIsRenamingRef(false)}
+                >
+                  <X className="w-3.5 h-3.5" />
+                </Button>
+              </>
+            ) : confirmDeleteRef ? (
+              <>
+                <span className="flex-1 text-xs text-destructive">Delete this reference?</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-destructive hover:text-destructive"
+                  onClick={submitDelete}
+                >
+                  <Check className="w-3.5 h-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => setConfirmDeleteRef(false)}
+                >
+                  <X className="w-3.5 h-3.5" />
+                </Button>
+              </>
+            ) : (
+              <>
+                <span className="flex-1 text-sm truncate text-muted-foreground">
+                  {selectedRefName ?? "New Layout"}
+                </span>
+                {selectedReferenceId && (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                      title="Rename"
+                      onClick={() => {
+                        setRenameValue(selectedRefName ?? "");
+                        setIsRenamingRef(true);
+                      }}
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                      title="Delete"
+                      onClick={() => setConfirmDeleteRef(true)}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  </>
+                )}
+              </>
+            )}
+          </div>
         </div>
 
-        {/* Add Frame */}
-        <Button onClick={onAddFrame} className="w-full">
-          <Plus className="w-4 h-4 mr-2" />
-          Add Frame
-        </Button>
+        {/* Add Frame / Add Image */}
+        <div className="flex flex-col gap-2">
+          <Button onClick={onAddFrame} className="w-full">
+            <Plus className="w-4 h-4 mr-2" />
+            Add Frame
+          </Button>
+          <Button onClick={onAddImageFrame} variant="outline" className="w-full">
+            <ImagePlus className="w-4 h-4 mr-2" />
+            Add Image
+          </Button>
+        </div>
 
         {/* Layout Controls */}
         <div className="space-y-3 pt-4 border-t">
@@ -200,10 +491,32 @@ export function FrameControlsPanel({
           </div>
         </div>
 
-        {/* Frame Count Info */}
-        <div className="text-xs text-muted-foreground mt-auto">
-          {frames.length} frame{frames.length !== 1 ? 's' : ''} in canvas
-        </div>
+        {/* Frames in canvas */}
+        {frames.length > 0 && (
+          <div className="space-y-2 pt-4 border-t">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                {frames.length} frame{frames.length !== 1 ? 's' : ''} in canvas
+              </Label>
+              <span className="text-[10px] text-muted-foreground/60">drag to reorder</span>
+            </div>
+            <FramesList
+              frames={frames}
+              selectedFrameId={selectedFrameId}
+              hiddenFrameIds={hiddenFrameIds}
+              onSelectFrame={onSelectFrame}
+              onReorderFrames={onReorderFrames}
+              onToggleVisibility={onToggleVisibility}
+              onDeleteFrame={onDeleteFrame}
+            />
+          </div>
+        )}
+
+        {frames.length === 0 && (
+          <div className="text-xs text-muted-foreground mt-auto">
+            No frames yet
+          </div>
+        )}
       </div>
     );
   }
@@ -307,115 +620,118 @@ export function FrameControlsPanel({
         </div>
       </div>
 
-      {/* Cue Controls */}
-      <div className="space-y-3 pt-4 border-t">
-        <Label className="text-sm font-medium">Cue Controls</Label>
-        
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">Spin Y (°)</Label>
-            <Input
-              type="text"
-              inputMode="numeric"
-              value={Math.round(selectedFrame.cue.spinY * (180 / Math.PI))}
-              onChange={(e) => updateCue('spinY', parseNumber(e.target.value, 0) * (Math.PI / 180))}
-              className="h-8"
-            />
+      {/* Cue Controls - only show for CueFrame */}
+      {isCueFrame(selectedFrame) && (
+        <div className="space-y-3 pt-4 border-t">
+          <Label className="text-sm font-medium">Cue Controls</Label>
+          
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Spin Y (°)</Label>
+              <Input
+                type="text"
+                inputMode="numeric"
+                value={Math.round(selectedFrame.cue.spinY * (180 / Math.PI))}
+                onChange={(e) => updateCue('spinY', parseNumber(e.target.value, 0) * (Math.PI / 180))}
+                className="h-8"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Camera (°)</Label>
+              <Input
+                type="text"
+                inputMode="numeric"
+                value={Math.round(selectedFrame.cue.phi * (180 / Math.PI))}
+                onChange={(e) => updateCue('phi', parseNumber(e.target.value, 90) * (Math.PI / 180))}
+                className="h-8"
+              />
+            </div>
           </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">Camera (°)</Label>
-            <Input
-              type="text"
-              inputMode="numeric"
-              value={Math.round(selectedFrame.cue.phi * (180 / Math.PI))}
-              onChange={(e) => updateCue('phi', parseNumber(e.target.value, 90) * (Math.PI / 180))}
-              className="h-8"
-            />
-          </div>
-        </div>
 
-        <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground flex items-center gap-1">
-            <ZoomIn className="w-3 h-3" /> Zoom
-          </Label>
-          <div className="flex items-center gap-2">
-            <Input
-              type="text"
-              inputMode="decimal"
-              value={selectedFrame.cue.zoom.toFixed(1)}
-              onChange={(e) => updateCue('zoom', Math.max(0.5, Math.min(5, parseNumber(e.target.value, 1))))}
-              className="h-8"
-            />
-            <span className="text-sm text-muted-foreground">x</span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground flex items-center gap-1">
-              <Crosshair className="w-3 h-3" /> Offset X
+              <ZoomIn className="w-3 h-3" /> Zoom
             </Label>
-            <Input
-              type="text"
-              inputMode="decimal"
-              value={selectedFrame.cue.offsetX.toFixed(2)}
-              onChange={(e) => updateCue('offsetX', parseNumber(e.target.value, 0))}
-              className="h-8"
-            />
+            <div className="flex items-center gap-2">
+              <Input
+                type="text"
+                inputMode="decimal"
+                value={selectedFrame.cue.zoom.toFixed(1)}
+                onChange={(e) => updateCue('zoom', Math.max(0.5, Math.min(5, parseNumber(e.target.value, 1))))}
+                className="h-8"
+              />
+              <span className="text-sm text-muted-foreground">x</span>
+            </div>
           </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">Offset Y</Label>
-            <Input
-              type="text"
-              inputMode="decimal"
-              value={selectedFrame.cue.offsetY.toFixed(2)}
-              onChange={(e) => updateCue('offsetY', parseNumber(e.target.value, 0))}
-              className="h-8"
-            />
+
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                <Crosshair className="w-3 h-3" /> Offset X
+              </Label>
+              <Input
+                type="text"
+                inputMode="decimal"
+                value={selectedFrame.cue.offsetX.toFixed(2)}
+                onChange={(e) => updateCue('offsetX', parseNumber(e.target.value, 0))}
+                className="h-8"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Offset Y</Label>
+              <Input
+                type="text"
+                inputMode="decimal"
+                value={selectedFrame.cue.offsetY.toFixed(2)}
+                onChange={(e) => updateCue('offsetY', parseNumber(e.target.value, 0))}
+                className="h-8"
+              />
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* HDRI / Light Controls */}
-      <div className="space-y-3 pt-4 border-t">
-        <Label className="text-sm font-medium flex items-center gap-2">
-          <Lightbulb className="w-4 h-4" /> Lighting
-        </Label>
-        
-        {/* Add HDRI Button */}
-        <Popover open={addHdriOpen} onOpenChange={setAddHdriOpen}>
-          <PopoverTrigger asChild>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              className="w-full"
-              disabled={!canAddHdri}
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              Add HDRI {hdriLayers.length > 0 && `(${hdriLayers.length}/2)`}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-64 p-2" align="start">
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground px-2">Select HDRI to add</Label>
-              {hdriOptions.map((option) => (
-                <Button
-                  key={option.id}
-                  variant="ghost"
-                  size="sm"
-                  className="w-full justify-start text-sm h-8"
-                  onClick={() => addHdriLayer(option.id)}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </div>
-          </PopoverContent>
-        </Popover>
-        
-        {/* Active HDRI Badges */}
-        {hdriLayers.length > 0 && (
-          <div className="space-y-2">
+      {/* HDRI / Light Controls - only show for CueFrame */}
+      {isCueFrame(selectedFrame) && (
+        <div className="space-y-3 pt-4 border-t">
+          <Label className="text-sm font-medium flex items-center gap-2">
+            <Lightbulb className="w-4 h-4" /> Lighting
+          </Label>
+          
+          {/* Add HDRI Button */}
+          <Popover open={addHdriOpen} onOpenChange={setAddHdriOpen}>
+            <PopoverTrigger asChild>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="w-full"
+                disabled={!canAddHdri}
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Add HDRI {hdriLayers.length > 0 && `(${hdriLayers.length}/2)`}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-64 p-2" align="start">
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground px-2">Select HDRI to add</Label>
+                {hdriOptions.map((option) => (
+                  <Button
+                    key={option.id}
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start text-sm h-8"
+                    onClick={() => addHdriLayer(option.id)}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+          
+          {/* Active HDRI Badges */}
+          {hdriLayers.length > 0 && (
+            <div className="space-y-2">
             <Label className="text-xs text-muted-foreground">Active HDRIs (click to edit)</Label>
             <div className="flex flex-wrap gap-2">
               {hdriLayers.map((layer) => (
@@ -506,7 +822,19 @@ export function FrameControlsPanel({
             </div>
           </div>
         )}
-      </div>
+        </div>
+      )}
+
+      {/* Image Frame Controls - only show for ImageFrame */}
+      {isImageFrame(selectedFrame) && (
+        <div className="space-y-3 pt-4 border-t">
+          <Label className="text-sm font-medium">Image Controls</Label>
+          <ImageFrameControls 
+            frame={selectedFrame as ImageFrame} 
+            onFrameChange={onFrameChange} 
+          />
+        </div>
+      )}
 
       {/* Click outside hint */}
       <div className="text-xs text-muted-foreground mt-auto">

@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import type { ExtractorReference, ExtractorFrame } from "@/types/extractor";
+import type { ExtractorReference, ExtractorFrame, CueFrame, ImageFrame } from "@/types/extractor";
+import { isCueFrame, isImageFrame } from "@/types/extractor";
 
-// GET /api/extractor-references - List all user's references
-export async function GET() {
+// GET /api/extractor-references - List user's references with pagination + search
+export async function GET(request: Request) {
   try {
     const supabase = await createClient();
     
@@ -13,8 +14,13 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const { searchParams } = new URL(request.url);
+    const limit  = Math.min(parseInt(searchParams.get("limit")  ?? "20", 10), 50);
+    const offset = Math.max(parseInt(searchParams.get("offset") ?? "0",  10), 0);
+    const search = (searchParams.get("search") ?? "").trim();
+
     // Fetch references with frames
-    const { data: references, error } = await supabase
+    let query = supabase
       .from("extractor_references")
       .select(`
         id,
@@ -24,6 +30,7 @@ export async function GET() {
         extractor_frames (
           id,
           frame_order,
+          frame_type,
           pos_x,
           pos_y,
           width,
@@ -34,19 +41,27 @@ export async function GET() {
           cue_zoom,
           cue_offset_x,
           cue_offset_y,
-          light_angle
+          light_angle,
+          hdri_layers,
+          image_settings
         )
-      `)
+      `, { count: "exact" })
       .eq("user_id", user.id)
-      .order("updated_at", { ascending: false });
+      .order("updated_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (search) {
+      query = query.ilike("name", `%${search}%`);
+    }
+
+    const { data: references, error, count } = await query;
 
     if (error) {
       console.error("Fetch references error:", error);
       return NextResponse.json({ error: "Failed to fetch references" }, { status: 500 });
     }
 
-    // Transform to match our types - map DB columns to new CueSettings (spinY, phi)
-    // Apply migration for old data to new hdriLayers format
+    // Transform to match our types - handle both cue and image frame types
     const result: ExtractorReference[] = (references || []).map((ref) => ({
       id: ref.id,
       name: ref.name,
@@ -54,8 +69,38 @@ export async function GET() {
       updatedAt: ref.updated_at,
       frames: (ref.extractor_frames || [])
         .sort((a: any, b: any) => a.frame_order - b.frame_order)
-        .map((f: any) => {
-          // Parse hdriLayers from DB if available, otherwise migrate from lightAngle
+        .map((f: any): ExtractorFrame => {
+          const frameType = f.frame_type || 'cue';
+          
+          const baseFrame = {
+            id: f.id,
+            order: f.frame_order,
+            transform: {
+              x: f.pos_x,
+              y: f.pos_y,
+              width: f.width,
+              height: f.height,
+              rotation: f.rotation,
+            },
+          };
+          
+          if (frameType === 'image') {
+            // Image frame
+            return {
+              ...baseFrame,
+              frameType: 'image' as const,
+              imageSettings: f.image_settings || {
+                imageUrl: null,
+                backgroundColor: '#ffffff',
+                objectFit: 'cover',
+                rotation3d: { x: 0, y: 0, z: 0 },
+                opacity: 1,
+                blendMode: 'normal',
+              },
+            } as ImageFrame;
+          }
+          
+          // Cue frame (default)
           let hdriLayers = f.hdri_layers;
           if (!hdriLayers || (Array.isArray(hdriLayers) && hdriLayers.length === 0)) {
             // Migrate old format to new
@@ -68,29 +113,22 @@ export async function GET() {
           }
           
           return {
-            id: f.id,
-            order: f.frame_order,
-            transform: {
-              x: f.pos_x,
-              y: f.pos_y,
-              width: f.width,
-              height: f.height,
-              rotation: f.rotation,
-            },
+            ...baseFrame,
+            frameType: 'cue' as const,
             cue: {
-              spinY: f.cue_orbit_x ?? 0,  // Model Y rotation
-              phi: f.cue_orbit_y ?? Math.PI / 2, // Camera vertical angle
+              spinY: f.cue_orbit_x ?? 0,
+              phi: f.cue_orbit_y ?? Math.PI / 2,
               zoom: f.cue_zoom,
               offsetX: f.cue_offset_x,
               offsetY: f.cue_offset_y,
               hdriLayers,
-              lightAngle: f.light_angle, // Keep for backward compat
+              lightAngle: f.light_angle,
             },
-          };
+          } as CueFrame;
         }),
     }));
 
-    return NextResponse.json(result);
+    return NextResponse.json({ items: result, total: count ?? 0 });
   } catch (error) {
     console.error("GET /api/extractor-references error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
@@ -126,23 +164,47 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Failed to create reference" }, { status: 500 });
     }
 
-    // Create frames - map new CueSettings to DB columns
-    const frameRows = frames.map((f, idx) => ({
-      reference_id: reference.id,
-      frame_order: f.order ?? idx,
-      pos_x: f.transform.x,
-      pos_y: f.transform.y,
-      width: f.transform.width,
-      height: f.transform.height,
-      rotation: f.transform.rotation,
-      cue_orbit_x: f.cue.spinY,  // Store spinY in cue_orbit_x
-      cue_orbit_y: f.cue.phi,    // Store phi in cue_orbit_y
-      cue_zoom: f.cue.zoom,
-      cue_offset_x: f.cue.offsetX,
-      cue_offset_y: f.cue.offsetY,
-      light_angle: f.cue.hdriLayers?.[0]?.rotationY ?? f.cue.lightAngle ?? 0, // Backward compat
-      hdri_layers: f.cue.hdriLayers, // Store full hdriLayers array
-    }));
+    // Create frames - handle both cue and image frame types
+    const frameRows = frames.map((f, idx) => {
+      const baseRow = {
+        reference_id: reference.id,
+        frame_order: f.order ?? idx,
+        frame_type: f.frameType,
+        pos_x: f.transform.x,
+        pos_y: f.transform.y,
+        width: f.transform.width,
+        height: f.transform.height,
+        rotation: f.transform.rotation,
+      };
+      
+      if (isCueFrame(f)) {
+        return {
+          ...baseRow,
+          cue_orbit_x: f.cue.spinY,
+          cue_orbit_y: f.cue.phi,
+          cue_zoom: f.cue.zoom,
+          cue_offset_x: f.cue.offsetX,
+          cue_offset_y: f.cue.offsetY,
+          light_angle: f.cue.hdriLayers?.[0]?.rotationY ?? f.cue.lightAngle ?? 0,
+          hdri_layers: f.cue.hdriLayers,
+          image_settings: null,
+        };
+      } else if (isImageFrame(f)) {
+        return {
+          ...baseRow,
+          cue_orbit_x: 0,
+          cue_orbit_y: Math.PI / 2,
+          cue_zoom: 1,
+          cue_offset_x: 0,
+          cue_offset_y: 0,
+          light_angle: 0,
+          hdri_layers: null,
+          image_settings: f.imageSettings,
+        };
+      }
+      
+      return baseRow;
+    });
 
     const { error: framesError } = await supabase
       .from("extractor_frames")

@@ -169,7 +169,12 @@ export class SceneManager {
   private restoreAutoRotateAfterDrag: boolean | null = null;
   private modelDragRotateSpeed = 0.005; // radians per pixel
   private cameraOrbitSpeed = 0.005; // radians per pixel (vertical drag)
-  private wheelZoomSpeed = 0.001; // world-units per wheel deltaY pixel (approx)
+  private wheelZoomSpeed = 0.00075; // world-units per wheel deltaY pixel
+  private pinchZoomSpeed = 0.00225; // world units per pixel of pinch distance change
+
+  // FOV clamp (used by adjustCameraFOV helper)
+  private minFOV = 15;
+  private maxFOV = 80;
 
   private cameraMinPolarAngle = 0.001; // ~0° (top view) without hitting the pole singularity
   private cameraMaxPolarAngle = Math.PI - 0.001; // ~180° (bottom view)
@@ -179,12 +184,14 @@ export class SceneManager {
   private inertiaGain = 0.18; // scale down release velocity vs. drag delta
   private maxSpinVelocityY = 0.025; // radians per frame
   private maxOrbitVelocityPhi = 0.025; // radians per frame
-  private maxZoomVelocity = 0.05; // world units per frame
 
   private spinVelocityY = 0;
   private orbitVelocityPhi = 0;
-  private zoomVelocity = 0;
   private lastFrameTime = 0;
+
+  // Pinch-zoom tracking (mobile)
+  private pointerPositions = new Map<number, { x: number; y: number }>();
+  private lastPinchDistance = 0;
 
   // Zoom-out cap: do not allow zooming out beyond the initial load distance.
   private maxZoomOutRadius: number | null = null;
@@ -836,6 +843,7 @@ export class SceneManager {
     this.orbitVelocityPhi = 0;
 
     this.activePointers.add(event.pointerId);
+    this.pointerPositions.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
     // Only start drag rotation on primary/left mouse button (or touch).
     if (event.pointerType !== "touch" && event.button !== 0) return;
@@ -870,6 +878,26 @@ export class SceneManager {
   };
 
   private onTurntablePointerMove = (event: PointerEvent) => {
+    // Update stored position for this pointer (needed for pinch zoom).
+    this.pointerPositions.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+    // Pinch zoom: two active touch pointers — apply zoom directly from distance delta.
+    if (this.activePointers.size === 2 && event.pointerType === "touch") {
+      const [id1, id2] = [...this.activePointers];
+      const p1 = this.pointerPositions.get(id1);
+      const p2 = this.pointerPositions.get(id2);
+      if (p1 && p2) {
+        const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+        if (this.lastPinchDistance > 0) {
+          const delta = this.lastPinchDistance - dist; // positive = fingers closer = zoom out
+          this.applyCameraOrbitAndZoom(0, delta * this.pinchZoomSpeed);
+          this.controls.update();
+        }
+        this.lastPinchDistance = dist;
+      }
+      return;
+    }
+
     if (!this.isDraggingModel || this.dragPointerId !== event.pointerId) return;
     if (!this.model) return;
     if (this.activePointers.size !== 1) return;
@@ -895,13 +923,15 @@ export class SceneManager {
 
     // Vertical drag: orbit the CAMERA up/down around the cue.
     if (deltaPhi !== 0) {
-      this.applyCameraOrbitAndZoom(deltaPhi, 0);
+      this.applyCameraOrbitAndZoom(deltaPhi);
       this.controls.update();
     }
   };
 
   private onTurntablePointerUp = (event: PointerEvent) => {
     this.activePointers.delete(event.pointerId);
+    this.pointerPositions.delete(event.pointerId);
+    if (this.activePointers.size < 2) this.lastPinchDistance = 0;
 
     if (this.dragPointerId === event.pointerId) {
       this.stopModelDrag();
@@ -911,20 +941,18 @@ export class SceneManager {
   private onTurntableWheel = (event: WheelEvent) => {
     if (this.isDisposed) return;
 
-    // Custom zoom inertia (also prevents OrbitControls wheel zoom on this element).
     event.preventDefault();
     event.stopImmediatePropagation();
 
     let dy = event.deltaY;
-    // Normalize line/page scroll to pixel-ish values.
     if (event.deltaMode === 1) dy *= 16;
     if (event.deltaMode === 2) dy *= 100;
 
-    const wheelZoomSpeed = 0.001; // Reduced from 0.0015 for finer control
-    this.zoomVelocity = THREE.MathUtils.clamp(this.zoomVelocity + dy * wheelZoomSpeed, -this.maxZoomVelocity, this.maxZoomVelocity);
+    this.applyCameraOrbitAndZoom(0, dy * this.wheelZoomSpeed);
+    this.controls.update();
   };
 
-  private applyCameraOrbitAndZoom(deltaPhi: number, deltaRadius: number) {
+  private applyCameraOrbitAndZoom(deltaPhi: number, deltaRadius: number = 0) {
     const target = this.controls.target;
     const offset = this.camera.position.clone().sub(target);
     const spherical = new THREE.Spherical().setFromVector3(offset);
@@ -945,6 +973,15 @@ export class SceneManager {
     offset.setFromSpherical(spherical);
     this.camera.position.copy(target).add(offset);
     this.camera.lookAt(target);
+  }
+
+  private adjustCameraFOV(deltaFOV: number) {
+    this.camera.fov = THREE.MathUtils.clamp(
+      this.camera.fov + deltaFOV,
+      this.minFOV,
+      this.maxFOV
+    );
+    this.camera.updateProjectionMatrix();
   }
 
   private handleResize = () => {
@@ -969,15 +1006,14 @@ export class SceneManager {
       this.model.rotation.y += this.autoRotateSpeed;
     }
 
-    // Inertia: continue motion after drag/wheel and slow down gradually.
+    // Inertia: continue motion after drag and slow down gradually.
     if (this.model && !this.isDraggingModel && this.spinVelocityY !== 0) {
       this.model.rotation.y += this.spinVelocityY;
     }
 
     const phiDelta = !this.isDraggingModel ? this.orbitVelocityPhi : 0;
-    const radiusDelta = this.zoomVelocity;
-    if (phiDelta !== 0 || radiusDelta !== 0) {
-      this.applyCameraOrbitAndZoom(phiDelta, radiusDelta);
+    if (phiDelta !== 0) {
+      this.applyCameraOrbitAndZoom(phiDelta);
     }
 
     // Decay velocities
@@ -985,12 +1021,10 @@ export class SceneManager {
       this.spinVelocityY *= damping;
       this.orbitVelocityPhi *= damping;
     }
-    this.zoomVelocity *= damping;
 
     // Snap to zero to avoid tiny perpetual drift
     if (Math.abs(this.spinVelocityY) < 1e-5) this.spinVelocityY = 0;
     if (Math.abs(this.orbitVelocityPhi) < 1e-5) this.orbitVelocityPhi = 0;
-    if (Math.abs(this.zoomVelocity) < 1e-4) this.zoomVelocity = 0;
 
     this.controls.update();
     this.renderer.render(this.scene, this.camera);

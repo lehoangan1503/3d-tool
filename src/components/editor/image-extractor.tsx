@@ -163,7 +163,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
 
   const loadReferences = async () => {
     try {
-      const res = await fetch("/api/extractor-references?limit=50");
+      const res = await fetch("/api/extractor-references?limit=40");
       if (res.ok) {
         const { items } = await res.json();
         setReferences(items);

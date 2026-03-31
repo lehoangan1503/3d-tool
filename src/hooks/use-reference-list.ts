@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { ExtractorReference } from "@/types/extractor";
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 40;
 const SEARCH_DEBOUNCE_MS = 300;
 
 export interface UseReferenceListOptions {

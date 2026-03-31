@@ -132,8 +132,12 @@ export function InteractiveFrame({
     dragTypeRef.current = null;
   }, []);
 
+  const lastWheelRef = useRef(0);
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
+    const now = Date.now();
+    if (now - lastWheelRef.current < 150) return; // throttle — prevents trackpad momentum inertia
+    lastWheelRef.current = now;
     const zoomDelta = e.deltaY > 0 ? -0.1 : 0.1;
     const newZoom = Math.max(0.5, Math.min(5, position.zoom + zoomDelta));
     onPositionChange({ ...position, zoom: newZoom });

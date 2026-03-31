@@ -428,9 +428,13 @@ export function FrameCanvas({
     setActiveHandle(null);
   }, [isDragging, onDragEnd]);
 
+  const lastWheelRef = useRef(0);
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (!selectedFrame) return;
     e.preventDefault();
+    const now = Date.now();
+    if (now - lastWheelRef.current < 150) return; // throttle — prevents trackpad momentum inertia
+    lastWheelRef.current = now;
     const zoomDelta = e.deltaY > 0 ? -0.1 : 0.1;
     onFrameChange({
       ...selectedFrame,

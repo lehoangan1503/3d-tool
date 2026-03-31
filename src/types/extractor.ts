@@ -343,6 +343,14 @@ export interface ExtractorReference {
   updatedAt?: string;
 }
 
+export interface ExtractorReferenceGroup {
+  id: string;
+  name: string;
+  referenceIds: string[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 /** Default frame transform */
 export const DEFAULT_FRAME_TRANSFORM: FrameTransform = {
   x: 724,       // Centered horizontally (2048-600)/2

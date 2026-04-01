@@ -18,16 +18,20 @@ export async function GET(request: Request) {
     const offset = Math.max(parseInt(searchParams.get("offset") ?? "0",  10), 0);
     const search = (searchParams.get("search") ?? "").trim();
     const type   = searchParams.get("type") ?? "";
+    const sort   = searchParams.get("sort") ?? "";
 
     let query = supabase
       .from("products")
       .select("*", { count: "exact" })
-      .eq("user_id", user.id)
-      .order("updated_at", { ascending: false })
-      .range(offset, offset + limit - 1);
+      .eq("user_id", user.id);
 
     if (search) query = query.ilike("name", `%${search}%`);
     if (type && ["smooth", "leather"].includes(type)) query = query.eq("type", type);
+    if (sort === "asc") query = query.order("name", { ascending: true });
+    else if (sort === "desc") query = query.order("name", { ascending: false });
+    else query = query.order("updated_at", { ascending: false });
+
+    query = query.range(offset, offset + limit - 1);
 
     const { data, error, count } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });

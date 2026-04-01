@@ -20,7 +20,7 @@ export default async function DashboardPage() {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="bg-card/80 backdrop-blur-sm border-b sticky top-0 z-10">
+      <header className="bg-card/80 backdrop-blur-sm border-b sticky top-0 z-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-18 ">
             <h1 className="text-xl font-semibold text-foreground">Cue Customizer</h1>

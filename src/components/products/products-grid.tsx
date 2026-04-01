@@ -9,6 +9,7 @@ import { ProductCard } from "@/components/products/product-card";
 import type { Product, ProductType } from "@/types/product";
 
 type FilterType = "all" | ProductType;
+type SortOrder = "asc" | "desc" | null;
 
 const PAGE_SIZE = 20;
 
@@ -20,6 +21,7 @@ export function ProductsGrid() {
   const [search, setSearchRaw] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<FilterType>("all");
+  const [sortOrder, setSortOrder] = useState<SortOrder>(null);
   const offsetRef = useRef(0);
   const observerRef = useRef<IntersectionObserver | null>(null);
 
@@ -29,13 +31,14 @@ export function ProductsGrid() {
     return () => clearTimeout(t);
   }, [search]);
 
-  const fetchPage = useCallback(async (offset: number, currentSearch: string, currentType: FilterType, append: boolean) => {
+  const fetchPage = useCallback(async (offset: number, currentSearch: string, currentType: FilterType, currentSort: SortOrder, append: boolean) => {
     if (offset === 0) setIsLoading(true);
     else setIsFetchingMore(true);
     try {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
       if (currentSearch) params.set("search", currentSearch);
       if (currentType !== "all") params.set("type", currentType);
+      if (currentSort) params.set("sort", currentSort);
 
       const res = await fetch(`/api/products?${params}`);
       if (!res.ok) throw new Error("Failed");
@@ -52,12 +55,12 @@ export function ProductsGrid() {
     }
   }, []);
 
-  // Reset + refetch when search/filter changes
+  // Reset + refetch when search/filter/sort changes
   useEffect(() => {
     offsetRef.current = 0;
     setProducts([]);
-    fetchPage(0, debouncedSearch, typeFilter, false);
-  }, [debouncedSearch, typeFilter, fetchPage]);
+    fetchPage(0, debouncedSearch, typeFilter, sortOrder, false);
+  }, [debouncedSearch, typeFilter, sortOrder, fetchPage]);
 
   const hasMore = products.length < total;
 
@@ -69,21 +72,21 @@ export function ProductsGrid() {
       observerRef.current = new IntersectionObserver(
         ([entry]) => {
           if (entry.isIntersecting && !isFetchingMore && hasMore) {
-            fetchPage(offsetRef.current, debouncedSearch, typeFilter, true);
+            fetchPage(offsetRef.current, debouncedSearch, typeFilter, sortOrder, true);
           }
         },
         { threshold: 0.1 }
       );
       observerRef.current.observe(el);
     },
-    [isFetchingMore, hasMore, fetchPage, debouncedSearch, typeFilter]
+    [isFetchingMore, hasMore, fetchPage, debouncedSearch, typeFilter, sortOrder]
   );
 
   const handleProductCreated = useCallback(() => {
     offsetRef.current = 0;
     setProducts([]);
-    fetchPage(0, debouncedSearch, typeFilter, false);
-  }, [fetchPage, debouncedSearch, typeFilter]);
+    fetchPage(0, debouncedSearch, typeFilter, sortOrder, false);
+  }, [fetchPage, debouncedSearch, typeFilter, sortOrder]);
 
   const handleProductDeleted = useCallback((id: string) => {
     setProducts((prev) => prev.filter((p) => p.id !== id));
@@ -96,12 +99,17 @@ export function ProductsGrid() {
     { value: "leather", label: "Leather" },
   ];
 
+  const sortOptions: { value: "asc" | "desc"; label: string }[] = [
+    { value: "asc", label: "A-Z" },
+    { value: "desc", label: "Z-A" },
+  ];
+
   return (
     <div>
       {/* Sticky toolbar */}
 
       <div
-        className="sticky top-18 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 pb-3 mb-6 -mx-4 px-4  z-0"
+        className="sticky top-18 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 pb-3 mb-6 -mx-4 px-4  z-10"
         style={{ borderColor: "rgba(255, 255, 255, 0) !important" }}
       >
         <div className="flex items-center justify-between gap-3 pt-4">
@@ -118,6 +126,17 @@ export function ProductsGrid() {
             {filters.map((f) => (
               <Button key={f.value} variant={typeFilter === f.value ? "default" : "outline"} size="sm" onClick={() => setTypeFilter(f.value)}>
                 {f.label}
+              </Button>
+            ))}
+            <div className="w-px bg-border self-stretch mx-1" />
+            {sortOptions.map((s) => (
+              <Button
+                key={s.value}
+                variant={sortOrder === s.value ? "default" : "outline"}
+                size="sm"
+                onClick={() => setSortOrder((prev) => (prev === s.value ? null : s.value))}
+              >
+                {s.label}
               </Button>
             ))}
           </div>

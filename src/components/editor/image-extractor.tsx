@@ -16,6 +16,41 @@ import { createDefaultFrame, createDefaultImageFrame, FRAME_TEMPLATES, isCueFram
 import { resolveStorageUrl } from "@/lib/resolve-storage-url";
 import { useUndoable } from "@/hooks/use-undoable";
 
+/**
+ * Draws an image onto a 2D canvas context respecting object-fit behaviour,
+ * matching the CSS preview in StaticFrame.
+ * The destination rect is centred on (0, 0) — caller must translate first.
+ */
+function drawImageWithObjectFit(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  destW: number,
+  destH: number,
+  fit: string = 'cover',
+): void {
+  const iw = img.naturalWidth;
+  const ih = img.naturalHeight;
+  const x = -destW / 2;
+  const y = -destH / 2;
+
+  if (fit === 'cover') {
+    const scale = Math.max(destW / iw, destH / ih);
+    const sw = destW / scale;
+    const sh = destH / scale;
+    const sx = (iw - sw) / 2;
+    const sy = (ih - sh) / 2;
+    ctx.drawImage(img, sx, sy, sw, sh, x, y, destW, destH);
+  } else if (fit === 'contain') {
+    const scale = Math.min(destW / iw, destH / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    ctx.drawImage(img, x + (destW - dw) / 2, y + (destH - dh) / 2, dw, dh);
+  } else {
+    // fill / stretch (default)
+    ctx.drawImage(img, x, y, destW, destH);
+  }
+}
+
 interface ImageExtractorProps {
   sceneManager: SceneManager | null;
   productName: string;
@@ -520,7 +555,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
             ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
             const blendMode = frame.imageSettings.blendMode === 'normal' ? 'source-over' : frame.imageSettings.blendMode;
             ctx.globalCompositeOperation = blendMode as GlobalCompositeOperation;
-            ctx.drawImage(img, -hw, -hh, frame.transform.width, frame.transform.height);
+            drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? 'cover');
             ctx.globalAlpha = 1;
             ctx.globalCompositeOperation = 'source-over';
           }
@@ -640,7 +675,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
             ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
             const blendMode = frame.imageSettings.blendMode === 'normal' ? 'source-over' : frame.imageSettings.blendMode;
             ctx.globalCompositeOperation = blendMode as GlobalCompositeOperation;
-            ctx.drawImage(img, -hw, -hh, frame.transform.width, frame.transform.height);
+            drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? 'cover');
             ctx.globalAlpha = 1;
             ctx.globalCompositeOperation = 'source-over';
           }

@@ -1,37 +1,13 @@
 import * as THREE from 'three';
-import type { BackgroundLayer } from '@/types/video-studio';
+import type { BackgroundFrame, SurfaceConfig } from '@/types/video-studio';
 import { GRADIENT_PRESETS } from '@/types/video-studio';
 
-/** Map BlendMode string to Canvas2D globalCompositeOperation */
-function mapBlendMode(mode: string): GlobalCompositeOperation {
-  const map: Record<string, GlobalCompositeOperation> = {
-    normal: "source-over",
-    multiply: "multiply",
-    screen: "screen",
-    overlay: "overlay",
-    darken: "darken",
-    lighten: "lighten",
-    "color-dodge": "color-dodge",
-    "color-burn": "color-burn",
-    "hard-light": "hard-light",
-    "soft-light": "soft-light",
-  };
-  return map[mode] || "source-over";
-}
-
-/** Map BlendMode to THREE.Blending for 3D mesh material */
-export function mapThreeBlendMode(mode: string): THREE.Blending {
-  if (mode === "additive") return THREE.AdditiveBlending;
-  if (mode === "multiply") return THREE.MultiplyBlending;
-  return THREE.NormalBlending;
-}
-
 /**
- * Composite background layers into a CanvasTexture.
- * Layers composite bottom-to-top using Canvas2D blend modes.
+ * Composite surface frames into a CanvasTexture.
+ * Frames render bottom-to-top (array order = z-order) with position, rotation, scale, and opacity.
  */
-export function compositeBackgroundLayers(
-  layers: BackgroundLayer[],
+export function compositeSurfaceFrames(
+  surface: SurfaceConfig,
   width: number = 1024,
   height: number = 1024,
   loadedImages?: Map<string, HTMLImageElement>
@@ -41,31 +17,42 @@ export function compositeBackgroundLayers(
   canvas.height = height;
   const ctx = canvas.getContext("2d")!;
 
-  ctx.clearRect(0, 0, width, height);
+  // Fill with base color
+  ctx.fillStyle = surface.baseColor;
+  ctx.fillRect(0, 0, width, height);
 
-  const enabledLayers = layers.filter((l) => l.enabled);
-
-  for (const layer of enabledLayers) {
+  // Render frames bottom-to-top (array order = z-order)
+  const enabledFrames = surface.frames.filter(f => f.enabled);
+  for (const frame of enabledFrames) {
     ctx.save();
-    ctx.globalAlpha = layer.opacity;
-    ctx.globalCompositeOperation = mapBlendMode(layer.blendMode);
+    ctx.globalAlpha = frame.opacity;
 
-    if (layer.type === "color" && layer.color) {
-      ctx.fillStyle = layer.color;
-      ctx.fillRect(0, 0, width, height);
+    // Frame center in canvas pixels
+    const cx = frame.x * width;
+    const cy = frame.y * height;
 
-    } else if (layer.type === "gradient" && layer.gradient) {
-      const preset = GRADIENT_PRESETS.find((p) => p.id === layer.gradient!.presetId);
+    // Frame dimensions in canvas pixels
+    const fw = frame.width * width;
+    const fh = frame.height * height;
+
+    // Translate to center, rotate, then draw centered
+    ctx.translate(cx, cy);
+    ctx.rotate((frame.rotation * Math.PI) / 180);
+
+    if (frame.type === "color" && frame.color) {
+      ctx.fillStyle = frame.color;
+      ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
+
+    } else if (frame.type === "gradient" && frame.gradient) {
+      const preset = GRADIENT_PRESETS.find(p => p.id === frame.gradient!.presetId);
       if (preset) {
-        const angleDeg = layer.gradient.angle ?? preset.angle;
+        const angleDeg = frame.gradient.angle ?? preset.angle;
         const angleRad = (angleDeg * Math.PI) / 180;
-        const cx = width / 2;
-        const cy = height / 2;
-        const len = Math.sqrt(width * width + height * height) / 2;
-        const x0 = cx - Math.cos(angleRad) * len;
-        const y0 = cy - Math.sin(angleRad) * len;
-        const x1 = cx + Math.cos(angleRad) * len;
-        const y1 = cy + Math.sin(angleRad) * len;
+        const len = Math.sqrt(fw * fw + fh * fh) / 2;
+        const x0 = -Math.cos(angleRad) * len;
+        const y0 = -Math.sin(angleRad) * len;
+        const x1 = Math.cos(angleRad) * len;
+        const y1 = Math.sin(angleRad) * len;
 
         const grad = ctx.createLinearGradient(x0, y0, x1, y1);
         if (preset.colors.length === 2) {
@@ -77,13 +64,13 @@ export function compositeBackgroundLayers(
           grad.addColorStop(1, preset.colors[2]);
         }
         ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, width, height);
+        ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
       }
 
-    } else if (layer.type === "image" && layer.imageUrl && loadedImages) {
-      const img = loadedImages.get(layer.imageUrl);
+    } else if (frame.type === "image" && frame.imageUrl && loadedImages) {
+      const img = loadedImages.get(frame.imageUrl);
       if (img) {
-        drawImageWithFit(ctx, img, width, height, layer.objectFit || "cover");
+        ctx.drawImage(img, -fw / 2, -fh / 2, fw, fh);
       }
     }
 
@@ -95,53 +82,27 @@ export function compositeBackgroundLayers(
   return texture;
 }
 
-function drawImageWithFit(
-  ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement,
-  cw: number,
-  ch: number,
-  fit: string
-) {
-  const iw = img.naturalWidth;
-  const ih = img.naturalHeight;
-
-  if (fit === "cover") {
-    const scale = Math.max(cw / iw, ch / ih);
-    const sw = iw * scale;
-    const sh = ih * scale;
-    ctx.drawImage(img, (cw - sw) / 2, (ch - sh) / 2, sw, sh);
-  } else if (fit === "contain") {
-    const scale = Math.min(cw / iw, ch / ih);
-    const sw = iw * scale;
-    const sh = ih * scale;
-    ctx.drawImage(img, (cw - sw) / 2, (ch - sh) / 2, sw, sh);
-  } else {
-    // "custom" — stretch to fill
-    ctx.drawImage(img, 0, 0, cw, ch);
-  }
-}
-
-/** Preload images for image layers — returns Map<url, HTMLImageElement> */
-export async function preloadLayerImages(
-  layers: BackgroundLayer[]
+/** Preload images for image frames — returns Map<url, HTMLImageElement> */
+export async function preloadFrameImages(
+  frames: BackgroundFrame[]
 ): Promise<Map<string, HTMLImageElement>> {
   const map = new Map<string, HTMLImageElement>();
-  const imageLayers = layers.filter(
-    (l) => l.type === "image" && l.imageUrl && l.enabled
+  const imageFrames = frames.filter(
+    (f) => f.type === "image" && f.imageUrl && f.enabled
   );
 
   await Promise.all(
-    imageLayers.map(
-      (l) =>
+    imageFrames.map(
+      (f) =>
         new Promise<void>((resolve) => {
           const img = new Image();
           img.crossOrigin = "anonymous";
           img.onload = () => {
-            map.set(l.imageUrl!, img);
+            map.set(f.imageUrl!, img);
             resolve();
           };
           img.onerror = () => resolve();
-          img.src = l.imageUrl!;
+          img.src = f.imageUrl!;
         })
     )
   );

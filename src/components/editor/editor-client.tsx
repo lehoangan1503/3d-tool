@@ -7,7 +7,7 @@ import { CuePreview } from "@/components/editor/cue-preview";
 import { LeatherPicker } from "@/components/editor/leather-picker";
 import { SurfaceUploader } from "@/components/editor/surface-uploader";
 import { ImageExtractor } from "@/components/editor/image-extractor";
-import { VideoExtractor } from "@/components/editor/video-extractor";
+import { VideoStudio } from "@/components/editor/video-studio";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1490,9 +1490,10 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
         open={showImageExtractor}
         onClose={() => setShowImageExtractor(false)}
       />
-      <VideoExtractor
+      <VideoStudio
         sceneManager={sceneManager}
         productName={product.name}
+        productId={product.id}
         open={showVideoExtractor}
         onClose={() => setShowVideoExtractor(false)}
       />

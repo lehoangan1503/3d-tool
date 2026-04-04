@@ -525,13 +525,8 @@ export type TemplateKey = keyof typeof FRAME_TEMPLATES;
 export type {
   VideoStudioConfig,
   VideoStudioTemplate,
-  VideoCuePosition,
-  CameraPosition,
   EasingConfig,
-  BackgroundLayer,
-  BackgroundLayerType,
   GradientPreset,
   GradientCategory,
-  CameraMovementPreset,
   EasingPreset,
 } from './video-studio';

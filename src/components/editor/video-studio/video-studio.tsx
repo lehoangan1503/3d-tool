@@ -27,14 +27,15 @@ import {
   Loader2,
   AlertCircle,
   RotateCcw,
+  Eye,
+  Camera,
 } from "lucide-react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import {
   ExtractorSceneManager,
   HDRI_OPTIONS_FALLBACK,
 } from "@/lib/three/extractor-scene-manager";
-import type { ExtractorQuality } from "@/types/extractor";
-import type { VideoStudioConfig } from "@/types/video-studio";
+import type { VideoStudioConfig, CameraKeyframe } from "@/types/video-studio";
 import {
   DEFAULT_STUDIO_CONFIG,
   computeVideoDuration,
@@ -43,6 +44,7 @@ import { CameraControlsPanel } from "./camera-controls-panel";
 import { CueSetupPanel } from "./cue-setup-panel";
 import { BackgroundPanel } from "./background-panel";
 import { StudioTemplateSelector } from "./studio-template-selector";
+import { SceneViewControls } from "./scene-view-controls";
 
 interface VideoStudioProps {
   sceneManager: SceneManager | null;
@@ -67,11 +69,19 @@ export function VideoStudio({
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isRebuilding, setIsRebuilding] = useState(false);
+  const [viewMode, setViewMode] = useState<"scene" | "camera">("camera");
 
   const extractorRef = useRef<ExtractorSceneManager | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const videoUrlRef = useRef<string | null>(null);
   const blobUrlsRef = useRef<string[]>([]);
+  const sceneViewControlsRef = useRef<SceneViewControls | null>(null);
+
+  // Keep a ref to config so SceneViewControls callback always reads latest
+  const configRef = useRef(config);
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
 
   const updateConfig = useCallback(
     <K extends keyof VideoStudioConfig>(key: K, value: VideoStudioConfig[K]) => {
@@ -83,6 +93,8 @@ export function VideoStudio({
   // Setup ExtractorSceneManager when dialog opens
   useEffect(() => {
     if (!open || !sceneManager) return;
+
+    let sceneViewAnimId: number | null = null;
 
     const setup = async () => {
       sceneManager.pauseAnimation();
@@ -104,19 +116,44 @@ export function VideoStudio({
 
       const canvas = extractor.getCanvas();
       if (previewContainerRef.current && canvas) {
+        canvas.style.width = "100%";
+        canvas.style.height = "100%";
+        canvas.style.objectFit = "contain";
         previewContainerRef.current.innerHTML = "";
         previewContainerRef.current.appendChild(canvas);
         const rect = previewContainerRef.current.getBoundingClientRect();
         extractor.resize(rect.width, rect.height);
+
+        // Initialize scene view and controls
+        extractor.initSceneView();
+        sceneViewControlsRef.current = new SceneViewControls(
+          extractor,
+          canvas,
+          (kf: CameraKeyframe) => {
+            setConfig((prev) => ({ ...prev, cameraStart: kf }));
+          },
+          () => configRef.current.cueConfig
+        );
       }
 
       await extractor.setupStudioFromStudioConfig(config);
       extractor.startStudioVideoPreview(config);
+
+      // Animation loop for scene view controls damping
+      const sceneViewAnimate = () => {
+        if (!extractorRef.current) return;
+        sceneViewControlsRef.current?.update();
+        sceneViewAnimId = requestAnimationFrame(sceneViewAnimate);
+      };
+      sceneViewAnimate();
     };
 
     setup();
 
     return () => {
+      if (sceneViewAnimId) cancelAnimationFrame(sceneViewAnimId);
+      sceneViewControlsRef.current?.dispose();
+      sceneViewControlsRef.current = null;
       extractorRef.current?.stopVideoPreview();
       extractorRef.current?.dispose();
       extractorRef.current = null;
@@ -125,6 +162,12 @@ export function VideoStudio({
     // Only re-run on open/close, not on config changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, sceneManager]);
+
+  // Sync view mode to extractor
+  useEffect(() => {
+    if (!extractorRef.current) return;
+    extractorRef.current.setViewMode(viewMode);
+  }, [viewMode]);
 
   // Debounced preview updates on config change
   useEffect(() => {
@@ -135,7 +178,7 @@ export function VideoStudio({
     return () => clearTimeout(timer);
   }, [config, open]);
 
-  // Rebuild scene for expensive changes (backgrounds, HDRI, shadow)
+  // Rebuild scene for expensive changes (backgrounds, HDRI, shadow, instance count)
   const rebuildScene = useCallback(async () => {
     if (!extractorRef.current) return;
     setIsRebuilding(true);
@@ -155,7 +198,7 @@ export function VideoStudio({
     }, 500);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.wallLayers, config.tableLayers, config.hdriFile, config.shadow.enabled, open]);
+  }, [config.wallSurface, config.tableSurface, config.hdriFile, config.shadow.enabled, config.cueConfig.instances.length, open]);
 
   // Cleanup blob URLs on unmount
   useEffect(() => {
@@ -165,12 +208,25 @@ export function VideoStudio({
     };
   }, []);
 
+  const handleSetStart = useCallback(() => {
+    if (!extractorRef.current) return;
+    const kf = extractorRef.current.getCameraKeyframeFromPosition(config.cueConfig);
+    setConfig((prev) => ({ ...prev, cameraStart: kf }));
+  }, [config.cueConfig]);
+
+  const handleSetEnd = useCallback(() => {
+    if (!extractorRef.current) return;
+    const kf = extractorRef.current.getCameraKeyframeFromPosition(config.cueConfig);
+    setConfig((prev) => ({ ...prev, cameraEnd: kf }));
+  }, [config.cueConfig]);
+
   const handleRecord = async () => {
     if (!extractorRef.current) return;
     setIsRecording(true);
     setProgress(0);
     setError(null);
     setVideoUrl(null);
+    sceneViewControlsRef.current?.setEnabled(false);
 
     try {
       const blob = await extractorRef.current.startStudioRecording(config, (p) =>
@@ -184,6 +240,7 @@ export function VideoStudio({
       setError(err instanceof Error ? err.message : "Recording failed");
     } finally {
       setIsRecording(false);
+      sceneViewControlsRef.current?.setEnabled(true);
       // Restart preview at container size
       if (extractorRef.current && previewContainerRef.current) {
         const rect = previewContainerRef.current.getBoundingClientRect();
@@ -237,7 +294,27 @@ export function VideoStudio({
 
         <div className="flex flex-1 overflow-hidden">
           {/* Left: Preview */}
-          <div className="flex-1 flex flex-col p-4">
+          <div className="flex-1 flex flex-col p-4 min-w-0">
+            {/* View Mode Toggle */}
+            <div className="flex items-center gap-2 px-4 pb-2">
+              <Button
+                variant={viewMode === "camera" ? "secondary" : "outline"}
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => setViewMode("camera")}
+              >
+                <Camera className="h-3 w-3 mr-1" /> Camera View
+              </Button>
+              <Button
+                variant={viewMode === "scene" ? "secondary" : "outline"}
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => setViewMode("scene")}
+              >
+                <Eye className="h-3 w-3 mr-1" /> Scene View
+              </Button>
+            </div>
+
             <div
               ref={previewContainerRef}
               className="flex-1 bg-black rounded-lg overflow-hidden relative"
@@ -248,6 +325,19 @@ export function VideoStudio({
                 </div>
               )}
             </div>
+
+            {/* Key hints for scene view */}
+            {viewMode === "scene" && (
+              <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground px-1">
+                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">X</span>
+                <span>X-axis</span>
+                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">Y</span>
+                <span>Y-axis</span>
+                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">Z</span>
+                <span>Z-axis</span>
+                <span className="text-muted-foreground/60">— hold + drag to move camera</span>
+              </div>
+            )}
 
             {/* Progress bar during recording */}
             {isRecording && (
@@ -285,7 +375,7 @@ export function VideoStudio({
           </div>
 
           {/* Right: Controls */}
-          <div className="w-80 border-l border-border overflow-y-auto p-4 space-y-4">
+          <div className="w-80 shrink-0 border-l border-border overflow-y-auto p-4 space-y-4">
             {/* Template selector */}
             <StudioTemplateSelector
               productId={productId}
@@ -300,7 +390,7 @@ export function VideoStudio({
                 <Select
                   value={config.quality}
                   onValueChange={(v) =>
-                    updateConfig("quality", v as ExtractorQuality)
+                    updateConfig("quality", v as VideoStudioConfig["quality"])
                   }
                 >
                   <SelectTrigger className="h-8">
@@ -325,22 +415,28 @@ export function VideoStudio({
 
             {/* Cue Setup */}
             <CueSetupPanel
-              cuePosition={config.cuePosition}
-              onChange={(pos) => updateConfig("cuePosition", pos)}
+              cueConfig={config.cueConfig}
+              onChange={(cueConfig) => updateConfig("cueConfig", cueConfig)}
             />
 
             <div className="border-t border-border/50" />
 
             {/* Camera Controls */}
             <CameraControlsPanel
+              cameraDirection={config.cameraDirection}
               cameraStart={config.cameraStart}
               cameraEnd={config.cameraEnd}
               cameraSpeed={config.cameraSpeed}
+              lockDistance={config.lockDistance}
               easing={config.easing}
-              onCameraStartChange={(s) => updateConfig("cameraStart", s)}
-              onCameraEndChange={(e) => updateConfig("cameraEnd", e)}
-              onCameraSpeedChange={(s) => updateConfig("cameraSpeed", s)}
+              onDirectionChange={(d) => updateConfig("cameraDirection", d)}
+              onStartChange={(s) => updateConfig("cameraStart", s)}
+              onEndChange={(e) => updateConfig("cameraEnd", e)}
+              onSpeedChange={(s) => updateConfig("cameraSpeed", s)}
+              onLockDistanceChange={(l) => updateConfig("lockDistance", l)}
               onEasingChange={(e) => updateConfig("easing", e)}
+              onSetStart={handleSetStart}
+              onSetEnd={handleSetEnd}
             />
 
             <div className="border-t border-border/50" />
@@ -376,12 +472,10 @@ export function VideoStudio({
 
             {/* Background */}
             <BackgroundPanel
-              wallLayers={config.wallLayers}
-              tableLayers={config.tableLayers}
-              onWallLayersChange={(layers) => updateConfig("wallLayers", layers)}
-              onTableLayersChange={(layers) =>
-                updateConfig("tableLayers", layers)
-              }
+              wallSurface={config.wallSurface}
+              tableSurface={config.tableSurface}
+              onWallSurfaceChange={(s) => updateConfig("wallSurface", s)}
+              onTableSurfaceChange={(s) => updateConfig("tableSurface", s)}
             />
 
             <div className="border-t border-border/50" />

@@ -16,9 +16,9 @@ import {
   createFabricTexture,
   createStudioBackdrop,
 } from './studio-background';
-import type { VideoStudioConfig, CameraPosition } from '@/types/video-studio';
+import type { VideoStudioConfig, CameraKeyframe, CueConfig, CueInstance } from '@/types/video-studio';
 import { computeVideoDuration, createEasingFunction, VIDEO_QUALITY_PRESETS } from '@/types/video-studio';
-import { compositeBackgroundLayers, preloadLayerImages } from './background-compositor';
+import { compositeSurfaceFrames, preloadFrameImages } from './background-compositor';
 
 // Available HDRI options (same as editor-client)
 export const HDRI_OPTIONS_FALLBACK = [
@@ -95,6 +95,11 @@ export class ExtractorSceneManager {
   private backgroundLayerMeshes: THREE.Mesh[] = [];
   private videoPreviewConfigRef: VideoExtractorConfig | null = null;
   private studioConfigRef: VideoStudioConfig | null = null;
+
+  // Multi-cue instancing
+  private instancedMeshes: THREE.InstancedMesh[] = [];
+  private sourceModelRef: THREE.Group | null = null;
+  private currentCueConfig: CueConfig | null = null;
 
   // Animation state
   private animationFrameId: number | null = null;
@@ -1708,11 +1713,159 @@ export class ExtractorSceneManager {
     this.camera.updateProjectionMatrix();
   }
 
+  // ---------------------------------------------------------------------------
+  // Multi-cue InstancedMesh support
+  // ---------------------------------------------------------------------------
+
+  setupCueInstances(config: CueConfig): void {
+    this.clearInstancedMeshes();
+    this.currentCueConfig = config;
+
+    if (!this.clonedModel) return;
+
+    const instances = config.instances;
+
+    if (instances.length <= 1) {
+      // Single cue — use regular model
+      this.clonedModel.visible = true;
+      if (instances.length === 1) {
+        const inst = instances[0];
+        this.clonedModel.position.set(inst.positionX, inst.positionY, inst.positionZ);
+        this.clonedModel.scale.setScalar(inst.scale);
+      }
+      return;
+    }
+
+    // Multiple cues — use InstancedMesh
+    this.clonedModel.visible = false;
+
+    // Collect child meshes
+    const childMeshes: THREE.Mesh[] = [];
+    this.clonedModel.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        childMeshes.push(child);
+      }
+    });
+
+    const dummy = new THREE.Object3D();
+
+    for (const childMesh of childMeshes) {
+      const im = new THREE.InstancedMesh(
+        childMesh.geometry,
+        childMesh.material,
+        instances.length
+      );
+      im.castShadow = true;
+      im.receiveShadow = false;
+
+      for (let i = 0; i < instances.length; i++) {
+        const inst = instances[i];
+        dummy.position.set(inst.positionX, inst.positionY, inst.positionZ);
+        dummy.scale.setScalar(inst.scale);
+        dummy.rotation.set(0, config.spinY, 0);
+        dummy.updateMatrix();
+        im.setMatrixAt(i, dummy.matrix);
+      }
+      im.instanceMatrix.needsUpdate = true;
+      this.instancedMeshes.push(im);
+      this.scene.add(im);
+    }
+  }
+
+  updateCueInstances(config: CueConfig): void {
+    this.currentCueConfig = config;
+
+    if (!this.clonedModel) return;
+
+    const instances = config.instances;
+
+    if (instances.length <= 1 && this.instancedMeshes.length === 0) {
+      // Single cue using regular model
+      if (instances.length === 1) {
+        const inst = instances[0];
+        this.clonedModel.position.set(inst.positionX, inst.positionY, inst.positionZ);
+        this.clonedModel.scale.setScalar(inst.scale);
+        this.clonedModel.rotation.y = config.spinY;
+      }
+      return;
+    }
+
+    // Update instanced mesh matrices
+    if (this.instancedMeshes.length === 0) {
+      // Need to recreate — instance count changed
+      this.setupCueInstances(config);
+      return;
+    }
+
+    // Check if instance count changed
+    if (this.instancedMeshes[0]?.count !== instances.length) {
+      this.setupCueInstances(config);
+      return;
+    }
+
+    const dummy = new THREE.Object3D();
+
+    for (const im of this.instancedMeshes) {
+      for (let i = 0; i < instances.length; i++) {
+        const inst = instances[i];
+        dummy.position.set(inst.positionX, inst.positionY, inst.positionZ);
+        dummy.scale.setScalar(inst.scale);
+        dummy.rotation.set(0, config.spinY, 0);
+        dummy.updateMatrix();
+        im.setMatrixAt(i, dummy.matrix);
+      }
+      im.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  spinCueInstances(spinDelta: number): void {
+    if (!this.currentCueConfig) return;
+
+    const instances = this.currentCueConfig.instances;
+
+    if (instances.length <= 1 && this.instancedMeshes.length === 0) {
+      // Regular model
+      if (this.clonedModel) {
+        this.clonedModel.rotation.y += spinDelta;
+      }
+      return;
+    }
+
+    const dummy = new THREE.Object3D();
+    const currentY = (this.currentCueConfig.spinY || 0) + spinDelta;
+    // Update tracking
+    this.currentCueConfig = { ...this.currentCueConfig, spinY: currentY };
+
+    for (const im of this.instancedMeshes) {
+      for (let i = 0; i < instances.length; i++) {
+        const inst = instances[i];
+        dummy.position.set(inst.positionX, inst.positionY, inst.positionZ);
+        dummy.scale.setScalar(inst.scale);
+        dummy.rotation.set(0, currentY, 0);
+        dummy.updateMatrix();
+        im.setMatrixAt(i, dummy.matrix);
+      }
+      im.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  private clearInstancedMeshes(): void {
+    for (const im of this.instancedMeshes) {
+      this.scene.remove(im);
+      im.dispose();
+    }
+    this.instancedMeshes = [];
+    if (this.clonedModel) {
+      this.clonedModel.visible = true;
+    }
+  }
+
   dispose() {
     this.isDisposed = true;
     this.stopLivePreview();
     this.stopRecording();
     this.clearStudioElements();
+    this.clearInstancedMeshes();
 
     if (this.clonedModel) {
       this.scene.remove(this.clonedModel);

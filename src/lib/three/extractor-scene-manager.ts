@@ -101,6 +101,11 @@ export class ExtractorSceneManager {
   private sourceModelRef: THREE.Group | null = null;
   private currentCueConfig: CueConfig | null = null;
 
+  // Scene view (god camera)
+  private godCamera: THREE.PerspectiveCamera | null = null;
+  private cameraHelper: THREE.CameraHelper | null = null;
+  private isSceneView: boolean = false;
+
   // Animation state
   private animationFrameId: number | null = null;
   private mediaRecorder: MediaRecorder | null = null;
@@ -1428,9 +1433,10 @@ export class ExtractorSceneManager {
    * Render the current scene (call after making changes to see updates)
    */
   render(): void {
-    if (!this.isDisposed) {
-      this.renderer.render(this.scene, this.camera);
-    }
+    if (this.isDisposed) return;
+    if (this.cameraHelper) this.cameraHelper.update();
+    const cam = this.isSceneView && this.godCamera ? this.godCamera : this.camera;
+    this.renderer.render(this.scene, cam);
   }
 
   /**
@@ -1704,6 +1710,130 @@ export class ExtractorSceneManager {
     return this.renderer.domElement;
   }
 
+  // ---------------------------------------------------------------------------
+  // Scene view — god camera + CameraHelper frustum
+  // ---------------------------------------------------------------------------
+
+  /** Initialize scene view with god camera + studio camera frustum helper */
+  initSceneView(): void {
+    this.godCamera = new THREE.PerspectiveCamera(60, this.width / this.height, 0.1, 200);
+    this.godCamera.position.set(0, 8, 15);
+    this.godCamera.lookAt(0, 2, 0);
+
+    this.cameraHelper = new THREE.CameraHelper(this.camera);
+    this.cameraHelper.visible = false;
+    this.scene.add(this.cameraHelper);
+  }
+
+  setViewMode(mode: "scene" | "camera"): void {
+    this.isSceneView = mode === "scene";
+    if (this.cameraHelper) {
+      this.cameraHelper.visible = this.isSceneView;
+    }
+  }
+
+  getViewMode(): "scene" | "camera" {
+    return this.isSceneView ? "scene" : "camera";
+  }
+
+  getGodCamera(): THREE.PerspectiveCamera | null {
+    return this.godCamera;
+  }
+
+  /** Position studio camera from a CameraKeyframe — cuePercent maps to Y along cue length */
+  setCameraFromKeyframe(keyframe: CameraKeyframe, cueConfig: CueConfig): void {
+    const mainCue = cueConfig.instances.find(i => i.isMain) || cueConfig.instances[0];
+    if (!mainCue) return;
+
+    const cueBottom = mainCue.positionY - 1.2;
+    const cueHeight = mainCue.scale * 1.3;
+    const cueTop = cueBottom + cueHeight;
+
+    const targetY = cueBottom + (cueTop - cueBottom) * (keyframe.cuePercent / 100);
+    const targetX = mainCue.positionX;
+    const targetZ = mainCue.positionZ;
+
+    this.camera.position.set(
+      targetX + keyframe.offsetX,
+      targetY,
+      targetZ + keyframe.distanceFromCue
+    );
+    this.camera.lookAt(targetX, targetY, targetZ);
+    this.camera.up.set(0, 1, 0);
+    this.camera.updateProjectionMatrix();
+
+    if (this.cameraHelper) this.cameraHelper.update();
+  }
+
+  /** Move studio camera by screen-space delta, with optional axis lock. Returns updated position for UI sync. */
+  moveStudioCamera(
+    dx: number,
+    dy: number,
+    axisLock: "x" | "y" | "z" | null = null
+  ): { x: number; y: number; z: number } {
+    const sensitivity = 0.01;
+    const pos = this.camera.position;
+
+    switch (axisLock) {
+      case "x":
+        pos.x += dx * sensitivity;
+        break;
+      case "y":
+        pos.y -= dy * sensitivity;
+        break;
+      case "z":
+        pos.z -= dy * sensitivity;
+        break;
+      default:
+        pos.x += dx * sensitivity;
+        pos.y -= dy * sensitivity;
+        break;
+    }
+
+    this.clampCameraToStudioBounds();
+
+    if (this.cameraHelper) this.cameraHelper.update();
+
+    return { x: pos.x, y: pos.y, z: pos.z };
+  }
+
+  /** Clamp camera so it stays within studio bounds */
+  private clampCameraToStudioBounds(): void {
+    const pos = this.camera.position;
+
+    const minX = -15;
+    const maxX = 15;
+    const minY = -1.0;
+    const maxY = 14;
+    const minZ = 0.3;
+    const maxZ = 12;
+
+    pos.x = Math.max(minX, Math.min(maxX, pos.x));
+    pos.y = Math.max(minY, Math.min(maxY, pos.y));
+    pos.z = Math.max(minZ, Math.min(maxZ, pos.z));
+  }
+
+  /** Convert current camera position to a CameraKeyframe (for "Set Start/End" buttons) */
+  getCameraKeyframeFromPosition(cueConfig: CueConfig): CameraKeyframe {
+    const mainCue = cueConfig.instances.find(i => i.isMain) || cueConfig.instances[0];
+    if (!mainCue) return { cuePercent: 50, distanceFromCue: 3, offsetX: 0 };
+
+    const cueBottom = mainCue.positionY - 1.2;
+    const cueHeight = mainCue.scale * 1.3;
+    const cueTop = cueBottom + cueHeight;
+
+    const pos = this.camera.position;
+    const cuePercent = ((pos.y - cueBottom) / (cueTop - cueBottom)) * 100;
+    const distanceFromCue = pos.z - mainCue.positionZ;
+    const offsetX = pos.x - mainCue.positionX;
+
+    return {
+      cuePercent: Math.max(0, Math.min(100, cuePercent)),
+      distanceFromCue: Math.max(0.5, Math.min(5, distanceFromCue)),
+      offsetX: Math.max(-2, Math.min(2, offsetX)),
+    };
+  }
+
   resize(width: number, height: number) {
     // Pass updateStyle: false to prevent Three.js from overwriting canvas CSS styles
     // This allows the canvas to scale via CSS (100% width/height) while maintaining
@@ -1711,6 +1841,10 @@ export class ExtractorSceneManager {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    if (this.godCamera) {
+      this.godCamera.aspect = width / height;
+      this.godCamera.updateProjectionMatrix();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1866,6 +2000,13 @@ export class ExtractorSceneManager {
     this.stopRecording();
     this.clearStudioElements();
     this.clearInstancedMeshes();
+
+    if (this.cameraHelper) {
+      this.scene.remove(this.cameraHelper);
+      this.cameraHelper.dispose();
+      this.cameraHelper = null;
+    }
+    this.godCamera = null;
 
     if (this.clonedModel) {
       this.scene.remove(this.clonedModel);

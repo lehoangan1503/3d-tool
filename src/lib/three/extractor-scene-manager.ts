@@ -5,12 +5,20 @@ import type {
   VideoExtractorConfig,
   PartViewConfig,
   HdriLayer,
+  VideoBackgroundLayer,
 } from '@/types/extractor';
 import {
+  createVelvetTableTexture,
+  createCementWallTexture,
+  createWallBackdrop,
+  createShadowFloor,
+  createTableSurface,
   createFabricTexture,
   createStudioBackdrop,
-  createShadowFloor,
 } from './studio-background';
+import type { VideoStudioConfig, CameraPosition } from '@/types/video-studio';
+import { computeVideoDuration, createEasingFunction, VIDEO_QUALITY_PRESETS } from '@/types/video-studio';
+import { compositeBackgroundLayers, preloadLayerImages } from './background-compositor';
 
 // Available HDRI options (same as editor-client)
 export const HDRI_OPTIONS_FALLBACK = [
@@ -74,9 +82,19 @@ export class ExtractorSceneManager {
   // Studio elements (for video)
   private backdrop: THREE.Mesh | null = null;
   private shadowFloor: THREE.Mesh | null = null;
+  private tableSurface: THREE.Mesh | null = null;
   private spotLight: THREE.SpotLight | null = null;
   private fillLights: THREE.PointLight[] = [];
   private directionalLight: THREE.DirectionalLight | null = null;
+
+  // Wrapper group used during video recording to apply tilt independently from spin
+  private videoWrapperGroup: THREE.Group | null = null;
+
+  // Live video preview state
+  private videoPreviewWrapperGroup: THREE.Group | null = null;
+  private backgroundLayerMeshes: THREE.Mesh[] = [];
+  private videoPreviewConfigRef: VideoExtractorConfig | null = null;
+  private studioConfigRef: VideoStudioConfig | null = null;
 
   // Animation state
   private animationFrameId: number | null = null;
@@ -120,51 +138,109 @@ export class ExtractorSceneManager {
     this.scene.add(hemi);
   }
 
-  setupStudioLighting(config: VideoExtractorConfig) {
+  /** Load a texture from a URL, with repeat/wrapping applied */
+  private loadTexture(
+    url: string,
+    repeatS: number = 4,
+    repeatT: number = 4
+  ): Promise<THREE.Texture> {
+    return new Promise((resolve) => {
+      new THREE.TextureLoader().load(
+        url,
+        (tex) => {
+          tex.wrapS = THREE.RepeatWrapping;
+          tex.wrapT = THREE.RepeatWrapping;
+          tex.repeat.set(repeatS, repeatT);
+          tex.needsUpdate = true;
+          resolve(tex);
+        },
+        undefined,
+        () => resolve(null as unknown as THREE.Texture) // fallback handled by caller
+      );
+    });
+  }
+
+  async setupStudioLighting(config: VideoExtractorConfig): Promise<void> {
     this.clearStudioElements();
 
-    // Key spotlight
-    this.spotLight = new THREE.SpotLight(0xffffff, 2);
-    this.spotLight.position.set(3, 4, 2);
-    this.spotLight.angle = Math.PI / 4;
-    this.spotLight.penumbra = 0.5;
-    this.spotLight.decay = 1.5;
-    this.spotLight.distance = 20;
+    // ── Load HDRI from config if specified ──
+    if (config.hdriFile) {
+      try {
+        await this.loadHDRI(`/hdri/${config.hdriFile}`);
+      } catch (err) {
+        console.warn('[ExtractorSceneManager] Failed to load HDRI from config:', config.hdriFile, err);
+      }
+    }
+
+    // ── Apply HDRI rotation from config ──
+    if (config.hdriRotationY !== undefined && config.hdriRotationY !== 0) {
+      this.setHdriRotation(config.hdriRotationY);
+    }
+
+    // Key spotlight — angled from above-front to cast a clear shadow on the table
+    this.spotLight = new THREE.SpotLight(0xffffff, 2.2);
+    this.spotLight.position.set(2, 5, 3);
+    this.spotLight.angle = Math.PI / 4.5;
+    this.spotLight.penumbra = 0.45;
+    this.spotLight.decay = 1.3;
+    this.spotLight.distance = 22;
     this.spotLight.castShadow = true;
     this.spotLight.shadow.mapSize.width = 2048;
     this.spotLight.shadow.mapSize.height = 2048;
     this.spotLight.shadow.camera.near = 0.5;
-    this.spotLight.shadow.camera.far = 20;
+    this.spotLight.shadow.camera.far = 22;
     this.spotLight.shadow.bias = -0.0001;
     this.spotLight.shadow.radius = config.shadowBlur;
     this.scene.add(this.spotLight);
 
-    // Fill lights
+    // Subtle fill lights so cue details are visible in shadow areas
     const fillPositions: [number, number, number][] = [
-      [-2, 1, 2],
-      [0, -2, 3],
-      [2, 0, -1],
+      [-3, 1, 2],
+      [0, -1, 3],
+      [3, 0.5, -1],
     ];
     fillPositions.forEach(([x, y, z]) => {
-      const fill = new THREE.PointLight(0xffffff, 0.3);
+      const fill = new THREE.PointLight(0xffffff, 0.2);
       fill.position.set(x, y, z);
       this.fillLights.push(fill);
       this.scene.add(fill);
     });
 
-    // Fabric backdrop
-    const fabricTexture = createFabricTexture(
-      1024,
-      1024,
-      config.backgroundColor
-    );
-    this.backdrop = createStudioBackdrop(fabricTexture);
+    // ── Load wall texture (real file or procedural fallback) ──
+    let wallTex: THREE.Texture | null = null;
+    if (config.wallTextureUrl) {
+      wallTex = await this.loadTexture(config.wallTextureUrl, 5, 5);
+    }
+    if (!wallTex) {
+      wallTex = createCementWallTexture(1024, 1024);
+    }
+    // Tall flat wall, far back, elevated so a gap is visible between table and wall
+    this.backdrop = createWallBackdrop(wallTex, 34, 22);
+    this.backdrop.position.set(0, 4.5, -5.5);
     this.scene.add(this.backdrop);
 
-    // Shadow floor
+    // ── Load table texture (real file or procedural fallback) ──
+    let tableTex: THREE.Texture | null = null;
+    if (config.tableTextureUrl) {
+      tableTex = await this.loadTexture(config.tableTextureUrl, 4, 4);
+    }
+    if (!tableTex) {
+      tableTex = createVelvetTableTexture(1024, 1024);
+    }
+    // Table at y=-1.2: 3× gap from cue (was y=-0.4) — visible shadow gap
+    this.tableSurface = createTableSurface(tableTex, 28, 5, -1.2);
+    this.scene.add(this.tableSurface);
+
+    // Shadow-only plane just above table so shadow is crisp and distinct from velvet
     if (config.enableShadow) {
       this.shadowFloor = createShadowFloor();
+      this.shadowFloor.position.y = -1.18;
       this.scene.add(this.shadowFloor);
+    }
+
+    // ── Additional background layers (overlay on top of wall) ──
+    if (config.backgroundLayers && config.backgroundLayers.length > 0) {
+      await this.applyVideoBackgroundLayers(config.backgroundLayers);
     }
   }
 
@@ -195,6 +271,20 @@ export class ExtractorSceneManager {
       this.shadowFloor.geometry.dispose();
       this.shadowFloor = null;
     }
+    if (this.tableSurface) {
+      this.scene.remove(this.tableSurface);
+      const mat = this.tableSurface.material as THREE.MeshStandardMaterial;
+      if (mat.map) mat.map.dispose();
+      mat.dispose();
+      this.tableSurface.geometry.dispose();
+      this.tableSurface = null;
+    }
+    for (const mesh of this.backgroundLayerMeshes) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.backgroundLayerMeshes = [];
   }
 
   async loadHDRI(hdriUrl: string): Promise<void> {
@@ -930,6 +1020,376 @@ export class ExtractorSceneManager {
     console.log('[ExtractorSceneManager] Background set to:', transparent ? 'transparent' : 'dark');
   }
 
+  private async applyVideoBackgroundLayers(layers: VideoBackgroundLayer[]): Promise<void> {
+    // Remove existing layer meshes
+    for (const mesh of this.backgroundLayerMeshes) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.backgroundLayerMeshes = [];
+
+    const enabledLayers = layers.filter(l => l.enabled);
+    if (enabledLayers.length === 0) return;
+
+    for (let i = 0; i < enabledLayers.length; i++) {
+      const layer = enabledLayers[i];
+      const geometry = new THREE.PlaneGeometry(38, 26);
+
+      let material: THREE.MeshBasicMaterial;
+
+      if (layer.type === 'image' && layer.imageUrl) {
+        const tex = await this.loadTexture(layer.imageUrl, 1, 1);
+        material = new THREE.MeshBasicMaterial({
+          map: tex,
+          transparent: true,
+          opacity: layer.opacity,
+          depthWrite: false,
+        });
+      } else {
+        const color = new THREE.Color(layer.color);
+        material = new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: layer.opacity,
+          depthWrite: false,
+        });
+      }
+
+      if (layer.blendMode === 'additive') {
+        material.blending = THREE.AdditiveBlending;
+      } else if (layer.blendMode === 'multiply') {
+        material.blending = THREE.MultiplyBlending;
+      } else {
+        material.blending = THREE.NormalBlending;
+      }
+
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.renderOrder = -100 + i;
+      mesh.position.set(0, 4.5, -5.4 + i * 0.01);
+      this.backgroundLayerMeshes.push(mesh);
+      this.scene.add(mesh);
+    }
+  }
+
+  /**
+   * Start animated live preview for video extractor:
+   * cue spins with Dutch tilt, camera at start position.
+   */
+  startVideoPreview(config: VideoExtractorConfig): void {
+    this.stopVideoPreview();
+    if (!this.model) return;
+
+    this.videoPreviewConfigRef = config;
+
+    const modelScale = config.modelScale ?? 7;
+    this.model.scale.setScalar(modelScale);
+    this.model.rotation.set(0, 0, 0);
+    this.model.position.set(0, 0, 0);
+
+    const wrapperGroup = new THREE.Group();
+    wrapperGroup.rotation.z = -Math.PI / 2;
+    this.scene.remove(this.model);
+    wrapperGroup.add(this.model);
+    this.scene.add(wrapperGroup);
+    this.videoPreviewWrapperGroup = wrapperGroup;
+
+    wrapperGroup.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(wrapperGroup);
+    const cueLen = box.max.x - box.min.x;
+    const buttX = box.min.x;
+
+    const camY = 0.55;
+    const camZ = 1.7;
+    const rollRad = 20 * Math.PI / 180;
+    this.camera.up.set(Math.sin(rollRad), Math.cos(rollRad), 0);
+    this.camera.position.set(buttX + cueLen * 0.05, camY, camZ);
+    this.camera.lookAt(buttX + cueLen * 0.05, 0, 0);
+
+    const animate = () => {
+      if (this.isDisposed || !this.videoPreviewWrapperGroup) return;
+      this.animationFrameId = requestAnimationFrame(animate);
+      const cfg = this.videoPreviewConfigRef ?? config;
+      this.model!.rotation.y += cfg.rotationSpeed / 60;
+      this.model!.scale.setScalar(cfg.modelScale ?? 7);
+      this.renderer.render(this.scene, this.camera);
+    };
+    animate();
+  }
+
+  /** Stop the live video preview and restore model/camera state */
+  stopVideoPreview(): void {
+    if (this.animationFrameId !== null) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+    if (this.videoPreviewWrapperGroup) {
+      if (this.model) {
+        this.videoPreviewWrapperGroup.remove(this.model);
+        this.model.scale.setScalar(1);
+        this.model.rotation.set(0, 0, 0);
+        this.model.position.set(0, 0, 0);
+        this.scene.add(this.model);
+      }
+      this.scene.remove(this.videoPreviewWrapperGroup);
+      this.videoPreviewWrapperGroup = null;
+      this.camera.up.set(0, 1, 0);
+    }
+    this.videoPreviewConfigRef = null;
+  }
+
+  /** Update config for the live preview without restarting */
+  updateVideoPreviewConfig(config: VideoExtractorConfig): void {
+    this.videoPreviewConfigRef = config;
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  VIDEO STUDIO — New camera system with start/end positions
+  // ════════════════════════════════════════════════════════════════
+
+  /** Setup studio environment from the new VideoStudioConfig (compositor-based backgrounds) */
+  async setupStudioFromStudioConfig(config: VideoStudioConfig): Promise<void> {
+    this.clearStudioElements();
+
+    // Load HDRI
+    if (config.hdriFile) {
+      try { await this.loadHDRI(`/hdri/${config.hdriFile}`); }
+      catch (err) { console.warn('[ESM] Failed to load HDRI:', err); }
+    }
+
+    // Apply HDRI rotation from first layer
+    if (config.hdriConfig.layers.length > 0) {
+      const firstLayer = config.hdriConfig.layers[0];
+      if (firstLayer.rotationY !== 0) this.setHdriRotation(firstLayer.rotationY);
+    }
+
+    // Key spotlight
+    this.spotLight = new THREE.SpotLight(0xffffff, 2.2);
+    this.spotLight.position.set(2, 5, 3);
+    this.spotLight.angle = Math.PI / 4.5;
+    this.spotLight.penumbra = 0.45;
+    this.spotLight.decay = 1.3;
+    this.spotLight.distance = 22;
+    this.spotLight.castShadow = true;
+    this.spotLight.shadow.mapSize.set(2048, 2048);
+    this.spotLight.shadow.camera.near = 0.5;
+    this.spotLight.shadow.camera.far = 22;
+    this.spotLight.shadow.bias = -0.0001;
+    this.spotLight.shadow.radius = 2;
+    this.scene.add(this.spotLight);
+
+    // Fill lights
+    const fillPositions: [number, number, number][] = [[-3, 1, 2], [0, -1, 3], [3, 0.5, -1]];
+    fillPositions.forEach(([x, y, z]) => {
+      const fill = new THREE.PointLight(0xffffff, 0.2);
+      fill.position.set(x, y, z);
+      this.fillLights.push(fill);
+      this.scene.add(fill);
+    });
+
+    // Wall from compositor layers
+    const wallImages = await preloadLayerImages(config.wallLayers);
+    const wallTex = compositeBackgroundLayers(config.wallLayers, 1024, 1024, wallImages);
+    wallTex.wrapS = THREE.RepeatWrapping;
+    wallTex.wrapT = THREE.RepeatWrapping;
+    wallTex.repeat.set(5, 5);
+    this.backdrop = createWallBackdrop(wallTex, 34, 22);
+    this.backdrop.position.set(0, 4.5, -5.5);
+    this.scene.add(this.backdrop);
+
+    // Table from compositor layers
+    const tableImages = await preloadLayerImages(config.tableLayers);
+    const tableTex = compositeBackgroundLayers(config.tableLayers, 1024, 1024, tableImages);
+    tableTex.wrapS = THREE.RepeatWrapping;
+    tableTex.wrapT = THREE.RepeatWrapping;
+    tableTex.repeat.set(4, 4);
+    this.tableSurface = createTableSurface(tableTex, 28, 5, -1.2);
+    this.scene.add(this.tableSurface);
+
+    // Shadow floor
+    if (config.shadow.enabled) {
+      this.shadowFloor = createShadowFloor();
+      this.shadowFloor.position.y = -1.18;
+      this.scene.add(this.shadowFloor);
+    }
+  }
+
+  /** Start animated preview for Video Studio (cue positioned + camera at start) */
+  startStudioVideoPreview(config: VideoStudioConfig): void {
+    this.stopVideoPreview();
+    if (!this.model) return;
+
+    this.studioConfigRef = config;
+    const cp = config.cuePosition;
+
+    // Apply cue position
+    this.model.scale.setScalar(cp.cueScale);
+    this.model.rotation.set(0, cp.spinY, 0);
+    this.model.position.set(cp.offsetX, cp.offsetY, 0);
+
+    // Camera at start position
+    const start = config.cameraStart;
+    const rollRad = (start.dutchTilt * Math.PI) / 180;
+    this.camera.up.set(Math.sin(rollRad), Math.cos(rollRad), 0);
+    this.camera.position.set(start.panX, start.panY, start.distance);
+    this.camera.lookAt(0, 0, 0);
+
+    // Zoom via FOV
+    this.camera.fov = 50 / cp.zoom;
+    this.camera.updateProjectionMatrix();
+
+    const animate = () => {
+      if (this.isDisposed || !this.studioConfigRef) return;
+      this.animationFrameId = requestAnimationFrame(animate);
+      const cfg = this.studioConfigRef;
+      if (cfg.cuePosition.spinSpeed > 0) {
+        this.model!.rotation.y += cfg.cuePosition.spinSpeed * 0.02;
+      }
+      this.renderer.render(this.scene, this.camera);
+    };
+    animate();
+  }
+
+  /** Update studio preview config without restarting the loop */
+  updateStudioPreviewConfig(config: VideoStudioConfig): void {
+    this.studioConfigRef = config;
+    if (!this.model) return;
+
+    const cp = config.cuePosition;
+    this.model.scale.setScalar(cp.cueScale);
+    this.model.position.set(cp.offsetX, cp.offsetY, 0);
+
+    const start = config.cameraStart;
+    const rollRad = (start.dutchTilt * Math.PI) / 180;
+    this.camera.up.set(Math.sin(rollRad), Math.cos(rollRad), 0);
+    this.camera.position.set(start.panX, start.panY, start.distance);
+    this.camera.lookAt(0, 0, 0);
+    this.camera.fov = 50 / cp.zoom;
+    this.camera.updateProjectionMatrix();
+  }
+
+  /** Record video using the new start/end camera animation system */
+  async startStudioRecording(
+    config: VideoStudioConfig,
+    onProgress?: (progress: number) => void
+  ): Promise<Blob> {
+    if (!this.model) throw new Error('No model loaded');
+
+    const qp = VIDEO_QUALITY_PRESETS[config.quality];
+
+    return new Promise((resolve, reject) => {
+      this.renderer.setSize(qp.width, qp.height);
+      this.camera.aspect = qp.width / qp.height;
+      this.camera.updateProjectionMatrix();
+
+      this.setupStudioFromStudioConfig(config).then(() => {
+        this._startStudioRecordingLoop(config, qp, onProgress, resolve, reject);
+      }).catch(reject);
+    });
+  }
+
+  private _startStudioRecordingLoop(
+    config: VideoStudioConfig,
+    qp: { readonly width: number; readonly height: number; readonly bitrate: number; readonly fps: number },
+    onProgress: ((p: number) => void) | undefined,
+    resolve: (blob: Blob) => void,
+    reject: (err: Error) => void
+  ) {
+    this.stopVideoPreview();
+
+    const cp = config.cuePosition;
+    const prevScale = this.model!.scale.clone();
+    const prevRotation = this.model!.rotation.clone();
+    const prevPosition = this.model!.position.clone();
+
+    this.model!.scale.setScalar(cp.cueScale);
+    this.model!.rotation.set(0, cp.spinY, 0);
+    this.model!.position.set(cp.offsetX, cp.offsetY, 0);
+
+    // Camera zoom via FOV
+    this.camera.fov = 50 / cp.zoom;
+    this.camera.updateProjectionMatrix();
+
+    // Compute duration from path + speed
+    const duration = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed);
+    const totalFrames = Math.ceil(qp.fps * duration);
+    const easingFn = createEasingFunction(config.easing);
+
+    // MediaRecorder setup
+    const stream = this.renderer.domElement.captureStream(qp.fps);
+    this.mediaRecorder = new MediaRecorder(stream, {
+      mimeType: getSupportedMimeType(),
+      videoBitsPerSecond: qp.bitrate,
+    });
+    this.recordedChunks = [];
+    this.mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) this.recordedChunks.push(e.data);
+    };
+
+    const cleanup = () => {
+      this.camera.up.set(0, 1, 0);
+      this.model!.scale.copy(prevScale);
+      this.model!.rotation.copy(prevRotation);
+      this.model!.position.copy(prevPosition);
+    };
+
+    this.mediaRecorder.onstop = () => {
+      cleanup();
+      resolve(new Blob(this.recordedChunks, { type: getSupportedMimeType() }));
+    };
+    this.mediaRecorder.onerror = () => {
+      cleanup();
+      reject(new Error('Recording failed'));
+    };
+
+    let currentFrame = 0;
+    const frameDuration = 1000 / qp.fps;
+    let lastTimestamp = -1;
+    const start = config.cameraStart;
+    const end = config.cameraEnd;
+
+    const animate = (timestamp: number) => {
+      if (this.isDisposed || currentFrame >= totalFrames) {
+        this.mediaRecorder?.stop();
+        this.animationFrameId = null;
+        return;
+      }
+
+      if (lastTimestamp >= 0 && timestamp - lastTimestamp < frameDuration) {
+        this.animationFrameId = requestAnimationFrame(animate);
+        return;
+      }
+      lastTimestamp = timestamp;
+
+      const progress = currentFrame / totalFrames;
+      onProgress?.(Math.round(progress * 100));
+      const t = easingFn(progress);
+
+      // Interpolate camera
+      const camDistance = start.distance + (end.distance - start.distance) * t;
+      const camPanX = start.panX + (end.panX - start.panX) * t;
+      const camPanY = start.panY + (end.panY - start.panY) * t;
+      const camTilt = start.dutchTilt + (end.dutchTilt - start.dutchTilt) * t;
+      const rollRad = (camTilt * Math.PI) / 180;
+
+      this.camera.up.set(Math.sin(rollRad), Math.cos(rollRad), 0);
+      this.camera.position.set(camPanX, camPanY, camDistance);
+      this.camera.lookAt(0, 0, 0);
+
+      // Cue spin
+      if (cp.spinSpeed > 0) {
+        this.model!.rotation.y += cp.spinSpeed * 0.02;
+      }
+
+      this.renderer.render(this.scene, this.camera);
+      currentFrame++;
+      this.animationFrameId = requestAnimationFrame(animate);
+    };
+
+    this.mediaRecorder.start();
+    this.animationFrameId = requestAnimationFrame(animate);
+  }
+
   /**
    * Start continuous animation loop for live preview
    */
@@ -1090,66 +1550,139 @@ export class ExtractorSceneManager {
       this.camera.aspect = config.width / config.height;
       this.camera.updateProjectionMatrix();
 
-      this.setupStudioLighting(config);
-      this.model!.rotation.set(0, 0, -config.cueAngle);
-
-      const stream = this.renderer.domElement.captureStream(config.fps);
-      this.mediaRecorder = new MediaRecorder(stream, {
-        mimeType: getSupportedMimeType(),
-        videoBitsPerSecond: config.bitrate,
+      // setupStudioLighting is async but we call it synchronously here because
+      // we already called it (with await) during init — textures are loaded.
+      // Re-setup synchronously for recording resolution.
+      this.setupStudioLighting(config).then(() => {
+        this._startRecordingLoop(config, onProgress, resolve, reject);
       });
-
-      this.recordedChunks = [];
-      this.mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          this.recordedChunks.push(e.data);
-        }
-      };
-
-      this.mediaRecorder.onstop = () => {
-        const mimeType = getSupportedMimeType();
-        const blob = new Blob(this.recordedChunks, { type: mimeType });
-        resolve(blob);
-      };
-
-      this.mediaRecorder.onerror = () => {
-        reject(new Error('Recording failed'));
-      };
-
-      const totalFrames = config.fps * config.duration;
-      let currentFrame = 0;
-      const cameraDistance = 2;
-
-      const animate = () => {
-        if (this.isDisposed || currentFrame >= totalFrames) {
-          this.mediaRecorder?.stop();
-          this.animationFrameId = null;
-          return;
-        }
-
-        const progress = currentFrame / totalFrames;
-        onProgress?.(Math.round(progress * 100));
-
-        this.model!.rotation.y += config.rotationSpeed / config.fps;
-
-        const panY =
-          config.panStartY + (config.panEndY - config.panStartY) * progress;
-        this.camera.position.set(
-          cameraDistance * Math.cos(Math.PI / 6),
-          panY,
-          cameraDistance * Math.sin(Math.PI / 6)
-        );
-        this.camera.lookAt(0, panY, 0);
-
-        this.renderer.render(this.scene, this.camera);
-
-        currentFrame++;
-        this.animationFrameId = requestAnimationFrame(animate);
-      };
-
-      this.mediaRecorder.start();
-      animate();
     });
+  }
+
+  private _startRecordingLoop(
+    config: VideoExtractorConfig,
+    onProgress: ((p: number) => void) | undefined,
+    resolve: (blob: Blob) => void,
+    reject: (err: Error) => void
+  ) {
+    // Stop any running video preview before starting recording
+    this.stopVideoPreview();
+
+    // ── Scale cue ──
+    const modelScale = config.modelScale ?? 7;
+    const prevScale = this.model!.scale.clone();
+    this.model!.scale.setScalar(modelScale);
+    this.model!.rotation.set(0, 0, 0);
+    this.model!.position.set(0, 0, 0);
+
+    // ── Tilt wrapper: lay cue perfectly horizontal, butt on LEFT ──
+    const wrapperGroup = new THREE.Group();
+    wrapperGroup.rotation.z = -Math.PI / 2;
+    this.scene.remove(this.model!);
+    wrapperGroup.add(this.model!);
+    this.scene.add(wrapperGroup);
+    this.videoWrapperGroup = wrapperGroup;
+
+    // ── Compute cue world-space bounds for camera positioning ──
+    wrapperGroup.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(wrapperGroup);
+    const cueLen = box.max.x - box.min.x;
+    const buttX  = box.min.x;
+    const endFraction = config.cameraEndFraction ?? 0.68;
+    const camEndX = buttX + cueLen * endFraction;
+    const camStartX = buttX + cueLen * 0.05; // start just inside butt end
+
+    // ── Camera setup ──
+    // Fixed height (parallel to table), 20° Dutch-angle roll so cue appears tilted.
+    // As camera pans right, the tilted cue appears to "go down" in frame.
+    const camY = 0.55;  // Fixed — parallel to table, no rising
+    const camZ = 1.7;
+    const rollDeg = config.cameraRoll ?? 20;
+    const rollRad = rollDeg * Math.PI / 180;
+    // Clockwise camera tilt (hold camera rotated right):
+    //   up rotates clockwise → up.x = +sin, up.y = cos
+    //   Cue (horizontal) appears to go lower-right → gives the "cue going down" feel
+    this.camera.up.set(Math.sin(rollRad), Math.cos(rollRad), 0);
+    this.camera.position.set(camStartX, camY, camZ);
+    this.camera.lookAt(camStartX, 0, 0);
+
+    const stream = this.renderer.domElement.captureStream(config.fps);
+    this.mediaRecorder = new MediaRecorder(stream, {
+      mimeType: getSupportedMimeType(),
+      videoBitsPerSecond: config.bitrate,
+    });
+
+    this.recordedChunks = [];
+    this.mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) this.recordedChunks.push(e.data);
+    };
+
+    const cleanup = () => {
+      this.camera.up.set(0, 1, 0); // Reset camera roll
+      if (wrapperGroup.parent) this.scene.remove(wrapperGroup);
+      wrapperGroup.remove(this.model!);
+      this.model!.scale.copy(prevScale);
+      this.model!.rotation.set(0, 0, 0);
+      this.model!.position.set(0, 0, 0);
+      this.scene.add(this.model!);
+      this.videoWrapperGroup = null;
+    };
+
+    this.mediaRecorder.onstop = () => {
+      cleanup();
+      const blob = new Blob(this.recordedChunks, { type: getSupportedMimeType() });
+      resolve(blob);
+    };
+
+    this.mediaRecorder.onerror = () => {
+      cleanup();
+      reject(new Error('Recording failed'));
+    };
+
+    const totalFrames = config.fps * config.duration;
+    let currentFrame = 0;
+
+    // ── Timestamp-throttled animation loop ──
+    // Critical: we must render at real wall-clock FPS so MediaRecorder captures
+    // the correct duration. Without throttling, all frames render instantly and
+    // the video ends up ~2 seconds regardless of duration setting.
+    const frameDuration = 1000 / config.fps; // ms per frame
+    let lastTimestamp = -1;
+
+    const animate = (timestamp: number) => {
+      if (this.isDisposed || currentFrame >= totalFrames) {
+        this.mediaRecorder?.stop();
+        this.animationFrameId = null;
+        return;
+      }
+
+      // Skip this rAF tick if not enough wall-clock time has elapsed
+      if (lastTimestamp >= 0 && timestamp - lastTimestamp < frameDuration) {
+        this.animationFrameId = requestAnimationFrame(animate);
+        return;
+      }
+      lastTimestamp = timestamp;
+
+      const progress = currentFrame / totalFrames;
+      onProgress?.(Math.round(progress * 100));
+
+      // Cue spins around its own long axis
+      this.model!.rotation.y += config.rotationSpeed / config.fps;
+
+      // Camera pans right along cue — cameraDollySpeed controls fraction covered per video
+      const dollySpeed = config.cameraDollySpeed ?? 0.15;
+      const camX = camStartX + (camEndX - camStartX) * Math.min(1, progress * dollySpeed);
+      this.camera.position.set(camX, camY, camZ);
+      this.camera.lookAt(camX, 0, 0);
+
+      this.renderer.render(this.scene, this.camera);
+
+      currentFrame++;
+      this.animationFrameId = requestAnimationFrame(animate);
+    };
+
+    this.mediaRecorder.start();
+    this.animationFrameId = requestAnimationFrame(animate);
   }
 
   stopRecording() {

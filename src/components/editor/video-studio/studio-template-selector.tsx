@@ -53,8 +53,8 @@ export function StudioTemplateSelector({
       });
       const res = await fetch(`/api/video-studio-templates?${params}`);
       if (!res.ok) throw new Error("Failed to fetch templates");
-      const { data } = await res.json();
-      setTemplates(data as VideoStudioTemplate[]);
+      const json = await res.json();
+      setTemplates((json.data ?? json.items ?? []) as VideoStudioTemplate[]);
     } catch (err) {
       console.error("StudioTemplateSelector fetch error:", err);
     } finally {
@@ -115,11 +115,11 @@ export function StudioTemplateSelector({
         }),
       });
       if (!res.ok) throw new Error("Failed to create template");
-      const { data } = await res.json();
+      const created = await res.json();
       setShowSaveDialog(false);
       setSaveName("");
       await fetchTemplates();
-      setSelectedId((data as VideoStudioTemplate).id);
+      setSelectedId((created as VideoStudioTemplate).id);
     } catch (err) {
       console.error("StudioTemplateSelector create error:", err);
     } finally {

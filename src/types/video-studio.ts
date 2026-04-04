@@ -1,48 +1,76 @@
-import type { HdriLayer, BlendMode } from "./extractor";
+import type { HdriLayer } from "./extractor";
 import { createDefaultHdriLayer } from "./extractor";
 
-// ── Camera Position (start and end) ──
+// ── Camera Keyframes (start and end) ──
 
-export interface CameraPosition {
-  distance: number;   // Z-axis far↔close (0.5–5.0)
-  panX: number;       // Horizontal offset (-2.0 to 2.0)
-  panY: number;       // Vertical offset (-2.0 to 2.0)
-  dutchTilt: number;  // Camera roll angle in degrees (-45 to 45)
+export interface CameraKeyframe {
+  cuePercent: number;       // 0–100: position along cue length (0%=bottom, 100%=top)
+  distanceFromCue: number;  // 0.5–5.0: how far from cue
+  offsetX: number;          // -2.0 to 2.0: horizontal offset from cue center
 }
 
-export const DEFAULT_CAMERA_START: CameraPosition = {
-  distance: 3.0,
-  panX: 0,
-  panY: 0,
-  dutchTilt: 0,
-};
-
-export const DEFAULT_CAMERA_END: CameraPosition = {
-  distance: 1.8,
-  panX: 0,
-  panY: 0,
-  dutchTilt: 0,
-};
-
-// ── Cue Position (static setup matching Image Extractor CueSettings) ──
-
-export interface VideoCuePosition {
-  spinY: number;      // Model Y rotation (radians, 0–2π)
-  phi: number;        // Camera vertical orbit (radians, 0=top, π/2=side)
-  zoom: number;       // Zoom multiplier (0.5–3.0)
-  offsetX: number;    // Horizontal offset (-1.0 to 1.0)
-  offsetY: number;    // Vertical offset (-1.0 to 1.0)
-  cueScale: number;   // Model scale (4–12)
-  spinSpeed: number;  // Continuous Y-rotation (0=none, 1=max)
-}
-
-export const DEFAULT_CUE_POSITION: VideoCuePosition = {
-  spinY: 0,
-  phi: Math.PI / 2,
-  zoom: 1.0,
+export const DEFAULT_CAMERA_START: CameraKeyframe = {
+  cuePercent: 10,
+  distanceFromCue: 3.0,
   offsetX: 0,
-  offsetY: 0,
-  cueScale: 7,
+};
+
+export const DEFAULT_CAMERA_END: CameraKeyframe = {
+  cuePercent: 90,
+  distanceFromCue: 1.8,
+  offsetX: 0,
+};
+
+// ── Camera Direction ──
+
+export type CameraDirection = "fixed" | "x" | "y" | "z" | "xy" | "xz" | "yz" | "xyz";
+
+export interface CameraDirectionPreset {
+  id: CameraDirection;
+  name: string;
+  description: string;
+}
+
+export const CAMERA_DIRECTION_PRESETS: CameraDirectionPreset[] = [
+  { id: "fixed", name: "Fixed",     description: "Camera stays still" },
+  { id: "x",    name: "Slide X",    description: "Left↔right across cue" },
+  { id: "y",    name: "Slide Y",    description: "Bottom↔top along cue" },
+  { id: "z",    name: "Dolly Z",    description: "Close↔far from cue" },
+  { id: "xy",   name: "Cross XY",   description: "Diagonal across + along" },
+  { id: "xz",   name: "Depth XZ",   description: "Across + depth" },
+  { id: "yz",   name: "Along YZ",   description: "Along cue + depth" },
+  { id: "xyz",  name: "Free XYZ",   description: "Unconstrained path" },
+];
+
+// ── Cue Instance & Config ──
+
+export const MAX_CUE_INSTANCES = 4;
+
+export interface CueInstance {
+  id: string;
+  positionX: number;  // -14 to 14
+  positionY: number;  // -1 to 10
+  positionZ: number;  // -5 to 3
+  scale: number;      // 4–12
+  isMain: boolean;    // first cue is always main
+}
+
+export interface CueConfig {
+  instances: CueInstance[];  // 1–4 cues
+  spinY: number;             // Model Y rotation (radians, 0–2π) — shared
+  spinSpeed: number;         // Continuous Y-rotation (0–1) — shared
+}
+
+export const DEFAULT_CUE_CONFIG: CueConfig = {
+  instances: [{
+    id: "main",
+    positionX: 0,
+    positionY: 0,
+    positionZ: 0,
+    scale: 7,
+    isMain: true,
+  }],
+  spinY: 0,
   spinSpeed: 0,
 };
 
@@ -75,52 +103,41 @@ export const DEFAULT_EASING: EasingConfig = {
   preset: "ease-in-out",
 };
 
-// ── Camera Movement Presets ──
+// ── Background Frame & Surface Config ──
 
-export interface CameraMovementPreset {
+export const MAX_BACKGROUND_FRAMES = 4;
+
+export type BackgroundFrameType = "color" | "gradient" | "image";
+
+export interface BackgroundFrame {
   id: string;
-  name: string;
-  start: CameraPosition;
-  end: CameraPosition;
-}
-
-export const CAMERA_MOVEMENT_PRESETS: CameraMovementPreset[] = [
-  { id: "dolly-in",          name: "Dolly In",            start: { distance: 4, panX: 0, panY: 0, dutchTilt: 0 },      end: { distance: 1.5, panX: 0, panY: 0, dutchTilt: 0 } },
-  { id: "dolly-out",         name: "Dolly Out",           start: { distance: 1.5, panX: 0, panY: 0, dutchTilt: 0 },    end: { distance: 4, panX: 0, panY: 0, dutchTilt: 0 } },
-  { id: "pan-right",         name: "Pan Right",           start: { distance: 2.5, panX: -1.5, panY: 0, dutchTilt: 0 }, end: { distance: 2.5, panX: 1.5, panY: 0, dutchTilt: 0 } },
-  { id: "pan-left",          name: "Pan Left",            start: { distance: 2.5, panX: 1.5, panY: 0, dutchTilt: 0 },  end: { distance: 2.5, panX: -1.5, panY: 0, dutchTilt: 0 } },
-  { id: "vertical-rise",     name: "Vertical Rise",       start: { distance: 2.5, panX: 0, panY: -1, dutchTilt: 0 },   end: { distance: 2.5, panX: 0, panY: 1, dutchTilt: 0 } },
-  { id: "diagonal-sweep",    name: "Diagonal Sweep",      start: { distance: 3, panX: -1.5, panY: -1, dutchTilt: 0 },  end: { distance: 2, panX: 1.5, panY: 1, dutchTilt: 0 } },
-  { id: "cinematic-approach", name: "Cinematic Approach",  start: { distance: 4, panX: 0, panY: -0.5, dutchTilt: -10 }, end: { distance: 1.5, panX: 0, panY: 0, dutchTilt: 5 } },
-  { id: "orbit-tilt",        name: "Orbit Tilt",          start: { distance: 2.5, panX: 0, panY: 0, dutchTilt: 0 },    end: { distance: 2.5, panX: 0, panY: 0, dutchTilt: 20 } },
-];
-
-// ── Background Layer System ──
-
-export type BackgroundLayerType = "color" | "gradient" | "image";
-
-export interface BackgroundLayer {
-  id: string;
-  type: BackgroundLayerType;
+  type: BackgroundFrameType;
   color?: string;
-  gradient?: {
-    presetId: string;
-    angle: number;
-  };
+  gradient?: { presetId: string; angle: number };
   imageUrl?: string | null;
-  objectFit?: "cover" | "contain" | "custom";
-  opacity: number;
-  blendMode: BlendMode;
+  x: number;        // Center X (0=left, 0.5=center, 1=right)
+  y: number;        // Center Y (0=top, 0.5=center, 1=bottom)
+  width: number;    // 0–2 (1 = full surface width)
+  height: number;   // 0–2 (1 = full surface height)
+  rotation: number; // Degrees 0–360
+  opacity: number;  // 0–1
   enabled: boolean;
 }
 
-export const DEFAULT_WALL_LAYERS: BackgroundLayer[] = [
-  { id: "wall-base", type: "color", color: "#161616", opacity: 1, blendMode: "normal", enabled: true },
-];
+export interface SurfaceConfig {
+  baseColor: string;
+  frames: BackgroundFrame[];  // Max 4, ordered bottom-to-top
+}
 
-export const DEFAULT_TABLE_LAYERS: BackgroundLayer[] = [
-  { id: "table-base", type: "color", color: "#0d0d0d", opacity: 1, blendMode: "normal", enabled: true },
-];
+export const DEFAULT_WALL_SURFACE: SurfaceConfig = {
+  baseColor: "#161616",
+  frames: [],
+};
+
+export const DEFAULT_TABLE_SURFACE: SurfaceConfig = {
+  baseColor: "#0d0d0d",
+  frames: [],
+};
 
 // ── Gradient Presets (45 total: 15 cold, 15 warm, 15 neutral) ──
 
@@ -190,13 +207,15 @@ export const GRADIENT_PRESETS: GradientPreset[] = [
 // ── Full Studio Config ──
 
 export interface VideoStudioConfig {
-  cuePosition: VideoCuePosition;
-  cameraStart: CameraPosition;
-  cameraEnd: CameraPosition;
+  cueConfig: CueConfig;
+  cameraDirection: CameraDirection;
+  cameraStart: CameraKeyframe;
+  cameraEnd: CameraKeyframe;
   cameraSpeed: number;
+  lockDistance: boolean;      // When true, start/end share the same distanceFromCue
   easing: EasingConfig;
-  wallLayers: BackgroundLayer[];
-  tableLayers: BackgroundLayer[];
+  wallSurface: SurfaceConfig;
+  tableSurface: SurfaceConfig;
   hdriConfig: { layers: HdriLayer[] };
   quality: "hd" | "2k";
   shadow: { enabled: boolean; intensity: number };
@@ -204,13 +223,15 @@ export interface VideoStudioConfig {
 }
 
 export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
-  cuePosition: { ...DEFAULT_CUE_POSITION },
+  cueConfig: { ...DEFAULT_CUE_CONFIG, instances: DEFAULT_CUE_CONFIG.instances.map(i => ({ ...i })) },
+  cameraDirection: "yz",
   cameraStart: { ...DEFAULT_CAMERA_START },
   cameraEnd: { ...DEFAULT_CAMERA_END },
   cameraSpeed: 0.5,
+  lockDistance: false,
   easing: { ...DEFAULT_EASING },
-  wallLayers: DEFAULT_WALL_LAYERS.map(l => ({ ...l })),
-  tableLayers: DEFAULT_TABLE_LAYERS.map(l => ({ ...l })),
+  wallSurface: { ...DEFAULT_WALL_SURFACE },
+  tableSurface: { ...DEFAULT_TABLE_SURFACE },
   hdriConfig: { layers: [createDefaultHdriLayer()] },
   quality: "hd",
   shadow: { enabled: true, intensity: 0.6 },
@@ -236,18 +257,17 @@ export const VIDEO_QUALITY_PRESETS = {
 
 // ── Utility: Compute video duration from camera path ──
 
-const TILT_WEIGHT = 0.02;
+const CUE_LENGTH_SCENE_UNITS = 3;
 
 export function computeVideoDuration(
-  start: CameraPosition,
-  end: CameraPosition,
+  start: CameraKeyframe,
+  end: CameraKeyframe,
   cameraSpeed: number
 ): number {
-  const dx = end.panX - start.panX;
-  const dy = end.panY - start.panY;
-  const dz = end.distance - start.distance;
-  const dt = Math.abs(end.dutchTilt - start.dutchTilt) * TILT_WEIGHT;
-  const pathLength = Math.sqrt(dx * dx + dy * dy + dz * dz) + dt;
+  const dY = (end.cuePercent - start.cuePercent) / 100 * CUE_LENGTH_SCENE_UNITS;
+  const dDist = end.distanceFromCue - start.distanceFromCue;
+  const dX = end.offsetX - start.offsetX;
+  const pathLength = Math.sqrt(dY * dY + dDist * dDist + dX * dX);
   const duration = pathLength / Math.max(0.01, cameraSpeed);
   return Math.max(3, Math.min(30, duration));
 }
@@ -290,21 +310,35 @@ function cubicBezier(p1x: number, p1y: number, p2x: number, p2y: number): (t: nu
   };
 }
 
-// ── Helper to create a new background layer ──
+// ── Factory: Create a new background frame ──
 
-let _layerCounter = 0;
-
-export function createBackgroundLayer(type: BackgroundLayerType = "color"): BackgroundLayer {
-  const id = `layer-${++_layerCounter}-${Date.now()}`;
+export function createBackgroundFrame(type: BackgroundFrameType = "color"): BackgroundFrame {
+  const id = crypto.randomUUID();
   return {
     id,
     type,
     color: type === "color" ? "#1a1a1a" : undefined,
     gradient: type === "gradient" ? { presetId: "n01", angle: 180 } : undefined,
     imageUrl: type === "image" ? null : undefined,
-    objectFit: type === "image" ? "cover" : undefined,
+    x: 0.5,
+    y: 0.5,
+    width: 1,
+    height: 1,
+    rotation: 0,
     opacity: 1,
-    blendMode: "normal",
     enabled: true,
+  };
+}
+
+// ── Factory: Create a new cue instance ──
+
+export function createCueInstance(): CueInstance {
+  return {
+    id: crypto.randomUUID(),
+    positionX: 2,   // offset from main cue so clones don't overlap
+    positionY: 0,
+    positionZ: 0,
+    scale: 7,
+    isMain: false,
   };
 }

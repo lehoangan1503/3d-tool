@@ -1197,9 +1197,9 @@ export class ExtractorSceneManager {
       this.scene.add(fill);
     });
 
-    // Wall from compositor layers
-    const wallImages = await preloadLayerImages(config.wallLayers);
-    const wallTex = compositeBackgroundLayers(config.wallLayers, 1024, 1024, wallImages);
+    // Wall from surface frames
+    const wallImages = await preloadFrameImages(config.wallSurface.frames);
+    const wallTex = compositeSurfaceFrames(config.wallSurface, 1024, 1024, wallImages);
     wallTex.wrapS = THREE.RepeatWrapping;
     wallTex.wrapT = THREE.RepeatWrapping;
     wallTex.repeat.set(5, 5);
@@ -1207,9 +1207,9 @@ export class ExtractorSceneManager {
     this.backdrop.position.set(0, 4.5, -5.5);
     this.scene.add(this.backdrop);
 
-    // Table from compositor layers
-    const tableImages = await preloadLayerImages(config.tableLayers);
-    const tableTex = compositeBackgroundLayers(config.tableLayers, 1024, 1024, tableImages);
+    // Table from surface frames
+    const tableImages = await preloadFrameImages(config.tableSurface.frames);
+    const tableTex = compositeSurfaceFrames(config.tableSurface, 1024, 1024, tableImages);
     tableTex.wrapS = THREE.RepeatWrapping;
     tableTex.wrapT = THREE.RepeatWrapping;
     tableTex.repeat.set(4, 4);
@@ -1222,6 +1222,9 @@ export class ExtractorSceneManager {
       this.shadowFloor.position.y = -1.18;
       this.scene.add(this.shadowFloor);
     }
+
+    // Setup cue instances
+    this.setupCueInstances(config.cueConfig);
   }
 
   /** Start animated preview for Video Studio (cue positioned + camera at start) */
@@ -1230,32 +1233,24 @@ export class ExtractorSceneManager {
     if (!this.model) return;
 
     this.studioConfigRef = config;
-    const cp = config.cuePosition;
+    const cue = config.cueConfig;
 
-    // Apply cue position
-    this.model.scale.setScalar(cp.cueScale);
-    this.model.rotation.set(0, cp.spinY, 0);
-    this.model.position.set(cp.offsetX, cp.offsetY, 0);
+    // Setup cue instances
+    this.setupCueInstances(cue);
 
     // Camera at start position
-    const start = config.cameraStart;
-    const rollRad = (start.dutchTilt * Math.PI) / 180;
-    this.camera.up.set(Math.sin(rollRad), Math.cos(rollRad), 0);
-    this.camera.position.set(start.panX, start.panY, start.distance);
-    this.camera.lookAt(0, 0, 0);
-
-    // Zoom via FOV
-    this.camera.fov = 50 / cp.zoom;
+    this.setCameraFromKeyframe(config.cameraStart, cue);
+    this.camera.fov = 50;
     this.camera.updateProjectionMatrix();
 
     const animate = () => {
       if (this.isDisposed || !this.studioConfigRef) return;
       this.animationFrameId = requestAnimationFrame(animate);
       const cfg = this.studioConfigRef;
-      if (cfg.cuePosition.spinSpeed > 0) {
-        this.model!.rotation.y += cfg.cuePosition.spinSpeed * 0.02;
+      if (cfg.cueConfig.spinSpeed > 0) {
+        this.spinCueInstances(cfg.cueConfig.spinSpeed * 0.02);
       }
-      this.renderer.render(this.scene, this.camera);
+      this.render();
     };
     animate();
   }
@@ -1265,16 +1260,12 @@ export class ExtractorSceneManager {
     this.studioConfigRef = config;
     if (!this.model) return;
 
-    const cp = config.cuePosition;
-    this.model.scale.setScalar(cp.cueScale);
-    this.model.position.set(cp.offsetX, cp.offsetY, 0);
+    // Update cue instances
+    this.updateCueInstances(config.cueConfig);
 
-    const start = config.cameraStart;
-    const rollRad = (start.dutchTilt * Math.PI) / 180;
-    this.camera.up.set(Math.sin(rollRad), Math.cos(rollRad), 0);
-    this.camera.position.set(start.panX, start.panY, start.distance);
-    this.camera.lookAt(0, 0, 0);
-    this.camera.fov = 50 / cp.zoom;
+    // Update camera from start keyframe
+    this.setCameraFromKeyframe(config.cameraStart, config.cueConfig);
+    this.camera.fov = 50;
     this.camera.updateProjectionMatrix();
   }
 
@@ -1307,17 +1298,10 @@ export class ExtractorSceneManager {
   ) {
     this.stopVideoPreview();
 
-    const cp = config.cuePosition;
-    const prevScale = this.model!.scale.clone();
-    const prevRotation = this.model!.rotation.clone();
-    const prevPosition = this.model!.position.clone();
+    // Setup cue instances for recording
+    this.setupCueInstances(config.cueConfig);
 
-    this.model!.scale.setScalar(cp.cueScale);
-    this.model!.rotation.set(0, cp.spinY, 0);
-    this.model!.position.set(cp.offsetX, cp.offsetY, 0);
-
-    // Camera zoom via FOV
-    this.camera.fov = 50 / cp.zoom;
+    this.camera.fov = 50;
     this.camera.updateProjectionMatrix();
 
     // Compute duration from path + speed
@@ -1336,19 +1320,10 @@ export class ExtractorSceneManager {
       if (e.data.size > 0) this.recordedChunks.push(e.data);
     };
 
-    const cleanup = () => {
-      this.camera.up.set(0, 1, 0);
-      this.model!.scale.copy(prevScale);
-      this.model!.rotation.copy(prevRotation);
-      this.model!.position.copy(prevPosition);
-    };
-
     this.mediaRecorder.onstop = () => {
-      cleanup();
       resolve(new Blob(this.recordedChunks, { type: getSupportedMimeType() }));
     };
     this.mediaRecorder.onerror = () => {
-      cleanup();
       reject(new Error('Recording failed'));
     };
 
@@ -1357,6 +1332,7 @@ export class ExtractorSceneManager {
     let lastTimestamp = -1;
     const start = config.cameraStart;
     const end = config.cameraEnd;
+    const cue = config.cueConfig;
 
     const animate = (timestamp: number) => {
       if (this.isDisposed || currentFrame >= totalFrames) {
@@ -1375,20 +1351,17 @@ export class ExtractorSceneManager {
       onProgress?.(Math.round(progress * 100));
       const t = easingFn(progress);
 
-      // Interpolate camera
-      const camDistance = start.distance + (end.distance - start.distance) * t;
-      const camPanX = start.panX + (end.panX - start.panX) * t;
-      const camPanY = start.panY + (end.panY - start.panY) * t;
-      const camTilt = start.dutchTilt + (end.dutchTilt - start.dutchTilt) * t;
-      const rollRad = (camTilt * Math.PI) / 180;
-
-      this.camera.up.set(Math.sin(rollRad), Math.cos(rollRad), 0);
-      this.camera.position.set(camPanX, camPanY, camDistance);
-      this.camera.lookAt(0, 0, 0);
+      // Interpolate camera keyframe
+      const interpolatedKeyframe = {
+        cuePercent: start.cuePercent + (end.cuePercent - start.cuePercent) * t,
+        distanceFromCue: start.distanceFromCue + (end.distanceFromCue - start.distanceFromCue) * t,
+        offsetX: start.offsetX + (end.offsetX - start.offsetX) * t,
+      };
+      this.setCameraFromKeyframe(interpolatedKeyframe, cue);
 
       // Cue spin
-      if (cp.spinSpeed > 0) {
-        this.model!.rotation.y += cp.spinSpeed * 0.02;
+      if (cue.spinSpeed > 0) {
+        this.spinCueInstances(cue.spinSpeed * 0.02);
       }
 
       this.renderer.render(this.scene, this.camera);

@@ -2,7 +2,7 @@
 export interface ImageExtractorConfig {
   width: number; // Default: 2048
   height: number; // Default: 2048
-  format: 'png' | 'jpeg' | 'webp';
+  format: "png" | "jpeg" | "webp";
   quality: number; // 0-1 for jpeg/webp
 
   parts: {
@@ -26,26 +26,72 @@ export interface PartViewConfig {
 }
 
 // Video Extractor Types
+
+/** A single background layer for the video studio backdrop */
+export interface VideoBackgroundLayer {
+  id: string;
+  type: 'color' | 'image';
+  color: string;          // hex color (e.g. '#0a0a0a')
+  imageUrl: string | null; // blob URL or public path
+  opacity: number;        // 0–1
+  blendMode: 'normal' | 'additive' | 'multiply';
+  enabled: boolean;
+}
+
 export interface VideoExtractorConfig {
   width: number; // Default: 1920 (HD) or 2560 (2K)
   height: number; // Default: 1080 (HD) or 1440 (2K)
   fps: number; // Default: 30
   duration: number; // Total seconds
-  format: 'webm' | 'mp4';
+  format: "webm" | "mp4";
   bitrate: number; // bits per second
 
-  cueAngle: number; // 30° = Math.PI/6 radians
-  rotationSpeed: number; // Radians per second
-  panStartY: number; // Start Y position (bottom)
-  panEndY: number; // End Y position (top)
+  rotationSpeed: number; // Radians per second — spin around cue's own axis (0.1–1 recommended)
+  /** Scale multiplier. 6–8× recommended for close-up product shot. */
+  modelScale: number;
 
-  backgroundType: 'fabric' | 'solid' | 'gradient';
-  backgroundColor: string;
-  fabricTextureUrl?: string;
+  backgroundType: "fabric" | "solid" | "gradient";
+  backgroundColor: string; // Reserved for future custom backdrop color
+
+  /**
+   * Path to a custom velvet table texture image (PNG/JPG).
+   * Example: '/textures/studio/velvet-black.jpg'
+   * If omitted, a procedural dark velvet texture is generated.
+   */
+  tableTextureUrl?: string;
+
+  /**
+   * Path to a custom cement/concrete wall texture image (PNG/JPG).
+   * Example: '/textures/studio/cement-dark.jpg'
+   * If omitted, a procedural dark cement texture is generated.
+   */
+  wallTextureUrl?: string;
 
   enableShadow: boolean;
   shadowIntensity: number;
   shadowBlur: number;
+
+  /** Camera Dutch-angle roll in degrees (0 = flat, 20 = tilted). Default 20. */
+  cameraRoll: number;
+  /**
+   * How far along the cue length (0–1) the camera dolly ends.
+   * 0.68 means camera travels from butt end to ~68% = well past the joint.
+   */
+  cameraEndFraction: number;
+
+  /** Camera pan speed — fraction of cue length traversed per video. 0.15 = slow. */
+  cameraDollySpeed: number;
+  /** HDRI rotation around Y axis (horizontal direction), degrees 0-360 */
+  hdriRotationY: number;
+  /** Background layers for the studio wall — stacked from bottom to top */
+  backgroundLayers: VideoBackgroundLayer[];
+  /** HDRI file to use (filename from /public/hdri/) */
+  hdriFile: string;
+
+  // Legacy fields — kept for backward compatibility, no longer used in video recording
+  cueAngle?: number;
+  panStartY?: number;
+  panEndY?: number;
 }
 
 export interface ExtractorState {
@@ -55,13 +101,13 @@ export interface ExtractorState {
   error: string | null;
 }
 
-export type ExtractorQuality = 'hd' | '2k';
+export type ExtractorQuality = "hd" | "2k";
 
 // Default configurations
 export const DEFAULT_IMAGE_CONFIG: ImageExtractorConfig = {
   width: 2048,
   height: 2048,
-  format: 'png',
+  format: "png",
   quality: 1,
   parts: {
     bottomBump: {
@@ -92,27 +138,29 @@ export const DEFAULT_VIDEO_CONFIG: VideoExtractorConfig = {
   width: 1920,
   height: 1080,
   fps: 30,
-  duration: 12,
-  format: 'webm',
-  bitrate: 8000000, // 8 Mbps
-  cueAngle: Math.PI / 6, // 30°
-  rotationSpeed: Math.PI / 3, // 60° per second
-  panStartY: -1.5,
-  panEndY: 1.5,
-  backgroundType: 'fabric',
-  backgroundColor: '#2a2a2a',
-  fabricTextureUrl: '/textures/studio/gray-fabric.jpg',
+  duration: 8,
+  format: "webm",
+  bitrate: 8000000,
+  rotationSpeed: 0.5,
+  modelScale: 7,
+  backgroundType: "fabric",
+  backgroundColor: "#0d0d0d",
+  tableTextureUrl: "/textures/studio/velvet-black.jpg",
+  wallTextureUrl:  "/textures/studio/cement-dark.jpg",
   enableShadow: true,
   shadowIntensity: 0.6,
   shadowBlur: 2,
+  cameraRoll: 20,
+  cameraEndFraction: 1.0,
+  cameraDollySpeed: 0.15,
+  hdriRotationY: 0,
+  hdriFile: 'ferndale_studio_07_2k.hdr',
+  backgroundLayers: [{ id: 'base', type: 'color', color: '#0a0a0a', imageUrl: null, opacity: 1, blendMode: 'normal', enabled: true }],
 };
 
-export const QUALITY_PRESETS: Record<
-  ExtractorQuality,
-  Partial<VideoExtractorConfig>
-> = {
+export const QUALITY_PRESETS: Record<ExtractorQuality, Partial<VideoExtractorConfig>> = {
   hd: { width: 1920, height: 1080, bitrate: 8000000 },
-  '2k': { width: 2560, height: 1440, bitrate: 16000000 },
+  "2k": { width: 2560, height: 1440, bitrate: 16000000 },
 };
 
 // ==========================================
@@ -150,12 +198,12 @@ export interface ImageExtractorPreset {
 /** Default values for a single frame - matches main preview */
 export const DEFAULT_FRAME_POSITION: FramePosition = {
   cameraOrbitX: 0,
-  cameraOrbitY: 0,         // Side view (no tilt) - matches main preview
-  cameraDistance: 2.83,    // ~sqrt(2^2 + 2^2) - same as main preview camera
+  cameraOrbitY: 0, // Side view (no tilt) - matches main preview
+  cameraDistance: 2.83, // ~sqrt(2^2 + 2^2) - same as main preview camera
   modelOffsetX: 0,
   modelOffsetY: 0,
   zoom: 1,
-  lightAngle: 0,           // HDRI rotation - no rotation by default
+  lightAngle: 0, // HDRI rotation - no rotation by default
 };
 
 /** Default preset for Image Extractor V2 */
@@ -181,13 +229,13 @@ export const DEFAULT_IMAGE_EXTRACTOR_PRESET: ImageExtractorPreset = {
 };
 
 /** Frame keys type */
-export type FrameKey = 'bottomBump' | 'centerCue' | 'topCap';
+export type FrameKey = "bottomBump" | "centerCue" | "topCap";
 
 /** Frame labels for UI */
 export const FRAME_LABELS: Record<FrameKey, string> = {
-  bottomBump: 'Bottom Bump',
-  centerCue: 'Full Cue',
-  topCap: 'Top Cap',
+  bottomBump: "Bottom Bump",
+  centerCue: "Full Cue",
+  topCap: "Top Cap",
 };
 
 // ==========================================
@@ -196,26 +244,26 @@ export const FRAME_LABELS: Record<FrameKey, string> = {
 
 /** Frame transform on 2048×2048 canvas */
 export interface FrameTransform {
-  x: number;      // X position (px, 0-2048)
-  y: number;      // Y position (px, 0-2048)
-  width: number;  // Width (px)
+  x: number; // X position (px, 0-2048)
+  y: number; // Y position (px, 0-2048)
+  width: number; // Width (px)
   height: number; // Height (px)
   rotation: number; // Rotation (degrees)
 }
 
 /** HDRI layer for multi-HDRI lighting */
 export interface HdriLayer {
-  id: string;           // Unique ID for this layer
-  hdriType: string;     // HDRI filename
-  rotationX: number;    // X-axis rotation (degrees, 0-360) - vertical shift
-  rotationY: number;    // Y-axis rotation (degrees, 0-360) - horizontal shift
+  id: string; // Unique ID for this layer
+  hdriType: string; // HDRI filename
+  rotationX: number; // X-axis rotation (degrees, 0-360) - vertical shift
+  rotationY: number; // Y-axis rotation (degrees, 0-360) - horizontal shift
 }
 
 /** Default HDRI layer */
-export const DEFAULT_HDRI_LAYER: Omit<HdriLayer, 'id'> = {
-  hdriType: 'bloem_train_track_clear_2k.hdr',
+export const DEFAULT_HDRI_LAYER: Omit<HdriLayer, "id"> = {
+  hdriType: "bloem_train_track_clear_2k.hdr",
   rotationX: 0,
-  rotationY: 300,  // Rotate 300° to center light in front of cue
+  rotationY: 300, // Rotate 300° to center light in front of cue
 };
 
 /** Create a new HDRI layer with defaults */
@@ -230,12 +278,12 @@ export function createDefaultHdriLayer(hdriType?: string): HdriLayer {
 
 /** Cue settings within a frame */
 export interface CueSettings {
-  spinY: number;    // Model Y-axis rotation (radians) - horizontal drag
-  phi: number;      // Camera vertical orbit (radians, 0=top, PI/2=side) - vertical drag
-  zoom: number;     // Zoom multiplier
-  offsetX: number;  // Horizontal offset
-  offsetY: number;  // Vertical offset
-  hdriLayers: HdriLayer[];  // 1-2 HDRI layers with independent rotation
+  spinY: number; // Model Y-axis rotation (radians) - horizontal drag
+  phi: number; // Camera vertical orbit (radians, 0=top, PI/2=side) - vertical drag
+  zoom: number; // Zoom multiplier
+  offsetX: number; // Horizontal offset
+  offsetY: number; // Vertical offset
+  hdriLayers: HdriLayer[]; // 1-2 HDRI layers with independent rotation
   // Legacy fields (for backward compatibility during migration)
   lightAngle?: number;
   hdriType?: string;
@@ -246,20 +294,10 @@ export interface CueSettings {
 // ==========================================
 
 /** Blend modes for image frames */
-export type BlendMode = 
-  | 'normal' 
-  | 'multiply' 
-  | 'screen' 
-  | 'overlay' 
-  | 'darken' 
-  | 'lighten'
-  | 'color-dodge'
-  | 'color-burn'
-  | 'hard-light'
-  | 'soft-light';
+export type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "darken" | "lighten" | "color-dodge" | "color-burn" | "hard-light" | "soft-light";
 
 /** Object fit options for images */
-export type ObjectFit = 'custom' | 'cover' | 'contain';
+export type ObjectFit = "custom" | "cover" | "contain";
 
 /** 3D rotation for image frames */
 export interface Rotation3D {
@@ -270,32 +308,32 @@ export interface Rotation3D {
 
 /** Settings specific to image frames */
 export interface ImageSettings {
-  imageUrl: string | null;       // Blob/data URL while editing; storage URL after save
-  backgroundColor: string;       // Hex color (#ffffff)
-  backgroundEnabled: boolean;    // Show background fill behind the image
-  backgroundOpacity: number;     // 0–1, opacity of the background fill layer
+  imageUrl: string | null; // Blob/data URL while editing; storage URL after save
+  backgroundColor: string; // Hex color (#ffffff)
+  backgroundEnabled: boolean; // Show background fill behind the image
+  backgroundOpacity: number; // 0–1, opacity of the background fill layer
   objectFit: ObjectFit;
   rotation3d: Rotation3D;
-  imageOpacity: number;          // 0–1, applies to the image layer only
-  opacity: number;               // 0–1, whole-frame opacity (kept for compat)
+  imageOpacity: number; // 0–1, applies to the image layer only
+  opacity: number; // 0–1, whole-frame opacity (kept for compat)
   blendMode: BlendMode;
 }
 
 /** Default image settings */
 export const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
   imageUrl: null,
-  backgroundColor: '#2a2a2a',
+  backgroundColor: "#2a2a2a",
   backgroundEnabled: true,
   backgroundOpacity: 1,
-  objectFit: 'cover',
+  objectFit: "cover",
   rotation3d: { x: 0, y: 0, z: 0 },
   imageOpacity: 1,
   opacity: 1,
-  blendMode: 'normal',
+  blendMode: "normal",
 };
 
 /** Frame type discriminator */
-export type FrameType = 'cue' | 'image';
+export type FrameType = "cue" | "image";
 
 // ==========================================
 // Frame Types (Discriminated Union)
@@ -304,20 +342,20 @@ export type FrameType = 'cue' | 'image';
 /** Base frame properties shared by all frame types */
 interface BaseFrame {
   id: string;
-  name?: string;   // Optional user-defined label (e.g. "Front View"); falls back to "Frame N"
+  name?: string; // Optional user-defined label (e.g. "Front View"); falls back to "Frame N"
   order: number;
   transform: FrameTransform;
 }
 
 /** Cue frame - displays 3D model view */
 export interface CueFrame extends BaseFrame {
-  frameType: 'cue';
+  frameType: "cue";
   cue: CueSettings;
 }
 
 /** Image frame - displays uploaded image or solid color overlay */
 export interface ImageFrame extends BaseFrame {
-  frameType: 'image';
+  frameType: "image";
   imageSettings: ImageSettings;
 }
 
@@ -326,12 +364,12 @@ export type ExtractorFrame = CueFrame | ImageFrame;
 
 /** Type guard for cue frames */
 export function isCueFrame(frame: ExtractorFrame): frame is CueFrame {
-  return frame.frameType === 'cue';
+  return frame.frameType === "cue";
 }
 
 /** Type guard for image frames */
 export function isImageFrame(frame: ExtractorFrame): frame is ImageFrame {
-  return frame.frameType === 'image';
+  return frame.frameType === "image";
 }
 
 /** Saved reference (layout preset) */
@@ -353,8 +391,8 @@ export interface ExtractorReferenceGroup {
 
 /** Default frame transform */
 export const DEFAULT_FRAME_TRANSFORM: FrameTransform = {
-  x: 724,       // Centered horizontally (2048-600)/2
-  y: 724,       // Centered vertically
+  x: 724, // Centered horizontally (2048-600)/2
+  y: 724, // Centered vertically
   width: 600,
   height: 600,
   rotation: 0,
@@ -362,12 +400,12 @@ export const DEFAULT_FRAME_TRANSFORM: FrameTransform = {
 
 /** Default cue settings - matches main preview camera position */
 export const DEFAULT_CUE_SETTINGS: CueSettings = {
-  spinY: 0,           // Model facing front
-  phi: Math.PI / 2,   // Camera at side view (90°) - same as main preview y=0
+  spinY: 0, // Model facing front
+  phi: Math.PI / 2, // Camera at side view (90°) - same as main preview y=0
   zoom: 1,
   offsetX: 0,
   offsetY: 0,
-  hdriLayers: [createDefaultHdriLayer()],  // Default: 1x bloem train track
+  hdriLayers: [createDefaultHdriLayer()], // Default: 1x bloem train track
 };
 
 /** Create a new cue frame with defaults */
@@ -375,11 +413,11 @@ export function createDefaultFrame(id?: string, order: number = 0): CueFrame {
   return {
     id: id || crypto.randomUUID(),
     order,
-    frameType: 'cue',
+    frameType: "cue",
     transform: { ...DEFAULT_FRAME_TRANSFORM },
-    cue: { 
+    cue: {
       ...DEFAULT_CUE_SETTINGS,
-      hdriLayers: [createDefaultHdriLayer()],  // Fresh layer with new ID
+      hdriLayers: [createDefaultHdriLayer()], // Fresh layer with new ID
     },
   };
 }
@@ -389,7 +427,7 @@ export function createDefaultImageFrame(id?: string, order: number = 0): ImageFr
   return {
     id: id || crypto.randomUUID(),
     order,
-    frameType: 'image',
+    frameType: "image",
     transform: { ...DEFAULT_FRAME_TRANSFORM },
     imageSettings: { ...DEFAULT_IMAGE_SETTINGS },
   };
@@ -401,7 +439,7 @@ export function migrateCueSettings(cue: CueSettings): CueSettings {
   if (cue.hdriLayers && cue.hdriLayers.length > 0) {
     return cue;
   }
-  
+
   // Migrate from old format
   const layer: HdriLayer = {
     id: crypto.randomUUID(),
@@ -409,7 +447,7 @@ export function migrateCueSettings(cue: CueSettings): CueSettings {
     rotationX: 0,
     rotationY: cue.lightAngle || 0,
   };
-  
+
   return {
     ...cue,
     hdriLayers: [layer],
@@ -423,9 +461,9 @@ export function migrateCueSettings(cue: CueSettings): CueSettings {
 /** Template for 1 centered frame */
 export const TEMPLATE_1_FRAME: CueFrame[] = [
   {
-    id: 'frame-1',
+    id: "frame-1",
     order: 0,
-    frameType: 'cue',
+    frameType: "cue",
     transform: { x: 524, y: 524, width: 1000, height: 1000, rotation: 0 },
     cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.2, hdriLayers: [createDefaultHdriLayer()] },
   },
@@ -434,16 +472,16 @@ export const TEMPLATE_1_FRAME: CueFrame[] = [
 /** Template for 2 frames side by side */
 export const TEMPLATE_2_FRAMES: CueFrame[] = [
   {
-    id: 'frame-1',
+    id: "frame-1",
     order: 0,
-    frameType: 'cue',
+    frameType: "cue",
     transform: { x: 100, y: 524, width: 800, height: 1000, rotation: 0 },
     cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.5, hdriLayers: [createDefaultHdriLayer()] },
   },
   {
-    id: 'frame-2',
+    id: "frame-2",
     order: 1,
-    frameType: 'cue',
+    frameType: "cue",
     transform: { x: 1148, y: 524, width: 800, height: 1000, rotation: 0 },
     cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1.5, hdriLayers: [createDefaultHdriLayer()] },
   },
@@ -452,23 +490,23 @@ export const TEMPLATE_2_FRAMES: CueFrame[] = [
 /** Template for 3 frames diagonal (like original design) */
 export const TEMPLATE_3_DIAGONAL: CueFrame[] = [
   {
-    id: 'frame-bottom',
+    id: "frame-bottom",
     order: 0,
-    frameType: 'cue',
+    frameType: "cue",
     transform: { x: 100, y: 1448, width: 500, height: 500, rotation: 0 },
     cue: { ...DEFAULT_CUE_SETTINGS, zoom: 2.5, hdriLayers: [createDefaultHdriLayer()] },
   },
   {
-    id: 'frame-center',
+    id: "frame-center",
     order: 1,
-    frameType: 'cue',
+    frameType: "cue",
     transform: { x: 574, y: 374, width: 900, height: 1300, rotation: 0 },
     cue: { ...DEFAULT_CUE_SETTINGS, zoom: 1, hdriLayers: [createDefaultHdriLayer()] },
   },
   {
-    id: 'frame-top',
+    id: "frame-top",
     order: 2,
-    frameType: 'cue',
+    frameType: "cue",
     transform: { x: 1448, y: 100, width: 500, height: 500, rotation: 0 },
     cue: { ...DEFAULT_CUE_SETTINGS, zoom: 2.5, hdriLayers: [createDefaultHdriLayer()] },
   },
@@ -476,9 +514,24 @@ export const TEMPLATE_3_DIAGONAL: CueFrame[] = [
 
 /** All available templates */
 export const FRAME_TEMPLATES = {
-  '1-frame': { name: '1 Frame', frames: TEMPLATE_1_FRAME },
-  '2-frames': { name: '2 Frames', frames: TEMPLATE_2_FRAMES },
-  '3-diagonal': { name: '3 Diagonal', frames: TEMPLATE_3_DIAGONAL },
+  "1-frame": { name: "1 Frame", frames: TEMPLATE_1_FRAME },
+  "2-frames": { name: "2 Frames", frames: TEMPLATE_2_FRAMES },
+  "3-diagonal": { name: "3 Diagonal", frames: TEMPLATE_3_DIAGONAL },
 } as const;
 
 export type TemplateKey = keyof typeof FRAME_TEMPLATES;
+
+// Re-export Video Studio types
+export type {
+  VideoStudioConfig,
+  VideoStudioTemplate,
+  VideoCuePosition,
+  CameraPosition,
+  EasingConfig,
+  BackgroundLayer,
+  BackgroundLayerType,
+  GradientPreset,
+  GradientCategory,
+  CameraMovementPreset,
+  EasingPreset,
+} from './video-studio';

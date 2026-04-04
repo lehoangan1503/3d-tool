@@ -7,47 +7,66 @@ import {
   ChevronDown,
   ChevronUp,
   Plus,
-  Layers,
   RectangleHorizontal,
   Table2,
 } from "lucide-react";
-import type {
-  BackgroundLayer,
-  BackgroundLayerType,
+import type { SurfaceConfig, BackgroundFrame } from "@/types/video-studio";
+import {
+  createBackgroundFrame,
+  MAX_BACKGROUND_FRAMES,
 } from "@/types/video-studio";
-import { createBackgroundLayer } from "@/types/video-studio";
-import { LayerControls } from "./layer-controls";
+import { FrameControls } from "./frame-controls";
 
 // ---------------------------------------------------------------------------
-// LayerSection – collapsible section for a single background stack
+// SurfaceSection – collapsible section for a single surface
 // ---------------------------------------------------------------------------
 
-function LayerSection({
+function SurfaceSection({
   title,
   icon: Icon,
-  layers,
+  surface,
   onChange,
 }: {
   title: string;
   icon: React.ComponentType<{ className?: string }>;
-  layers: BackgroundLayer[];
-  onChange: (layers: BackgroundLayer[]) => void;
+  surface: SurfaceConfig;
+  onChange: (surface: SurfaceConfig) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
 
-  const handleLayerChange = (layer: BackgroundLayer, index: number) => {
-    const next = [...layers];
-    next[index] = layer;
-    onChange(next);
+  const handleFrameChange = (frame: BackgroundFrame, index: number) => {
+    const next = [...surface.frames];
+    next[index] = frame;
+    onChange({ ...surface, frames: next });
   };
 
-  const handleLayerDelete = (index: number) => {
-    if (index === 0) return; // base layer cannot be removed
-    onChange(layers.filter((_, i) => i !== index));
+  const handleFrameDelete = (index: number) => {
+    onChange({
+      ...surface,
+      frames: surface.frames.filter((_, i) => i !== index),
+    });
   };
 
-  const handleAddLayer = (type: BackgroundLayerType) => {
-    onChange([...layers, createBackgroundLayer(type)]);
+  const handleMoveUp = (index: number) => {
+    if (index === 0) return;
+    const next = [...surface.frames];
+    [next[index - 1], next[index]] = [next[index], next[index - 1]];
+    onChange({ ...surface, frames: next });
+  };
+
+  const handleMoveDown = (index: number) => {
+    if (index >= surface.frames.length - 1) return;
+    const next = [...surface.frames];
+    [next[index], next[index + 1]] = [next[index + 1], next[index]];
+    onChange({ ...surface, frames: next });
+  };
+
+  const handleAddFrame = () => {
+    if (surface.frames.length >= MAX_BACKGROUND_FRAMES) return;
+    onChange({
+      ...surface,
+      frames: [...surface.frames, createBackgroundFrame("color")],
+    });
   };
 
   return (
@@ -61,7 +80,7 @@ function LayerSection({
         <Icon className="size-4 text-muted-foreground" />
         <span className="text-sm font-medium flex-1 text-left">{title}</span>
         <span className="text-xs text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded">
-          {layers.length}
+          {surface.frames.length}
         </span>
         {expanded ? (
           <ChevronUp className="size-4 text-muted-foreground" />
@@ -73,46 +92,44 @@ function LayerSection({
       {/* Expanded content */}
       {expanded && (
         <div className="px-2 pb-2 space-y-2">
-          {layers.map((layer, index) => (
-            <LayerControls
-              key={layer.id}
-              layer={layer}
-              isBase={index === 0}
-              onChange={(updated: BackgroundLayer) => handleLayerChange(updated, index)}
-              onDelete={() => handleLayerDelete(index)}
+          {/* Base color */}
+          <div className="flex items-center gap-2 px-1">
+            <Label className="text-xs text-muted-foreground">Base Color</Label>
+            <input
+              type="color"
+              value={surface.baseColor}
+              onChange={(e) =>
+                onChange({ ...surface, baseColor: e.target.value })
+              }
+              className="h-6 w-10 cursor-pointer rounded border-0"
+            />
+          </div>
+
+          {/* Frames */}
+          {surface.frames.map((frame, index) => (
+            <FrameControls
+              key={frame.id}
+              frame={frame}
+              onChange={(updated) => handleFrameChange(updated, index)}
+              onDelete={() => handleFrameDelete(index)}
+              onMoveUp={() => handleMoveUp(index)}
+              onMoveDown={() => handleMoveDown(index)}
+              isFirst={index === 0}
+              isLast={index === surface.frames.length - 1}
             />
           ))}
 
-          {/* Add layer buttons */}
-          <div className="flex gap-2 pt-1">
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex-1 h-7 text-xs"
-              onClick={() => handleAddLayer("color")}
-            >
-              <Plus className="size-3 mr-1" />
-              Color
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex-1 h-7 text-xs"
-              onClick={() => handleAddLayer("gradient")}
-            >
-              <Plus className="size-3 mr-1" />
-              Gradient
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex-1 h-7 text-xs"
-              onClick={() => handleAddLayer("image")}
-            >
-              <Plus className="size-3 mr-1" />
-              Image
-            </Button>
-          </div>
+          {/* Add frame button */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full h-7 text-xs"
+            disabled={surface.frames.length >= MAX_BACKGROUND_FRAMES}
+            onClick={handleAddFrame}
+          >
+            <Plus className="size-3 mr-1" />
+            Add Frame
+          </Button>
         </div>
       )}
     </div>
@@ -124,31 +141,31 @@ function LayerSection({
 // ---------------------------------------------------------------------------
 
 interface BackgroundPanelProps {
-  wallLayers: BackgroundLayer[];
-  tableLayers: BackgroundLayer[];
-  onWallLayersChange: (layers: BackgroundLayer[]) => void;
-  onTableLayersChange: (layers: BackgroundLayer[]) => void;
+  wallSurface: SurfaceConfig;
+  tableSurface: SurfaceConfig;
+  onWallSurfaceChange: (s: SurfaceConfig) => void;
+  onTableSurfaceChange: (s: SurfaceConfig) => void;
 }
 
 export function BackgroundPanel({
-  wallLayers,
-  tableLayers,
-  onWallLayersChange,
-  onTableLayersChange,
+  wallSurface,
+  tableSurface,
+  onWallSurfaceChange,
+  onTableSurfaceChange,
 }: BackgroundPanelProps) {
   return (
     <div className="space-y-3">
-      <LayerSection
+      <SurfaceSection
         title="Wall Background"
         icon={RectangleHorizontal}
-        layers={wallLayers}
-        onChange={onWallLayersChange}
+        surface={wallSurface}
+        onChange={onWallSurfaceChange}
       />
-      <LayerSection
+      <SurfaceSection
         title="Table Surface"
         icon={Table2}
-        layers={tableLayers}
-        onChange={onTableLayersChange}
+        surface={tableSurface}
+        onChange={onTableSurfaceChange}
       />
     </div>
   );

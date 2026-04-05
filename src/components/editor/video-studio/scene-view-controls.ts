@@ -68,9 +68,6 @@ export class SceneViewControls {
       this.orbitControls.enableDamping = true;
       this.orbitControls.dampingFactor = 0.1;
       this.orbitControls.target.set(0, 2, 0);
-      this.orbitControls.minDistance = 3;
-      this.orbitControls.maxDistance = 30;
-      this.orbitControls.maxPolarAngle = Math.PI * 0.85;
 
       this.transformControls = new TransformControls(godCam, canvas);
       this.transformControls.setMode("translate");

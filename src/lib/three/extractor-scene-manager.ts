@@ -1225,14 +1225,14 @@ export class ExtractorSceneManager {
 
     // Table from surface frames — single 2048×2048 canvas, no tiling
     // Position table at bottom edge of wall: wallY - wallHeight/2 = 4.5 - 11 = -6.5
-    // Small gap (0.05) prevents z-fighting and gives a visible seam between wall and table
-    const wallBottomY = this.backdrop.position.y - 11 - 0.05;
+    // Wall and table share the same bottom edge — no gap
+    const wallBottomY = this.backdrop.position.y - 11;
     const tableImages = await preloadFrameImages(config.tableSurface.frames);
     const tableTex = compositeSurfaceFrames(config.tableSurface, 2048, 2048, tableImages);
     tableTex.wrapS = THREE.ClampToEdgeWrapping;
     tableTex.wrapT = THREE.ClampToEdgeWrapping;
     tableTex.repeat.set(1, 1);
-    this.tableSurface = createTableSurface(tableTex, 28, 5, wallBottomY);
+    this.tableSurface = createTableSurface(tableTex, 34, 5, wallBottomY);
     this.scene.add(this.tableSurface);
     this.tableSurface.userData = { type: 'table' };
 
@@ -1326,7 +1326,7 @@ export class ExtractorSceneManager {
       const material = this.createFramePlaneMaterial(frame, loadedImages);
 
       if (isTable) {
-        const tableWidth = 28;
+        const tableWidth = 34;
         const tableDepth = 5;
         const pw = frame.width * tableWidth;
         const pd = frame.height * tableDepth;
@@ -1408,7 +1408,7 @@ export class ExtractorSceneManager {
 
     const tablePos = this.tableSurface?.position;
     if (tablePos) {
-      const tableWidth = 28;
+      const tableWidth = 34;
       const tableDepth = 5;
       const tableFrames = config.tableSurface.frames.filter(f => f.enabled);
 
@@ -1616,6 +1616,60 @@ export class ExtractorSceneManager {
     if (this.cameraHelper) this.cameraHelper.update();
     const cam = this.isSceneView && this.godCamera ? this.godCamera : this.camera;
     this.renderer.render(this.scene, cam);
+
+    // Minimap: render camera view inset when in scene view
+    if (this.isSceneView && this.godCamera) {
+      this.renderMinimap();
+    }
+  }
+
+  /** Render a small camera-view inset in the top-right corner */
+  private renderMinimap(): void {
+    const gl = this.renderer.getContext();
+    const canvas = this.renderer.domElement;
+    const dpr = this.renderer.getPixelRatio();
+    const cw = canvas.width;
+    const ch = canvas.height;
+
+    // Minimap size: ~25% of canvas width, maintain 16:9 aspect
+    const mw = Math.round(cw * 0.25);
+    const mh = Math.round(mw * 9 / 16);
+    const mx = cw - mw - Math.round(12 * dpr);
+    const my = ch - mh - Math.round(12 * dpr); // WebGL Y is bottom-up
+
+    // Hide camera helper so it doesn't appear in minimap
+    const helperWasVisible = this.cameraHelper?.visible ?? false;
+    if (this.cameraHelper) this.cameraHelper.visible = false;
+    // Hide camera gizmo
+    const gizmoWasVisible = this.cameraGizmo?.visible ?? false;
+    if (this.cameraGizmo) this.cameraGizmo.visible = false;
+
+    // Save and set camera aspect for minimap
+    const savedAspect = this.camera.aspect;
+    this.camera.aspect = mw / mh;
+    this.camera.updateProjectionMatrix();
+
+    this.renderer.setScissorTest(true);
+    this.renderer.setViewport(mx, my, mw, mh);
+    this.renderer.setScissor(mx, my, mw, mh);
+    this.renderer.render(this.scene, this.camera);
+    this.renderer.setScissorTest(false);
+
+    // Restore full viewport and camera aspect
+    this.renderer.setViewport(0, 0, cw, ch);
+    this.camera.aspect = savedAspect;
+    this.camera.updateProjectionMatrix();
+
+    // Restore helpers
+    if (this.cameraHelper) this.cameraHelper.visible = helperWasVisible;
+    if (this.cameraGizmo) this.cameraGizmo.visible = gizmoWasVisible;
+
+    // Draw border around minimap
+    const ctx2d = (canvas as HTMLCanvasElement).getContext?.('2d');
+    if (!ctx2d) {
+      // WebGL canvas — draw border via a second pass overlay would be complex;
+      // Instead use a CSS overlay in the React component
+    }
   }
 
   /**
@@ -2006,29 +2060,13 @@ export class ExtractorSceneManager {
         break;
     }
 
-    // Clamp target position
-    this.cameraTargetPos.x = Math.max(-15, Math.min(15, this.cameraTargetPos.x));
-    this.cameraTargetPos.y = Math.max(-1.0, Math.min(14, this.cameraTargetPos.y));
-    this.cameraTargetPos.z = Math.max(0.3, Math.min(12, this.cameraTargetPos.z));
+    // Camera can move freely — no position clamping
 
     return { x: this.cameraTargetPos.x, y: this.cameraTargetPos.y, z: this.cameraTargetPos.z };
   }
 
-  /** Clamp camera so it stays within studio bounds */
-  private clampCameraToStudioBounds(): void {
-    const pos = this.camera.position;
-
-    const minX = -15;
-    const maxX = 15;
-    const minY = -1.0;
-    const maxY = 14;
-    const minZ = 0.3;
-    const maxZ = 12;
-
-    pos.x = Math.max(minX, Math.min(maxX, pos.x));
-    pos.y = Math.max(minY, Math.min(maxY, pos.y));
-    pos.z = Math.max(minZ, Math.min(maxZ, pos.z));
-  }
+  /** Clamp camera so it stays within studio bounds — currently unused, camera moves freely */
+  // private clampCameraToStudioBounds(): void { ... }
 
   /** Convert current camera position to a CameraKeyframe (for "Set Start/End" buttons) */
   getCameraKeyframeFromPosition(cueConfig: CueConfig): CameraKeyframe {
@@ -2045,9 +2083,9 @@ export class ExtractorSceneManager {
     const offsetX = pos.x - mainCue.positionX;
 
     return {
-      cuePercent: Math.max(0, Math.min(100, cuePercent)),
-      distanceFromCue: Math.max(0.5, Math.min(5, distanceFromCue)),
-      offsetX: Math.max(-2, Math.min(2, offsetX)),
+      cuePercent,
+      distanceFromCue,
+      offsetX,
     };
   }
 

@@ -33,10 +33,6 @@ const TRANSFORMABLE_TYPES = new Set([
 export class SceneViewControls {
   private orbitControls: OrbitControls | null = null;
   private transformControls: TransformControls | null = null;
-  private activeAxis: "x" | "y" | "z" | null = null;
-  private isDragging = false;
-  private dragStartX = 0;
-  private dragStartY = 0;
   private mouseDownX = 0;
   private mouseDownY = 0;
   private isDisposed = false;
@@ -49,9 +45,7 @@ export class SceneViewControls {
   private savedEmissives = new Map<THREE.Material, THREE.Color>();
 
   private boundKeyDown: (e: KeyboardEvent) => void;
-  private boundKeyUp: (e: KeyboardEvent) => void;
   private boundMouseDown: (e: MouseEvent) => void;
-  private boundMouseMove: (e: MouseEvent) => void;
   private boundMouseUp: (e: MouseEvent) => void;
 
   constructor(
@@ -108,15 +102,11 @@ export class SceneViewControls {
     }
 
     this.boundKeyDown = this.handleKeyDown.bind(this);
-    this.boundKeyUp = this.handleKeyUp.bind(this);
     this.boundMouseDown = this.handleMouseDown.bind(this);
-    this.boundMouseMove = this.handleMouseMove.bind(this);
     this.boundMouseUp = this.handleMouseUp.bind(this);
 
     window.addEventListener("keydown", this.boundKeyDown);
-    window.addEventListener("keyup", this.boundKeyUp);
     canvas.addEventListener("mousedown", this.boundMouseDown);
-    window.addEventListener("mousemove", this.boundMouseMove);
     window.addEventListener("mouseup", this.boundMouseUp);
   }
 
@@ -307,12 +297,7 @@ export class SceneViewControls {
     if (e.repeat) return;
     const key = e.key.toLowerCase();
 
-    // Axis locks for camera movement
-    if (key === "x") this.activeAxis = "x";
-    else if (key === "y") this.activeAxis = "y";
-    else if (key === "z") this.activeAxis = "z";
-
-    // TransformControls mode switching (works even without current attachment)
+    // TransformControls mode switching
     if (key === "g" && this.transformControls) {
       this.transformControls.setMode("translate");
     } else if (key === "r" && this.transformControls) {
@@ -329,57 +314,13 @@ export class SceneViewControls {
     }
   }
 
-  private handleKeyUp(e: KeyboardEvent) {
-    const key = e.key.toLowerCase();
-    if (
-      (key === "x" && this.activeAxis === "x") ||
-      (key === "y" && this.activeAxis === "y") ||
-      (key === "z" && this.activeAxis === "z")
-    ) {
-      this.activeAxis = null;
-    }
-  }
-
   private handleMouseDown(e: MouseEvent) {
     if (e.button !== 0) return;
-
-    // Always record position for click-vs-drag detection
     this.mouseDownX = e.clientX;
     this.mouseDownY = e.clientY;
-
-    // Axis-locked camera drag (existing behaviour)
-    if (this.activeAxis !== null) {
-      e.preventDefault();
-      e.stopPropagation();
-      this.isDragging = true;
-      this.dragStartX = e.clientX;
-      this.dragStartY = e.clientY;
-      if (this.orbitControls) this.orbitControls.enabled = false;
-    }
-  }
-
-  private handleMouseMove(e: MouseEvent) {
-    if (!this.isDragging) return;
-
-    const dx = e.clientX - this.dragStartX;
-    const dy = e.clientY - this.dragStartY;
-    this.dragStartX = e.clientX;
-    this.dragStartY = e.clientY;
-
-    this.esm.moveStudioCamera(dx, dy, this.activeAxis);
-
-    const cueConfig = this.getCueConfig();
-    const kf = this.esm.getCameraKeyframeFromPosition(cueConfig);
-    this.onCameraKeyframeChange(kf);
   }
 
   private handleMouseUp(e: MouseEvent) {
-    if (this.isDragging) {
-      this.isDragging = false;
-      if (this.orbitControls) this.orbitControls.enabled = true;
-      return;
-    }
-
     // Click detection: only fire selection if mouse barely moved
     if (e.button !== 0) return;
     const dx = e.clientX - this.mouseDownX;
@@ -396,10 +337,6 @@ export class SceneViewControls {
   // ---------------------------------------------------------------------------
   // Public API
   // ---------------------------------------------------------------------------
-
-  getActiveAxis(): "x" | "y" | "z" | null {
-    return this.activeAxis;
-  }
 
   getSelection(): SelectionInfo {
     return { ...this.currentSelection };
@@ -424,9 +361,7 @@ export class SceneViewControls {
     this.isDisposed = true;
 
     window.removeEventListener("keydown", this.boundKeyDown);
-    window.removeEventListener("keyup", this.boundKeyUp);
     this.canvas.removeEventListener("mousedown", this.boundMouseDown);
-    window.removeEventListener("mousemove", this.boundMouseMove);
     window.removeEventListener("mouseup", this.boundMouseUp);
 
     this.clearHighlight();

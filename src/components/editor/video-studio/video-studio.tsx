@@ -401,14 +401,6 @@ export function VideoStudio({
             {/* Key hints for scene view */}
             {viewMode === "scene" && (
               <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground px-1 flex-wrap">
-                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">X</span>
-                <span>X-axis</span>
-                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">Y</span>
-                <span>Y-axis</span>
-                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">Z</span>
-                <span>Z-axis</span>
-                <span className="text-muted-foreground/60">— hold + drag camera</span>
-                <span className="text-muted-foreground/30">|</span>
                 <span className="font-mono bg-muted px-1.5 py-0.5 rounded">G</span>
                 <span>Move</span>
                 <span className="font-mono bg-muted px-1.5 py-0.5 rounded">R</span>
@@ -417,6 +409,7 @@ export function VideoStudio({
                 <span>Scale</span>
                 <span className="font-mono bg-muted px-1.5 py-0.5 rounded">Esc</span>
                 <span>Deselect</span>
+                <span className="text-muted-foreground/60">— click to select, drag to orbit</span>
               </div>
             )}
 

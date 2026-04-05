@@ -126,7 +126,6 @@ export class ExtractorSceneManager {
   private cameraTargetPos = new THREE.Vector3();
   private cameraLookAtYOffset = 0.5; // 0 = cue bottom, 1 = cue top, default center
   private cameraSmoothEnabled = false;
-  private cameraRotationOverride = false; // true when user explicitly rotated via R gizmo
 
   // Animation state
   private animationFrameId: number | null = null;
@@ -1459,8 +1458,13 @@ export class ExtractorSceneManager {
       if (this.isDisposed || !this.studioConfigRef) return;
       this.animationFrameId = requestAnimationFrame(animate);
       const cfg = this.studioConfigRef;
-      if (cfg.cueConfig.spinSpeed > 0) {
-        this.spinCueInstances(cfg.cueConfig.spinSpeed * 0.02);
+      const hasSpinY = cfg.cueConfig.spinSpeed > 0;
+      const hasSpinX = (cfg.cueConfig.spinSpeedX || 0) > 0;
+      if (hasSpinY || hasSpinX) {
+        this.spinCueInstances(
+          hasSpinY ? cfg.cueConfig.spinSpeed * 0.02 : 0,
+          hasSpinX ? (cfg.cueConfig.spinSpeedX || 0) * 0.02 : 0
+        );
       }
       this.render();
     };
@@ -1482,6 +1486,62 @@ export class ExtractorSceneManager {
     this.setCameraFromKeyframe(config.cameraStart, config.cueConfig);
     this.camera.fov = 50;
     this.camera.updateProjectionMatrix();
+
+    // Apply shadow settings
+    this.updateShadowFromConfig(config);
+
+    // Apply HDRI intensity
+    this.updateHdriIntensity(config);
+
+    // Apply surface HDRI separation
+    this.updateSurfaceHdri(config);
+  }
+
+  /** Apply shadow config to spotlight + shadow floor */
+  private updateShadowFromConfig(config: VideoStudioConfig): void {
+    const s = config.shadow;
+    if (!s.enabled) return;
+
+    if (this.spotLight) {
+      this.spotLight.shadow.radius = s.blur ?? 3;
+      this.spotLight.penumbra = s.softness ?? 0.45;
+      // Offset light position for shadow direction control
+      this.spotLight.position.set(2 + (s.offsetX ?? 0), 5, 3 + (s.offsetY ?? 0));
+    }
+    if (this.shadowFloor) {
+      (this.shadowFloor.material as THREE.ShadowMaterial).opacity = s.intensity;
+    }
+  }
+
+  /** Apply HDRI intensity to scene environment */
+  private updateHdriIntensity(config: VideoStudioConfig): void {
+    const intensity = config.hdriIntensity ?? 1.0;
+    // Apply to scene.environmentIntensity (Three.js r155+) — falls back gracefully
+    if ('environmentIntensity' in this.scene) {
+      (this.scene as THREE.Scene & { environmentIntensity: number }).environmentIntensity = intensity;
+    }
+  }
+
+  /** Apply separate HDRI to wall/table surfaces (or remove it) */
+  private updateSurfaceHdri(config: VideoStudioConfig): void {
+    const surfCfg = config.surfaceHdri;
+    if (!surfCfg) return;
+
+    const targets = [this.backdrop, this.tableSurface].filter(Boolean) as THREE.Mesh[];
+    for (const mesh of targets) {
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      if (!surfCfg.enabled) {
+        // No HDRI on surfaces — remove envMap so they're lit only by lights
+        mat.envMap = null;
+        mat.envMapIntensity = 0;
+        mat.needsUpdate = true;
+      } else {
+        // Use scene environment with custom intensity
+        mat.envMap = this.scene.environment;
+        mat.envMapIntensity = surfCfg.intensity ?? 0.3;
+        mat.needsUpdate = true;
+      }
+    }
   }
 
   /** Record video using the new start/end camera animation system */
@@ -1514,9 +1574,6 @@ export class ExtractorSceneManager {
     reject: (err: Error) => void
   ) {
     this.stopVideoPreview();
-
-    // Recording always uses auto-lookAt — clear any manual rotation override
-    this.cameraRotationOverride = false;
 
     // Setup cue instances for recording
     this.setupCueInstances(config.cueConfig);
@@ -1580,8 +1637,13 @@ export class ExtractorSceneManager {
       this.setCameraFromKeyframe(interpolatedKeyframe, cue);
 
       // Cue spin
-      if (cue.spinSpeed > 0) {
-        this.spinCueInstances(cue.spinSpeed * 0.02);
+      const hasSpinY = cue.spinSpeed > 0;
+      const hasSpinX = (cue.spinSpeedX || 0) > 0;
+      if (hasSpinY || hasSpinX) {
+        this.spinCueInstances(
+          hasSpinY ? cue.spinSpeed * 0.02 : 0,
+          hasSpinX ? (cue.spinSpeedX || 0) * 0.02 : 0
+        );
       }
 
       this.renderer.render(this.scene, this.camera);
@@ -2046,11 +2108,7 @@ export class ExtractorSceneManager {
       targetZ + keyframe.distanceFromCue
     );
 
-    // Respect rotation override — when user explicitly rotated via gizmo,
-    // preserve their rotation; only set position.
-    if (!this.cameraRotationOverride) {
-      this.camera.lookAt(targetX, targetY, targetZ);
-    }
+    this.camera.lookAt(targetX, targetY, targetZ);
     this.camera.up.set(0, 1, 0);
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld(true);
@@ -2147,27 +2205,12 @@ export class ExtractorSceneManager {
     if (!this.cameraSmoothEnabled) return;
     this.camera.position.lerp(this.cameraTargetPos, 0.15);
 
-    // Skip lookAt override when user has manually rotated via gizmo
-    if (!this.cameraRotationOverride) {
-      const mainCue = this.currentCueConfig?.instances.find(i => i.isMain)
-        || this.currentCueConfig?.instances[0];
-      if (mainCue) {
-        this.camera.lookAt(mainCue.positionX, this.camera.position.y, mainCue.positionZ);
-      }
-    }
-
     this.camera.updateProjectionMatrix();
     if (this.cameraHelper) this.cameraHelper.update();
     this.syncCameraGizmo();
   }
 
   getCameraGizmo(): THREE.Group | null { return this.cameraGizmo; }
-
-  /** Mark that user explicitly rotated the camera via gizmo — persists until clearCameraRotationOverride */
-  setCameraRotationOverride(): void { this.cameraRotationOverride = true; }
-
-  /** Clear rotation override — camera will resume auto-lookAt at cue */
-  clearCameraRotationOverride(): void { this.cameraRotationOverride = false; }
 
   /** Set camera lookAt Y offset along cue: 0 = bottom, 0.5 = center, 1 = top */
   setCameraLookAtYOffset(offset: number): void {
@@ -2257,7 +2300,7 @@ export class ExtractorSceneManager {
         const inst = instances[i];
         dummy.position.set(inst.positionX, inst.positionY, inst.positionZ);
         dummy.scale.setScalar(inst.scale);
-        dummy.rotation.set(0, config.spinY, 0);
+        dummy.rotation.set(config.spinX || 0, config.spinY, 0);
         dummy.updateMatrix();
         im.setMatrixAt(i, dummy.matrix);
       }
@@ -2283,7 +2326,7 @@ export class ExtractorSceneManager {
         const inst = instances[0];
         this.clonedModel.position.set(inst.positionX, inst.positionY, inst.positionZ);
         this.clonedModel.scale.setScalar(inst.scale);
-        this.clonedModel.rotation.y = config.spinY;
+        this.clonedModel.rotation.set(config.spinX || 0, config.spinY, 0);
       }
       return;
     }
@@ -2308,7 +2351,7 @@ export class ExtractorSceneManager {
         const inst = instances[i];
         dummy.position.set(inst.positionX, inst.positionY, inst.positionZ);
         dummy.scale.setScalar(inst.scale);
-        dummy.rotation.set(0, config.spinY, 0);
+        dummy.rotation.set(config.spinX || 0, config.spinY, 0);
         dummy.updateMatrix();
         im.setMatrixAt(i, dummy.matrix);
       }
@@ -2316,30 +2359,28 @@ export class ExtractorSceneManager {
     }
   }
 
-  spinCueInstances(spinDelta: number): void {
+  spinCueInstances(spinDeltaY: number, spinDeltaX: number = 0): void {
     if (!this.currentCueConfig) return;
 
     const instances = this.currentCueConfig.instances;
+    const currentY = (this.currentCueConfig.spinY || 0) + spinDeltaY;
+    const currentX = (this.currentCueConfig.spinX || 0) + spinDeltaX;
+    this.currentCueConfig = { ...this.currentCueConfig, spinY: currentY, spinX: currentX };
 
     if (instances.length <= 1 && this.instancedMeshes.length === 0) {
-      // Regular model
       if (this.clonedModel) {
-        this.clonedModel.rotation.y += spinDelta;
+        this.clonedModel.rotation.set(currentX, currentY, 0);
       }
       return;
     }
 
     const dummy = new THREE.Object3D();
-    const currentY = (this.currentCueConfig.spinY || 0) + spinDelta;
-    // Update tracking
-    this.currentCueConfig = { ...this.currentCueConfig, spinY: currentY };
-
     for (const im of this.instancedMeshes) {
       for (let i = 0; i < instances.length; i++) {
         const inst = instances[i];
         dummy.position.set(inst.positionX, inst.positionY, inst.positionZ);
         dummy.scale.setScalar(inst.scale);
-        dummy.rotation.set(0, currentY, 0);
+        dummy.rotation.set(currentX, currentY, 0);
         dummy.updateMatrix();
         im.setMatrixAt(i, dummy.matrix);
       }

@@ -58,7 +58,9 @@ export interface CueInstance {
 export interface CueConfig {
   instances: CueInstance[];  // 1–4 cues
   spinY: number;             // Model Y rotation (radians, 0–2π) — shared
-  spinSpeed: number;         // Continuous Y-rotation (0–1) — shared
+  spinSpeed: number;         // Continuous Y-rotation speed (0–1) — shared
+  spinX: number;             // Model X rotation (radians, 0–2π) — shared
+  spinSpeedX: number;        // Continuous X-rotation speed (0–1) — shared
 }
 
 export const DEFAULT_CUE_CONFIG: CueConfig = {
@@ -72,6 +74,8 @@ export const DEFAULT_CUE_CONFIG: CueConfig = {
   }],
   spinY: 0,
   spinSpeed: 0,
+  spinX: 0,
+  spinSpeedX: 0,
 };
 
 // ── Easing ──
@@ -217,9 +221,11 @@ export interface VideoStudioConfig {
   wallSurface: SurfaceConfig;
   tableSurface: SurfaceConfig;
   hdriConfig: { layers: HdriLayer[] };
+  hdriIntensity: number;               // Environment intensity (0–3, default 1.0)
   quality: "hd" | "2k";
-  shadow: { enabled: boolean; intensity: number };
+  shadow: { enabled: boolean; intensity: number; blur: number; softness: number; offsetX: number; offsetY: number };
   hdriFile: string;
+  surfaceHdri: { enabled: boolean; hdriFile: string; rotationX: number; rotationY: number; intensity: number };
 }
 
 export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
@@ -233,9 +239,11 @@ export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
   wallSurface: { ...DEFAULT_WALL_SURFACE },
   tableSurface: { ...DEFAULT_TABLE_SURFACE },
   hdriConfig: { layers: [createDefaultHdriLayer()] },
+  hdriIntensity: 1.0,
   quality: "hd",
-  shadow: { enabled: true, intensity: 0.6 },
+  shadow: { enabled: true, intensity: 0.6, blur: 3, softness: 0.45, offsetX: 0, offsetY: 0 },
   hdriFile: "ferndale_studio_07_2k.hdr",
+  surfaceHdri: { enabled: false, hdriFile: "ferndale_studio_07_2k.hdr", rotationX: 0, rotationY: 0, intensity: 0.3 },
 };
 
 // ── Studio Template (DB record) ──

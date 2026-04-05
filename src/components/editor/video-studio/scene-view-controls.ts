@@ -106,17 +106,6 @@ export class SceneViewControls {
         // Keep frustum lines in sync when camera gizmo is dragged
         if (this.currentSelection.type === "camera") {
           this.esm.syncCameraFromGizmo();
-          if (this.transformControls?.mode === "rotate") {
-            // R gizmo: user's rotation has priority over auto-lookAt
-            this.esm.setCameraRotationOverride();
-          } else {
-            // G/S gizmo: moving camera clears rotation override, resume lookAt
-            this.esm.clearCameraRotationOverride();
-          }
-        }
-        // Moving the cue clears camera rotation override
-        if (this.currentSelection.type === "cue") {
-          this.esm.clearCameraRotationOverride();
         }
       });
     }
@@ -205,6 +194,7 @@ export class SceneViewControls {
 
     this.clearHighlight();
     this.detachTransformControls();
+    this.resetAxisLock();
 
     this.currentSelection = info;
 
@@ -318,18 +308,26 @@ export class SceneViewControls {
     if (e.repeat) return;
     const key = e.key.toLowerCase();
 
-    // TransformControls mode switching
+    // Axis lock: X/Y/Z while transform controls are active
+    if ((key === "x" || key === "y" || key === "z") && this.transformControls?.object) {
+      this.setAxisLock(key as "x" | "y" | "z");
+      return;
+    }
+
+    // TransformControls mode switching — also works without prior click selection
     if (key === "g" && this.transformControls) {
       this.transformControls.setMode("translate");
       this.onTransformModeChange?.("translate");
+      this.resetAxisLock();
     } else if (key === "r" && this.transformControls) {
       this.transformControls.setMode("rotate");
       this.onTransformModeChange?.("rotate");
+      this.resetAxisLock();
     } else if (key === "s" && this.transformControls) {
-      // Disable scale for camera (camera only supports translate + rotate)
       if (this.currentSelection.type === "camera") return;
       this.transformControls.setMode("scale");
       this.onTransformModeChange?.("scale");
+      this.resetAxisLock();
     }
 
     // Escape → deselect (stop propagation so dialog doesn't close)
@@ -338,6 +336,20 @@ export class SceneViewControls {
       e.stopPropagation();
       this.setSelection({ type: null });
     }
+  }
+
+  private setAxisLock(axis: "x" | "y" | "z"): void {
+    if (!this.transformControls) return;
+    this.transformControls.showX = axis === "x";
+    this.transformControls.showY = axis === "y";
+    this.transformControls.showZ = axis === "z";
+  }
+
+  private resetAxisLock(): void {
+    if (!this.transformControls) return;
+    this.transformControls.showX = true;
+    this.transformControls.showY = true;
+    this.transformControls.showZ = true;
   }
 
   private handleMouseDown(e: MouseEvent) {

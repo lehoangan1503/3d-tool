@@ -59,6 +59,7 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
   }, [cueConfig, onChange]);
 
   const spinYDeg = Math.round(cueConfig.spinY * (180 / Math.PI));
+  const spinXDeg = Math.round((cueConfig.spinX || 0) * (180 / Math.PI));
 
   return (
     <div className="space-y-3">
@@ -86,7 +87,7 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <Label className="text-xs text-muted-foreground flex items-center gap-1">
-            <RotateCcw className="h-3 w-3" /> Spin Speed
+            <RotateCcw className="h-3 w-3" /> Speed Y
           </Label>
           <span className="text-xs text-muted-foreground tabular-nums">
             {cueConfig.spinSpeed.toFixed(2)}
@@ -95,6 +96,44 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
         <Slider
           value={[cueConfig.spinSpeed]}
           onValueChange={([v]) => onChange({ ...cueConfig, spinSpeed: v })}
+          min={0}
+          max={1}
+          step={0.05}
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs text-muted-foreground flex items-center gap-1">
+            <RotateCcw className="h-3 w-3" /> Spin X
+          </Label>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {spinXDeg}°
+          </span>
+        </div>
+        <Slider
+          value={[spinXDeg]}
+          onValueChange={([v]) =>
+            onChange({ ...cueConfig, spinX: v * (Math.PI / 180) })
+          }
+          min={0}
+          max={360}
+          step={1}
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs text-muted-foreground flex items-center gap-1">
+            <RotateCcw className="h-3 w-3" /> Speed X
+          </Label>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {(cueConfig.spinSpeedX || 0).toFixed(2)}
+          </span>
+        </div>
+        <Slider
+          value={[cueConfig.spinSpeedX || 0]}
+          onValueChange={([v]) => onChange({ ...cueConfig, spinSpeedX: v })}
           min={0}
           max={1}
           step={0.05}
@@ -185,7 +224,7 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
                     onValueChange={([v]) =>
                       updateInstance(i, { positionY: v })
                     }
-                    min={-1}
+                    min={-10}
                     max={10}
                     step={0.1}
                   />

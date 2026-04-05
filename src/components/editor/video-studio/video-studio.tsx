@@ -127,6 +127,7 @@ export function VideoStudio({
   const configFutureRef = useRef<VideoStudioConfig[]>([]);
   const isUndoRedoRef = useRef(false);
   const isDraggingRef = useRef(false);
+  const historyDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const extractorRef = useRef<ExtractorSceneManager | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
@@ -139,10 +140,13 @@ export function VideoStudio({
   const configRef = useRef(config);
   useEffect(() => {
     configRef.current = config;
-    // Push to history (skip if from undo/redo or mid-drag)
+    // Debounced history push: batch rapid changes (sliders) into one entry
     if (!isUndoRedoRef.current && !isDraggingRef.current) {
-      configHistoryRef.current = [...configHistoryRef.current.slice(-49), config];
-      configFutureRef.current = [];
+      if (historyDebounceRef.current) clearTimeout(historyDebounceRef.current);
+      historyDebounceRef.current = setTimeout(() => {
+        configHistoryRef.current = [...configHistoryRef.current.slice(-4), configRef.current];
+        configFutureRef.current = [];
+      }, 600);
     }
     isUndoRedoRef.current = false;
   }, [config]);
@@ -340,21 +344,13 @@ export function VideoStudio({
                 setConfig((prev) => ({ ...prev, cameraStart: kf }));
               }
             } else if (info.type === "cue") {
-              // Cue model is center-normalized: bottom ≈ positionY - scale * 1.0
-              // Table is at Y=-7.5. Keep cue bottom 0.3 above table.
-              const cueScale = scale.x || 7;
-              const minY = -7.5 + cueScale * 1.0 + 0.3; // tableY + halfHeight + gap
-              const clampedY = Math.max(minY, position.y);
-              if (clampedY !== position.y && info.object) {
-                info.object.position.y = clampedY;
-              }
               setConfig((prev) => {
                 const instances = [...prev.cueConfig.instances];
                 if (instances[0]) {
                   instances[0] = {
                     ...instances[0],
                     positionX: position.x,
-                    positionY: clampedY,
+                    positionY: position.y,
                     positionZ: position.z,
                     scale: scale.x,
                   };
@@ -390,7 +386,8 @@ export function VideoStudio({
           // Drag end: commit final state to history
           () => {
             isDraggingRef.current = false;
-            configHistoryRef.current = [...configHistoryRef.current.slice(-49), configRef.current];
+            if (historyDebounceRef.current) clearTimeout(historyDebounceRef.current);
+            configHistoryRef.current = [...configHistoryRef.current.slice(-4), configRef.current];
             configFutureRef.current = [];
           }
         );
@@ -871,7 +868,7 @@ export function VideoStudio({
                           {expandedSections.has("hdri") ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
                         </button>
                         {expandedSections.has("hdri") && (
-                          <div className="px-3 pb-3 pt-2 border-t border-border/30">
+                          <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
                             <div className="space-y-1.5">
                               <Label className="text-xs text-muted-foreground">
                                 Environment
@@ -892,6 +889,44 @@ export function VideoStudio({
                                 </SelectContent>
                               </Select>
                             </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-xs text-muted-foreground">
+                                Rotation X — {config.hdriConfig.layers[0]?.rotationX ?? 0}°
+                              </Label>
+                              <Slider
+                                value={[config.hdriConfig.layers[0]?.rotationX ?? 0]}
+                                onValueChange={([v]) => {
+                                  const layers = [...config.hdriConfig.layers];
+                                  if (layers[0]) layers[0] = { ...layers[0], rotationX: v };
+                                  updateConfig("hdriConfig", { layers });
+                                }}
+                                min={0} max={360} step={1}
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-xs text-muted-foreground">
+                                Rotation Y — {config.hdriConfig.layers[0]?.rotationY ?? 0}°
+                              </Label>
+                              <Slider
+                                value={[config.hdriConfig.layers[0]?.rotationY ?? 0]}
+                                onValueChange={([v]) => {
+                                  const layers = [...config.hdriConfig.layers];
+                                  if (layers[0]) layers[0] = { ...layers[0], rotationY: v };
+                                  updateConfig("hdriConfig", { layers });
+                                }}
+                                min={0} max={360} step={1}
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-xs text-muted-foreground">
+                                Intensity — {((config.hdriIntensity ?? 1.0) * 100).toFixed(0)}%
+                              </Label>
+                              <Slider
+                                value={[config.hdriIntensity ?? 1.0]}
+                                onValueChange={([v]) => updateConfig("hdriIntensity", v)}
+                                min={0} max={3} step={0.05}
+                              />
+                            </div>
                           </div>
                         )}
                       </div>
@@ -910,13 +945,69 @@ export function VideoStudio({
                           {expandedSections.has("background") ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
                         </button>
                         {expandedSections.has("background") && (
-                          <div className="px-3 pb-3 pt-2 border-t border-border/30">
+                          <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
                             <BackgroundPanel
                               wallSurface={config.wallSurface}
                               tableSurface={config.tableSurface}
                               onWallSurfaceChange={(s) => updateConfig("wallSurface", s)}
                               onTableSurfaceChange={(s) => updateConfig("tableSurface", s)}
                             />
+                            {/* Surface HDRI */}
+                            <div className="rounded-md border border-border/30 p-2 space-y-2">
+                              <div className="flex items-center gap-2">
+                                <Checkbox
+                                  checked={config.surfaceHdri?.enabled ?? false}
+                                  onCheckedChange={(checked) =>
+                                    updateConfig("surfaceHdri", {
+                                      ...(config.surfaceHdri ?? { enabled: false, hdriFile: config.hdriFile, rotationX: 0, rotationY: 0, intensity: 0.3 }),
+                                      enabled: checked === true,
+                                    })
+                                  }
+                                  className="h-3.5 w-3.5"
+                                />
+                                <Label className="text-xs text-muted-foreground">Surface HDRI</Label>
+                              </div>
+                              {config.surfaceHdri?.enabled && (
+                                <div className="space-y-2 pl-1">
+                                  <div className="space-y-1">
+                                    <Label className="text-[10px] text-muted-foreground">
+                                      Intensity — {((config.surfaceHdri.intensity ?? 0.3) * 100).toFixed(0)}%
+                                    </Label>
+                                    <Slider
+                                      value={[config.surfaceHdri.intensity ?? 0.3]}
+                                      onValueChange={([v]) =>
+                                        updateConfig("surfaceHdri", { ...config.surfaceHdri, intensity: v })
+                                      }
+                                      min={0} max={2} step={0.05}
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <Label className="text-[10px] text-muted-foreground">
+                                      Rotation X — {config.surfaceHdri.rotationX ?? 0}°
+                                    </Label>
+                                    <Slider
+                                      value={[config.surfaceHdri.rotationX ?? 0]}
+                                      onValueChange={([v]) =>
+                                        updateConfig("surfaceHdri", { ...config.surfaceHdri, rotationX: v })
+                                      }
+                                      min={0} max={360} step={1}
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <Label className="text-[10px] text-muted-foreground">
+                                      Rotation Y — {config.surfaceHdri.rotationY ?? 0}°
+                                    </Label>
+                                    <Slider
+                                      value={[config.surfaceHdri.rotationY ?? 0]}
+                                      onValueChange={([v]) =>
+                                        updateConfig("surfaceHdri", { ...config.surfaceHdri, rotationY: v })
+                                      }
+                                      min={0} max={360} step={1}
+                                    />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -948,7 +1039,7 @@ export function VideoStudio({
                           {expandedSections.has("shadow") ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
                         </div>
                         {expandedSections.has("shadow") && config.shadow.enabled && (
-                          <div className="px-3 pb-3 pt-2 border-t border-border/30">
+                          <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
                             <div className="space-y-1.5">
                               <Label className="text-xs text-muted-foreground">
                                 Intensity — {Math.round(config.shadow.intensity * 100)}%
@@ -956,14 +1047,57 @@ export function VideoStudio({
                               <Slider
                                 value={[config.shadow.intensity]}
                                 onValueChange={([v]) =>
-                                  updateConfig("shadow", {
-                                    ...config.shadow,
-                                    intensity: v,
-                                  })
+                                  updateConfig("shadow", { ...config.shadow, intensity: v })
                                 }
-                                min={0}
-                                max={1}
-                                step={0.05}
+                                min={0} max={1} step={0.05}
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-xs text-muted-foreground">
+                                Blur — {config.shadow.blur ?? 3}
+                              </Label>
+                              <Slider
+                                value={[config.shadow.blur ?? 3]}
+                                onValueChange={([v]) =>
+                                  updateConfig("shadow", { ...config.shadow, blur: v })
+                                }
+                                min={0} max={10} step={0.5}
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-xs text-muted-foreground">
+                                Softness — {((config.shadow.softness ?? 0.45) * 100).toFixed(0)}%
+                              </Label>
+                              <Slider
+                                value={[config.shadow.softness ?? 0.45]}
+                                onValueChange={([v]) =>
+                                  updateConfig("shadow", { ...config.shadow, softness: v })
+                                }
+                                min={0} max={1} step={0.05}
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-xs text-muted-foreground">
+                                Offset X — {(config.shadow.offsetX ?? 0).toFixed(1)}
+                              </Label>
+                              <Slider
+                                value={[config.shadow.offsetX ?? 0]}
+                                onValueChange={([v]) =>
+                                  updateConfig("shadow", { ...config.shadow, offsetX: v })
+                                }
+                                min={-5} max={5} step={0.2}
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-xs text-muted-foreground">
+                                Offset Y — {(config.shadow.offsetY ?? 0).toFixed(1)}
+                              </Label>
+                              <Slider
+                                value={[config.shadow.offsetY ?? 0]}
+                                onValueChange={([v]) =>
+                                  updateConfig("shadow", { ...config.shadow, offsetY: v })
+                                }
+                                min={-5} max={5} step={0.2}
                               />
                             </div>
                           </div>

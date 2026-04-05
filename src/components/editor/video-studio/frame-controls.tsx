@@ -213,7 +213,7 @@ export function FrameControls({
       {expanded && (
         <div className="space-y-3 border-t border-border/30 px-3 pb-3 pt-3">
           {/* Type toggle */}
-          <div className="flex gap-1">
+          <div className="grid grid-cols-3 gap-1">
             {FRAME_TYPES.map((t) => {
               const TIcon = TYPE_ICON[t];
               return (
@@ -221,7 +221,7 @@ export function FrameControls({
                   key={t}
                   variant={frame.type === t ? "secondary" : "ghost"}
                   size="sm"
-                  className="h-7 flex-1 gap-1 text-xs"
+                  className="h-7 gap-1 text-xs"
                   onClick={() =>
                     patch({
                       type: t,

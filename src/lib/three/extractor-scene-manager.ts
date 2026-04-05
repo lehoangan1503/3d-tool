@@ -1515,6 +1515,9 @@ export class ExtractorSceneManager {
   ) {
     this.stopVideoPreview();
 
+    // Recording always uses auto-lookAt — clear any manual rotation override
+    this.cameraRotationOverride = false;
+
     // Setup cue instances for recording
     this.setupCueInstances(config.cueConfig);
 
@@ -2043,8 +2046,11 @@ export class ExtractorSceneManager {
       targetZ + keyframe.distanceFromCue
     );
 
-    // Look straight at cue at camera's own Y — cameraman on vertical rail
-    this.camera.lookAt(targetX, targetY, targetZ);
+    // Respect rotation override — when user explicitly rotated via gizmo,
+    // preserve their rotation; only set position.
+    if (!this.cameraRotationOverride) {
+      this.camera.lookAt(targetX, targetY, targetZ);
+    }
     this.camera.up.set(0, 1, 0);
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld(true);

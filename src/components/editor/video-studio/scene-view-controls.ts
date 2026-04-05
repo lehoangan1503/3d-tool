@@ -60,7 +60,9 @@ export class SceneViewControls {
       rotation: THREE.Euler,
       scale: THREE.Vector3
     ) => void,
-    private onTransformModeChange?: (mode: "translate" | "rotate" | "scale") => void
+    private onTransformModeChange?: (mode: "translate" | "rotate" | "scale") => void,
+    private onDragStart?: () => void,
+    private onDragEnd?: () => void
   ) {
     const godCam = esm.getGodCamera();
     if (godCam) {
@@ -79,6 +81,11 @@ export class SceneViewControls {
         (event: { value: unknown }) => {
           if (this.orbitControls)
             this.orbitControls.enabled = !event.value;
+          if (event.value) {
+            this.onDragStart?.();
+          } else {
+            this.onDragEnd?.();
+          }
         }
       );
 
@@ -99,6 +106,14 @@ export class SceneViewControls {
         // Keep frustum lines in sync when camera gizmo is dragged
         if (this.currentSelection.type === "camera") {
           this.esm.syncCameraFromGizmo();
+          // Mark rotation override when camera is rotated via gizmo
+          if (this.transformControls?.mode === "rotate") {
+            this.esm.setCameraRotationOverride();
+          }
+        }
+        // Moving the cue clears camera rotation override
+        if (this.currentSelection.type === "cue") {
+          this.esm.clearCameraRotationOverride();
         }
       });
     }
@@ -308,6 +323,8 @@ export class SceneViewControls {
       this.transformControls.setMode("rotate");
       this.onTransformModeChange?.("rotate");
     } else if (key === "s" && this.transformControls) {
+      // Disable scale for camera (camera only supports translate + rotate)
+      if (this.currentSelection.type === "camera") return;
       this.transformControls.setMode("scale");
       this.onTransformModeChange?.("scale");
     }

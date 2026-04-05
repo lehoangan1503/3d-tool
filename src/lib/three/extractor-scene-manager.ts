@@ -114,8 +114,8 @@ export class ExtractorSceneManager {
   private _minimapTarget: THREE.WebGLRenderTarget | null = null;
   private _minimapBuf: Uint8Array | null = null;
   private _minimapFrameCount = 0;
-  private static readonly MINIMAP_W = 288;
-  private static readonly MINIMAP_H = 162;
+  private static readonly MINIMAP_W = 576;
+  private static readonly MINIMAP_H = 324;
   private static readonly MINIMAP_INTERVAL = 6; // render every Nth frame (~10fps)
 
   // Frame plane meshes (for interactive scene view)
@@ -126,6 +126,7 @@ export class ExtractorSceneManager {
   private cameraTargetPos = new THREE.Vector3();
   private cameraLookAtYOffset = 0.5; // 0 = cue bottom, 1 = cue top, default center
   private cameraSmoothEnabled = false;
+  private cameraRotationOverride = false; // true when user explicitly rotated via R gizmo
 
   // Animation state
   private animationFrameId: number | null = null;
@@ -1227,21 +1228,24 @@ export class ExtractorSceneManager {
     wallTex.wrapS = THREE.ClampToEdgeWrapping;
     wallTex.wrapT = THREE.ClampToEdgeWrapping;
     wallTex.repeat.set(1, 1);
-    this.backdrop = createWallBackdrop(wallTex, 34, 22);
+    this.backdrop = createWallBackdrop(wallTex, 34, 24);
     this.backdrop.position.set(0, 4.5, -5.5);
     this.scene.add(this.backdrop);
     this.backdrop.userData = { type: 'wall' };
 
     // Table from surface frames — single 2048×2048 canvas, no tiling
-    // Position table at bottom edge of wall: wallY - wallHeight/2 = 4.5 - 11 = -6.5
-    // Wall and table share the same bottom edge — no gap
-    const wallBottomY = this.backdrop.position.y - 11;
+    // Cue model is center-normalized to 2 units then scaled (default 7).
+    // Model bottom ≈ positionY - scale * 1.0 = 0 - 7 = -7.0
+    // Wall bottom: 4.5 - 12 = -7.5. Table sits flush at wall bottom.
+    const tableY = -7.5;
+    const tableDepth = 12;
     const tableImages = await preloadFrameImages(config.tableSurface.frames);
     const tableTex = compositeSurfaceFrames(config.tableSurface, 2048, 2048, tableImages);
     tableTex.wrapS = THREE.ClampToEdgeWrapping;
     tableTex.wrapT = THREE.ClampToEdgeWrapping;
     tableTex.repeat.set(1, 1);
-    this.tableSurface = createTableSurface(tableTex, 34, 5, wallBottomY);
+    this.tableSurface = createTableSurface(tableTex, 34, tableDepth, tableY);
+    this.tableSurface.position.z = -5.5 + tableDepth / 2; // back edge flush with wall
     this.scene.add(this.tableSurface);
     this.tableSurface.userData = { type: 'table' };
 
@@ -1249,10 +1253,10 @@ export class ExtractorSceneManager {
     this.wallFramePlanes = this.buildFramePlanes(config.wallSurface, this.backdrop!, false, wallImages);
     this.tableFramePlanes = this.buildFramePlanes(config.tableSurface, this.tableSurface!, true, tableImages);
 
-    // Shadow floor
+    // Shadow floor — at table level for crisp shadow
     if (config.shadow.enabled) {
       this.shadowFloor = createShadowFloor();
-      this.shadowFloor.position.y = -1.18;
+      this.shadowFloor.position.y = tableY + 0.01;
       this.scene.add(this.shadowFloor);
     }
 
@@ -1336,7 +1340,7 @@ export class ExtractorSceneManager {
 
       if (isTable) {
         const tableWidth = 34;
-        const tableDepth = 5;
+        const tableDepth = 12;
         const pw = frame.width * tableWidth;
         const pd = frame.height * tableDepth;
         const geo = new THREE.PlaneGeometry(pw, pd);
@@ -1355,7 +1359,7 @@ export class ExtractorSceneManager {
         planes.push(mesh);
       } else {
         const wallWidth = 34;
-        const wallHeight = 22;
+        const wallHeight = 24;
         const pw = frame.width * wallWidth;
         const ph = frame.height * wallHeight;
         const geo = new THREE.PlaneGeometry(pw, ph);
@@ -1395,7 +1399,7 @@ export class ExtractorSceneManager {
     const wallPos = this.backdrop?.position;
     if (wallPos) {
       const wallWidth = 34;
-      const wallHeight = 22;
+      const wallHeight = 24;
       const wallFrames = config.wallSurface.frames.filter(f => f.enabled);
 
       for (const mesh of this.wallFramePlanes) {
@@ -1418,7 +1422,7 @@ export class ExtractorSceneManager {
     const tablePos = this.tableSurface?.position;
     if (tablePos) {
       const tableWidth = 34;
-      const tableDepth = 5;
+      const tableDepth = 12;
       const tableFrames = config.tableSurface.frames.filter(f => f.enabled);
 
       for (const mesh of this.tableFramePlanes) {
@@ -2137,11 +2141,13 @@ export class ExtractorSceneManager {
     if (!this.cameraSmoothEnabled) return;
     this.camera.position.lerp(this.cameraTargetPos, 0.15);
 
-    // Look straight at cue at camera's own Y level — cameraman on vertical rail
-    const mainCue = this.currentCueConfig?.instances.find(i => i.isMain)
-      || this.currentCueConfig?.instances[0];
-    if (mainCue) {
-      this.camera.lookAt(mainCue.positionX, this.camera.position.y, mainCue.positionZ);
+    // Skip lookAt override when user has manually rotated via gizmo
+    if (!this.cameraRotationOverride) {
+      const mainCue = this.currentCueConfig?.instances.find(i => i.isMain)
+        || this.currentCueConfig?.instances[0];
+      if (mainCue) {
+        this.camera.lookAt(mainCue.positionX, this.camera.position.y, mainCue.positionZ);
+      }
     }
 
     this.camera.updateProjectionMatrix();
@@ -2150,6 +2156,12 @@ export class ExtractorSceneManager {
   }
 
   getCameraGizmo(): THREE.Group | null { return this.cameraGizmo; }
+
+  /** Mark that user explicitly rotated the camera via gizmo — persists until clearCameraRotationOverride */
+  setCameraRotationOverride(): void { this.cameraRotationOverride = true; }
+
+  /** Clear rotation override — camera will resume auto-lookAt at cue */
+  clearCameraRotationOverride(): void { this.cameraRotationOverride = false; }
 
   /** Set camera lookAt Y offset along cue: 0 = bottom, 0.5 = center, 1 = top */
   setCameraLookAtYOffset(offset: number): void {

@@ -126,6 +126,7 @@ export function VideoStudio({
   const configHistoryRef = useRef<VideoStudioConfig[]>([]);
   const configFutureRef = useRef<VideoStudioConfig[]>([]);
   const isUndoRedoRef = useRef(false);
+  const isDraggingRef = useRef(false);
 
   const extractorRef = useRef<ExtractorSceneManager | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
@@ -138,8 +139,8 @@ export function VideoStudio({
   const configRef = useRef(config);
   useEffect(() => {
     configRef.current = config;
-    // Push to history (skip if this change came from undo/redo)
-    if (!isUndoRedoRef.current) {
+    // Push to history (skip if from undo/redo or mid-drag)
+    if (!isUndoRedoRef.current && !isDraggingRef.current) {
       configHistoryRef.current = [...configHistoryRef.current.slice(-49), config];
       configFutureRef.current = [];
     }
@@ -339,13 +340,21 @@ export function VideoStudio({
                 setConfig((prev) => ({ ...prev, cameraStart: kf }));
               }
             } else if (info.type === "cue") {
+              // Cue model is center-normalized: bottom ≈ positionY - scale * 1.0
+              // Table is at Y=-7.5. Keep cue bottom 0.3 above table.
+              const cueScale = scale.x || 7;
+              const minY = -7.5 + cueScale * 1.0 + 0.3; // tableY + halfHeight + gap
+              const clampedY = Math.max(minY, position.y);
+              if (clampedY !== position.y && info.object) {
+                info.object.position.y = clampedY;
+              }
               setConfig((prev) => {
                 const instances = [...prev.cueConfig.instances];
                 if (instances[0]) {
                   instances[0] = {
                     ...instances[0],
                     positionX: position.x,
-                    positionY: position.y,
+                    positionY: clampedY,
                     positionZ: position.z,
                     scale: scale.x,
                   };
@@ -356,7 +365,7 @@ export function VideoStudio({
               setConfig((prev) => {
                 const frames = prev.wallSurface.frames.map((f) =>
                   f.id === info.frameId
-                    ? { ...f, x: position.x / 34 + 0.5, y: 0.5 - position.y / 22 }
+                    ? { ...f, x: position.x / 34 + 0.5, y: 0.5 - position.y / 24 }
                     : f
                 );
                 return { ...prev, wallSurface: { ...prev.wallSurface, frames } };
@@ -365,7 +374,7 @@ export function VideoStudio({
               setConfig((prev) => {
                 const frames = prev.tableSurface.frames.map((f) =>
                   f.id === info.frameId
-                    ? { ...f, x: position.x / 34 + 0.5, y: position.z / 5 + 0.5 }
+                    ? { ...f, x: position.x / 34 + 0.5, y: position.z / 12 + 0.5 }
                     : f
                 );
                 return { ...prev, tableSurface: { ...prev.tableSurface, frames } };
@@ -375,6 +384,14 @@ export function VideoStudio({
           // Transform mode change (G/R/S keys)
           (mode) => {
             setTransformMode(mode);
+          },
+          // Drag start: suppress history pushes during drag
+          () => { isDraggingRef.current = true; },
+          // Drag end: commit final state to history
+          () => {
+            isDraggingRef.current = false;
+            configHistoryRef.current = [...configHistoryRef.current.slice(-49), configRef.current];
+            configFutureRef.current = [];
           }
         );
       }
@@ -658,8 +675,8 @@ export function VideoStudio({
               <div className="relative rounded-lg overflow-hidden border border-border/50 bg-black">
                 <canvas
                   ref={minimapCanvasRef}
-                  width={288}
-                  height={162}
+                  width={576}
+                  height={324}
                   className="w-full h-auto block"
                 />
                 <span className="absolute top-1.5 left-2 text-[9px] text-white/70 font-medium bg-black/40 px-1.5 py-0.5 rounded">

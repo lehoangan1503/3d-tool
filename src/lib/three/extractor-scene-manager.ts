@@ -16,8 +16,8 @@ import {
   createFabricTexture,
   createStudioBackdrop,
 } from './studio-background';
-import type { VideoStudioConfig, CameraKeyframe, CueConfig, CueInstance } from '@/types/video-studio';
-import { computeVideoDuration, createEasingFunction, VIDEO_QUALITY_PRESETS } from '@/types/video-studio';
+import type { VideoStudioConfig, CameraKeyframe, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig } from '@/types/video-studio';
+import { computeVideoDuration, createEasingFunction, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS } from '@/types/video-studio';
 import { compositeSurfaceFrames, preloadFrameImages } from './background-compositor';
 
 // Available HDRI options (same as editor-client)
@@ -105,6 +105,17 @@ export class ExtractorSceneManager {
   private godCamera: THREE.PerspectiveCamera | null = null;
   private cameraHelper: THREE.CameraHelper | null = null;
   private isSceneView: boolean = false;
+
+  // Camera gizmo for scene view selection
+  private cameraGizmo: THREE.Group | null = null;
+
+  // Frame plane meshes (for interactive scene view)
+  private wallFramePlanes: THREE.Mesh[] = [];
+  private tableFramePlanes: THREE.Mesh[] = [];
+
+  // Smooth camera interpolation
+  private cameraTargetPos = new THREE.Vector3();
+  private cameraSmoothEnabled = false;
 
   // Animation state
   private animationFrameId: number | null = null;
@@ -255,6 +266,7 @@ export class ExtractorSceneManager {
   }
 
   private clearStudioElements() {
+    this.clearFramePlanes();
     if (this.spotLight) {
       this.scene.remove(this.spotLight);
       this.spotLight.dispose();
@@ -1206,6 +1218,7 @@ export class ExtractorSceneManager {
     this.backdrop = createWallBackdrop(wallTex, 34, 22);
     this.backdrop.position.set(0, 4.5, -5.5);
     this.scene.add(this.backdrop);
+    this.backdrop.userData = { type: 'wall' };
 
     // Table from surface frames — single 2048×2048 canvas, no tiling
     // Position table at bottom edge of wall: wallY - wallHeight/2 = 4.5 - 11 = -6.5
@@ -1217,6 +1230,11 @@ export class ExtractorSceneManager {
     tableTex.repeat.set(1, 1);
     this.tableSurface = createTableSurface(tableTex, 28, 5, wallBottomY);
     this.scene.add(this.tableSurface);
+    this.tableSurface.userData = { type: 'table' };
+
+    // Build frame planes for interactive scene view
+    this.wallFramePlanes = this.buildFramePlanes(config.wallSurface, this.backdrop!, false, wallImages);
+    this.tableFramePlanes = this.buildFramePlanes(config.tableSurface, this.tableSurface!, true, tableImages);
 
     // Shadow floor
     if (config.shadow.enabled) {
@@ -1227,6 +1245,181 @@ export class ExtractorSceneManager {
 
     // Setup cue instances
     this.setupCueInstances(config.cueConfig);
+  }
+
+  /** Create material for a frame plane based on its type */
+  private createFramePlaneMaterial(
+    frame: BackgroundFrame,
+    loadedImages?: Map<string, HTMLImageElement>
+  ): THREE.MeshBasicMaterial {
+    const opts: THREE.MeshBasicMaterialParameters = {
+      transparent: true,
+      opacity: frame.opacity,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    };
+
+    if (frame.type === "color" && frame.color) {
+      return new THREE.MeshBasicMaterial({ ...opts, color: frame.color });
+    }
+
+    if (frame.type === "gradient" && frame.gradient) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 256;
+      canvas.height = 256;
+      const ctx = canvas.getContext("2d")!;
+
+      const preset = GRADIENT_PRESETS.find((p) => p.id === frame.gradient!.presetId);
+      if (preset) {
+        const angleDeg = frame.gradient.angle ?? preset.angle;
+        const angleRad = (angleDeg * Math.PI) / 180;
+        const len = 128;
+        const grad = ctx.createLinearGradient(
+          128 - Math.cos(angleRad) * len, 128 - Math.sin(angleRad) * len,
+          128 + Math.cos(angleRad) * len, 128 + Math.sin(angleRad) * len
+        );
+        if (preset.colors.length === 2) {
+          grad.addColorStop(0, preset.colors[0]);
+          grad.addColorStop(1, preset.colors[1]);
+        } else if (preset.colors.length >= 3) {
+          grad.addColorStop(0, preset.colors[0]);
+          grad.addColorStop(0.5, preset.colors[1]);
+          grad.addColorStop(1, preset.colors[2]);
+        }
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 256, 256);
+      }
+
+      const tex = new THREE.CanvasTexture(canvas);
+      return new THREE.MeshBasicMaterial({ ...opts, map: tex });
+    }
+
+    if (frame.type === "image" && frame.imageUrl && loadedImages) {
+      const img = loadedImages.get(frame.imageUrl);
+      if (img) {
+        const tex = new THREE.Texture(img);
+        tex.needsUpdate = true;
+        return new THREE.MeshBasicMaterial({ ...opts, map: tex });
+      }
+    }
+
+    // Fallback
+    return new THREE.MeshBasicMaterial({ ...opts, color: 0x333333 });
+  }
+
+  /** Build frame plane meshes for a surface and add to scene */
+  private buildFramePlanes(
+    surface: SurfaceConfig,
+    parentMesh: THREE.Mesh,
+    isTable: boolean,
+    loadedImages?: Map<string, HTMLImageElement>
+  ): THREE.Mesh[] {
+    const planes: THREE.Mesh[] = [];
+    const enabledFrames = surface.frames.filter(f => f.enabled);
+
+    for (let i = 0; i < enabledFrames.length; i++) {
+      const frame = enabledFrames[i];
+      const material = this.createFramePlaneMaterial(frame, loadedImages);
+
+      if (isTable) {
+        const tableWidth = 28;
+        const tableDepth = 5;
+        const pw = frame.width * tableWidth;
+        const pd = frame.height * tableDepth;
+        const geo = new THREE.PlaneGeometry(pw, pd);
+        const mesh = new THREE.Mesh(geo, material);
+
+        const tablePos = parentMesh.position;
+        mesh.rotation.x = -Math.PI / 2;
+        mesh.position.set(
+          tablePos.x + (frame.x - 0.5) * tableWidth,
+          tablePos.y + 0.01 * (i + 1),
+          tablePos.z + (frame.y - 0.5) * tableDepth
+        );
+        mesh.rotation.z = (frame.rotation * Math.PI) / 180;
+        mesh.userData = { type: 'tableFrame', frameId: frame.id, frameIndex: i };
+        this.scene.add(mesh);
+        planes.push(mesh);
+      } else {
+        const wallWidth = 34;
+        const wallHeight = 22;
+        const pw = frame.width * wallWidth;
+        const ph = frame.height * wallHeight;
+        const geo = new THREE.PlaneGeometry(pw, ph);
+        const mesh = new THREE.Mesh(geo, material);
+
+        const wallPos = parentMesh.position;
+        mesh.position.set(
+          wallPos.x + (frame.x - 0.5) * wallWidth,
+          wallPos.y + (0.5 - frame.y) * wallHeight,
+          wallPos.z + 0.01 * (i + 1)
+        );
+        mesh.rotation.z = (frame.rotation * Math.PI) / 180;
+        mesh.userData = { type: 'wallFrame', frameId: frame.id, frameIndex: i };
+        this.scene.add(mesh);
+        planes.push(mesh);
+      }
+    }
+
+    return planes;
+  }
+
+  /** Clear all frame plane meshes */
+  private clearFramePlanes(): void {
+    for (const mesh of [...this.wallFramePlanes, ...this.tableFramePlanes]) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      const mat = mesh.material as THREE.MeshBasicMaterial;
+      if (mat.map) mat.map.dispose();
+      mat.dispose();
+    }
+    this.wallFramePlanes = [];
+    this.tableFramePlanes = [];
+  }
+
+  /** Update frame plane positions/sizes from config without rebuilding textures */
+  updateFramePlaneTransforms(config: VideoStudioConfig): void {
+    const wallPos = this.backdrop?.position;
+    if (wallPos) {
+      const wallWidth = 34;
+      const wallHeight = 22;
+      const wallFrames = config.wallSurface.frames.filter(f => f.enabled);
+
+      for (const mesh of this.wallFramePlanes) {
+        const frame = wallFrames.find(f => f.id === mesh.userData.frameId);
+        if (!frame) continue;
+        mesh.position.set(
+          wallPos.x + (frame.x - 0.5) * wallWidth,
+          wallPos.y + (0.5 - frame.y) * wallHeight,
+          wallPos.z + 0.01 * (mesh.userData.frameIndex + 1)
+        );
+        mesh.rotation.z = (frame.rotation * Math.PI) / 180;
+        const pw = frame.width * wallWidth;
+        const ph = frame.height * wallHeight;
+        mesh.scale.set(pw / (mesh.geometry as THREE.PlaneGeometry).parameters.width,
+                       ph / (mesh.geometry as THREE.PlaneGeometry).parameters.height, 1);
+        (mesh.material as THREE.MeshBasicMaterial).opacity = frame.opacity;
+      }
+    }
+
+    const tablePos = this.tableSurface?.position;
+    if (tablePos) {
+      const tableWidth = 28;
+      const tableDepth = 5;
+      const tableFrames = config.tableSurface.frames.filter(f => f.enabled);
+
+      for (const mesh of this.tableFramePlanes) {
+        const frame = tableFrames.find(f => f.id === mesh.userData.frameId);
+        if (!frame) continue;
+        mesh.position.set(
+          tablePos.x + (frame.x - 0.5) * tableWidth,
+          tablePos.y + 0.01 * (mesh.userData.frameIndex + 1),
+          tablePos.z + (frame.y - 0.5) * tableDepth
+        );
+        mesh.rotation.z = (frame.rotation * Math.PI) / 180;
+        (mesh.material as THREE.MeshBasicMaterial).opacity = frame.opacity;
+      }
+    }
   }
 
   /** Start animated preview for Video Studio (cue positioned + camera at start) */
@@ -1409,6 +1602,7 @@ export class ExtractorSceneManager {
    */
   render(): void {
     if (this.isDisposed) return;
+    this.updateCameraSmooth();
     if (this.cameraHelper) this.cameraHelper.update();
     const cam = this.isSceneView && this.godCamera ? this.godCamera : this.camera;
     this.renderer.render(this.scene, cam);
@@ -1697,7 +1891,27 @@ export class ExtractorSceneManager {
 
     this.cameraHelper = new THREE.CameraHelper(this.camera);
     this.cameraHelper.visible = false;
+    this.cameraHelper.scale.setScalar(1.5);
     this.scene.add(this.cameraHelper);
+
+    // Camera gizmo — visible, selectable proxy
+    const gizmoGroup = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(0.6, 0.45, 0.45),
+      new THREE.MeshBasicMaterial({ color: 0xff6600 })
+    );
+    gizmoGroup.add(body);
+    const lens = new THREE.Mesh(
+      new THREE.ConeGeometry(0.3, 0.5, 4),
+      new THREE.MeshBasicMaterial({ color: 0xff9933 })
+    );
+    lens.rotation.x = Math.PI / 2;
+    lens.position.z = 0.4;
+    gizmoGroup.add(lens);
+    gizmoGroup.userData = { type: 'camera' };
+    this.cameraGizmo = gizmoGroup;
+    this.scene.add(gizmoGroup);
+    this.syncCameraGizmo();
   }
 
   setViewMode(mode: "scene" | "camera"): void {
@@ -1705,6 +1919,7 @@ export class ExtractorSceneManager {
     if (this.cameraHelper) {
       this.cameraHelper.visible = this.isSceneView;
     }
+    if (this.cameraGizmo) this.cameraGizmo.visible = this.isSceneView;
   }
 
   getViewMode(): "scene" | "camera" {
@@ -1733,11 +1948,17 @@ export class ExtractorSceneManager {
       targetY,
       targetZ + keyframe.distanceFromCue
     );
-    this.camera.lookAt(targetX, targetY, targetZ);
+
+    const cueYCenter = cueBottom + cueHeight / 2;
+    this.camera.lookAt(targetX, cueYCenter, targetZ);
     this.camera.up.set(0, 1, 0);
     this.camera.updateProjectionMatrix();
 
+    // Instant jump — sync target so lerp doesn't animate from old position
+    this.cameraTargetPos.copy(this.camera.position);
+
     if (this.cameraHelper) this.cameraHelper.update();
+    this.syncCameraGizmo();
   }
 
   /** Move studio camera by screen-space delta, with optional axis lock. Returns updated position for UI sync. */
@@ -1746,30 +1967,36 @@ export class ExtractorSceneManager {
     dy: number,
     axisLock: "x" | "y" | "z" | null = null
   ): { x: number; y: number; z: number } {
-    const sensitivity = 0.01;
-    const pos = this.camera.position;
+    const sensitivity = 0.03;
+
+    // Initialize target from current position if not smooth yet
+    if (!this.cameraSmoothEnabled) {
+      this.cameraTargetPos.copy(this.camera.position);
+      this.cameraSmoothEnabled = true;
+    }
 
     switch (axisLock) {
       case "x":
-        pos.x += dx * sensitivity;
+        this.cameraTargetPos.x += dx * sensitivity;
         break;
       case "y":
-        pos.y -= dy * sensitivity;
+        this.cameraTargetPos.y -= dy * sensitivity;
         break;
       case "z":
-        pos.z -= dy * sensitivity;
+        this.cameraTargetPos.z -= dy * sensitivity;
         break;
       default:
-        pos.x += dx * sensitivity;
-        pos.y -= dy * sensitivity;
+        this.cameraTargetPos.x += dx * sensitivity;
+        this.cameraTargetPos.y -= dy * sensitivity;
         break;
     }
 
-    this.clampCameraToStudioBounds();
+    // Clamp target position
+    this.cameraTargetPos.x = Math.max(-15, Math.min(15, this.cameraTargetPos.x));
+    this.cameraTargetPos.y = Math.max(-1.0, Math.min(14, this.cameraTargetPos.y));
+    this.cameraTargetPos.z = Math.max(0.3, Math.min(12, this.cameraTargetPos.z));
 
-    if (this.cameraHelper) this.cameraHelper.update();
-
-    return { x: pos.x, y: pos.y, z: pos.z };
+    return { x: this.cameraTargetPos.x, y: this.cameraTargetPos.y, z: this.cameraTargetPos.z };
   }
 
   /** Clamp camera so it stays within studio bounds */
@@ -1809,6 +2036,46 @@ export class ExtractorSceneManager {
     };
   }
 
+  private syncCameraGizmo(): void {
+    if (!this.cameraGizmo) return;
+    this.cameraGizmo.position.copy(this.camera.position);
+    this.cameraGizmo.quaternion.copy(this.camera.quaternion);
+  }
+
+  /** Update smooth camera interpolation — call each frame */
+  updateCameraSmooth(): void {
+    if (!this.cameraSmoothEnabled) return;
+    this.camera.position.lerp(this.cameraTargetPos, 0.15);
+
+    // Always lookAt cue Y center
+    const mainCue = this.currentCueConfig?.instances.find(i => i.isMain)
+      || this.currentCueConfig?.instances[0];
+    if (mainCue) {
+      const cueYCenter = mainCue.positionY + (mainCue.scale * 1.3) / 2 - 1.2;
+      this.camera.lookAt(mainCue.positionX, cueYCenter, mainCue.positionZ);
+    }
+
+    this.camera.updateProjectionMatrix();
+    if (this.cameraHelper) this.cameraHelper.update();
+    this.syncCameraGizmo();
+  }
+
+  getCameraGizmo(): THREE.Group | null { return this.cameraGizmo; }
+
+  getScene(): THREE.Scene { return this.scene; }
+
+  getSelectableObjects(): THREE.Object3D[] {
+    const objects: THREE.Object3D[] = [];
+    if (this.cameraGizmo) objects.push(this.cameraGizmo);
+    if (this.backdrop) objects.push(this.backdrop);
+    if (this.tableSurface) objects.push(this.tableSurface);
+    objects.push(...this.wallFramePlanes);
+    objects.push(...this.tableFramePlanes);
+    if (this.model) objects.push(this.model);
+    for (const im of this.instancedMeshes) objects.push(im);
+    return objects;
+  }
+
   resize(width: number, height: number) {
     // Pass updateStyle: false to prevent Three.js from overwriting canvas CSS styles
     // This allows the canvas to scale via CSS (100% width/height) while maintaining
@@ -1842,6 +2109,7 @@ export class ExtractorSceneManager {
         this.clonedModel.position.set(inst.positionX, inst.positionY, inst.positionZ);
         this.clonedModel.scale.setScalar(inst.scale);
       }
+      this.clonedModel.userData = { type: 'cue' };
       return;
     }
 
@@ -1878,6 +2146,9 @@ export class ExtractorSceneManager {
       im.instanceMatrix.needsUpdate = true;
       this.instancedMeshes.push(im);
       this.scene.add(im);
+    }
+    for (const mesh of this.instancedMeshes) {
+      mesh.userData = { type: 'cue' };
     }
   }
 
@@ -1980,6 +2251,10 @@ export class ExtractorSceneManager {
       this.scene.remove(this.cameraHelper);
       this.cameraHelper.dispose();
       this.cameraHelper = null;
+    }
+    if (this.cameraGizmo) {
+      this.scene.remove(this.cameraGizmo);
+      this.cameraGizmo = null;
     }
     this.godCamera = null;
 

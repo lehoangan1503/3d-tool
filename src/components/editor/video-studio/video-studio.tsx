@@ -345,7 +345,16 @@ export function VideoStudio({
         if (!isRecording && !o) onClose();
       }}
     >
-      <DialogContent className="max-w-6xl h-[85vh] flex flex-col p-0 gap-0">
+      <DialogContent
+        className="w-screen h-screen max-w-none rounded-none flex flex-col p-0 gap-0"
+        onEscapeKeyDown={(e) => {
+          // In scene view, Esc deselects — don't close dialog
+          if (viewMode === "scene") {
+            e.preventDefault();
+            sceneViewControlsRef.current?.deselect();
+          }
+        }}
+      >
         <DialogHeader className="px-6 pt-6 pb-2">
           <DialogTitle className="flex items-center gap-2">
             <Video className="h-5 w-5" /> Video Studio
@@ -488,7 +497,7 @@ export function VideoStudio({
             {/* Cue Setup */}
             <div
               ref={cuePanelRef}
-              className={`rounded-lg transition-all ${activePanel === "cue-panel" ? "ring-2 ring-primary/50 p-2 -m-2" : ""}`}
+              className={`rounded-lg transition-all ${activePanel === "cue-panel" ? "border border-blue-500 p-2 -m-2" : ""}`}
             >
               <CueSetupPanel
                 cueConfig={config.cueConfig}
@@ -501,7 +510,7 @@ export function VideoStudio({
             {/* Camera Controls */}
             <div
               ref={cameraPanelRef}
-              className={`rounded-lg transition-all ${activePanel === "camera-panel" ? "ring-2 ring-primary/50 p-2 -m-2" : ""}`}
+              className={`rounded-lg transition-all ${activePanel === "camera-panel" ? "border border-blue-500 p-2 -m-2" : ""}`}
             >
               <CameraControlsPanel
                 cameraDirection={config.cameraDirection}
@@ -555,7 +564,7 @@ export function VideoStudio({
             {/* Background */}
             <div
               ref={backgroundPanelRef}
-              className={`rounded-lg transition-all ${activePanel === "background-panel" ? "ring-2 ring-primary/50 p-2 -m-2" : ""}`}
+              className={`rounded-lg transition-all ${activePanel === "background-panel" ? "border border-blue-500 p-2 -m-2" : ""}`}
             >
               <BackgroundPanel
                 wallSurface={config.wallSurface}

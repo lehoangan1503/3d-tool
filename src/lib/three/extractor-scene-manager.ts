@@ -115,6 +115,7 @@ export class ExtractorSceneManager {
 
   // Smooth camera interpolation
   private cameraTargetPos = new THREE.Vector3();
+  private cameraLookAtYOffset = 0.5; // 0 = cue bottom, 1 = cue top, default center
   private cameraSmoothEnabled = false;
 
   // Animation state
@@ -1983,7 +1984,11 @@ export class ExtractorSceneManager {
         this.cameraTargetPos.x += dx * sensitivity;
         break;
       case "y":
+        // Move camera Y position AND slide lookAt point along the cue
         this.cameraTargetPos.y -= dy * sensitivity;
+        this.cameraLookAtYOffset = Math.max(0, Math.min(1,
+          this.cameraLookAtYOffset - dy * 0.005
+        ));
         break;
       case "z":
         this.cameraTargetPos.z -= dy * sensitivity;
@@ -2050,12 +2055,14 @@ export class ExtractorSceneManager {
     if (!this.cameraSmoothEnabled) return;
     this.camera.position.lerp(this.cameraTargetPos, 0.15);
 
-    // Always lookAt cue Y center
+    // LookAt cue along Y axis, offset adjustable from bottom to top
     const mainCue = this.currentCueConfig?.instances.find(i => i.isMain)
       || this.currentCueConfig?.instances[0];
     if (mainCue) {
-      const cueYCenter = mainCue.positionY + (mainCue.scale * 1.3) / 2 - 1.2;
-      this.camera.lookAt(mainCue.positionX, cueYCenter, mainCue.positionZ);
+      const cueBottom = mainCue.positionY - 1.2;
+      const cueHeight = mainCue.scale * 1.3;
+      const lookAtY = cueBottom + cueHeight * this.cameraLookAtYOffset;
+      this.camera.lookAt(mainCue.positionX, lookAtY, mainCue.positionZ);
     }
 
     this.camera.updateProjectionMatrix();
@@ -2064,6 +2071,13 @@ export class ExtractorSceneManager {
   }
 
   getCameraGizmo(): THREE.Group | null { return this.cameraGizmo; }
+
+  /** Set camera lookAt Y offset along cue: 0 = bottom, 0.5 = center, 1 = top */
+  setCameraLookAtYOffset(offset: number): void {
+    this.cameraLookAtYOffset = Math.max(0, Math.min(1, offset));
+  }
+
+  getCameraLookAtYOffset(): number { return this.cameraLookAtYOffset; }
 
   getScene(): THREE.Scene { return this.scene; }
 

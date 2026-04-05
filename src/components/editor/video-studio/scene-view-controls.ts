@@ -20,9 +20,12 @@ export interface SelectionInfo {
 const CLICK_THRESHOLD_PX = 5;
 const HIGHLIGHT_COLOR = 0xffff00;
 
-/** Types that support TransformControls (draggable gizmos) */
+/** All selectable types support TransformControls (uniform x-y-z + free drag) */
 const TRANSFORMABLE_TYPES = new Set([
+  "camera",
   "cue",
+  "wall",
+  "table",
   "wallFrame",
   "tableFrame",
 ]);
@@ -309,17 +312,19 @@ export class SceneViewControls {
     else if (key === "y") this.activeAxis = "y";
     else if (key === "z") this.activeAxis = "z";
 
-    // TransformControls mode switching
-    if (key === "g" && this.transformControls?.object) {
+    // TransformControls mode switching (works even without current attachment)
+    if (key === "g" && this.transformControls) {
       this.transformControls.setMode("translate");
-    } else if (key === "r" && this.transformControls?.object) {
+    } else if (key === "r" && this.transformControls) {
       this.transformControls.setMode("rotate");
-    } else if (key === "s" && this.transformControls?.object) {
+    } else if (key === "s" && this.transformControls) {
       this.transformControls.setMode("scale");
     }
 
-    // Escape → deselect
+    // Escape → deselect (stop propagation so dialog doesn't close)
     if (key === "escape") {
+      e.preventDefault();
+      e.stopPropagation();
       this.setSelection({ type: null });
     }
   }
@@ -398,6 +403,11 @@ export class SceneViewControls {
 
   getSelection(): SelectionInfo {
     return { ...this.currentSelection };
+  }
+
+  /** Programmatically deselect the current object */
+  deselect(): void {
+    this.setSelection({ type: null });
   }
 
   setEnabled(enabled: boolean): void {

@@ -1208,12 +1208,14 @@ export class ExtractorSceneManager {
     this.scene.add(this.backdrop);
 
     // Table from surface frames — single 2048×2048 canvas, no tiling
+    // Position table at bottom edge of wall: wallY - wallHeight/2 = 4.5 - 11 = -6.5
+    const wallBottomY = this.backdrop.position.y - 11;
     const tableImages = await preloadFrameImages(config.tableSurface.frames);
     const tableTex = compositeSurfaceFrames(config.tableSurface, 2048, 2048, tableImages);
     tableTex.wrapS = THREE.ClampToEdgeWrapping;
     tableTex.wrapT = THREE.ClampToEdgeWrapping;
     tableTex.repeat.set(1, 1);
-    this.tableSurface = createTableSurface(tableTex, 28, 5, -1.2);
+    this.tableSurface = createTableSurface(tableTex, 28, 5, wallBottomY);
     this.scene.add(this.tableSurface);
 
     // Shadow floor

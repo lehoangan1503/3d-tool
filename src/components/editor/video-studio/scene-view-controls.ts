@@ -106,9 +106,12 @@ export class SceneViewControls {
         // Keep frustum lines in sync when camera gizmo is dragged
         if (this.currentSelection.type === "camera") {
           this.esm.syncCameraFromGizmo();
-          // Mark rotation override when camera is rotated via gizmo
           if (this.transformControls?.mode === "rotate") {
+            // R gizmo: user's rotation has priority over auto-lookAt
             this.esm.setCameraRotationOverride();
+          } else {
+            // G/S gizmo: moving camera clears rotation override, resume lookAt
+            this.esm.clearCameraRotationOverride();
           }
         }
         // Moving the cue clears camera rotation override

@@ -182,20 +182,16 @@ export function VideoStudio({
     return () => window.removeEventListener('keydown', handler);
   }, [open, undo, redo]);
 
-  // Minimap: render camera view to the dashboard canvas periodically when in scene view
+  // Minimap: register/unregister the canvas with ESM (it handles rendering internally)
   useEffect(() => {
-    if (!open || viewMode !== "scene") return;
-    let rafId = 0;
-    const renderLoop = () => {
-      const canvas = minimapCanvasRef.current;
-      const esm = extractorRef.current;
-      if (canvas && esm) {
-        esm.renderMinimapToCanvas(canvas);
-      }
-      rafId = requestAnimationFrame(renderLoop);
-    };
-    rafId = requestAnimationFrame(renderLoop);
-    return () => cancelAnimationFrame(rafId);
+    const esm = extractorRef.current;
+    const canvas = minimapCanvasRef.current;
+    if (!open || viewMode !== "scene" || !esm || !canvas) {
+      esm?.setMinimapCanvas(null);
+      return;
+    }
+    esm.setMinimapCanvas(canvas);
+    return () => esm.setMinimapCanvas(null);
   }, [open, viewMode]);
 
   const updateConfig = useCallback(

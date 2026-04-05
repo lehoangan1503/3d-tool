@@ -109,6 +109,15 @@ export class ExtractorSceneManager {
   // Camera gizmo for scene view selection
   private cameraGizmo: THREE.Group | null = null;
 
+  // Minimap: render camera view to a separate canvas at low frequency
+  private _minimapCanvas: HTMLCanvasElement | null = null;
+  private _minimapTarget: THREE.WebGLRenderTarget | null = null;
+  private _minimapBuf: Uint8Array | null = null;
+  private _minimapFrameCount = 0;
+  private static readonly MINIMAP_W = 288;
+  private static readonly MINIMAP_H = 162;
+  private static readonly MINIMAP_INTERVAL = 6; // render every Nth frame (~10fps)
+
   // Frame plane meshes (for interactive scene view)
   private wallFramePlanes: THREE.Mesh[] = [];
   private tableFramePlanes: THREE.Mesh[] = [];
@@ -1614,51 +1623,79 @@ export class ExtractorSceneManager {
     this.updateCameraSmooth();
     this.camera.updateMatrixWorld(true);
     if (this.cameraHelper) this.cameraHelper.update();
+
+    // Minimap: render camera view to offscreen target every N frames
+    if (this._minimapCanvas && this.isSceneView) {
+      this._minimapFrameCount++;
+      if (this._minimapFrameCount >= ExtractorSceneManager.MINIMAP_INTERVAL) {
+        this._minimapFrameCount = 0;
+        this._updateMinimapInternal();
+      }
+    }
+
     const cam = this.isSceneView && this.godCamera ? this.godCamera : this.camera;
     this.renderer.render(this.scene, cam);
   }
 
-  /** Render the camera view to a separate canvas for minimap display */
-  renderMinimapToCanvas(targetCanvas: HTMLCanvasElement): void {
-    if (this.isDisposed || !this.isSceneView) return;
+  /** Register a canvas element to receive minimap camera view updates */
+  setMinimapCanvas(canvas: HTMLCanvasElement | null): void {
+    this._minimapCanvas = canvas;
+    if (canvas && !this._minimapTarget) {
+      const { MINIMAP_W, MINIMAP_H } = ExtractorSceneManager;
+      this._minimapTarget = new THREE.WebGLRenderTarget(MINIMAP_W, MINIMAP_H);
+      this._minimapBuf = new Uint8Array(MINIMAP_W * MINIMAP_H * 4);
+    }
+    if (!canvas) {
+      this._minimapTarget?.dispose();
+      this._minimapTarget = null;
+      this._minimapBuf = null;
+    }
+  }
 
-    const ctx = targetCanvas.getContext('2d');
-    if (!ctx) return;
+  /** Internal: render camera view to WebGLRenderTarget then copy to 2D canvas */
+  private _updateMinimapInternal(): void {
+    const canvas = this._minimapCanvas;
+    const target = this._minimapTarget;
+    const buf = this._minimapBuf;
+    if (!canvas || !target || !buf) return;
 
-    // Temporarily hide scene-view-only helpers
-    const helperWasVisible = this.cameraHelper?.visible ?? false;
-    const gizmoWasVisible = this.cameraGizmo?.visible ?? false;
+    const { MINIMAP_W, MINIMAP_H } = ExtractorSceneManager;
+
+    // Hide scene-view helpers
+    const helperVis = this.cameraHelper?.visible ?? false;
+    const gizmoVis = this.cameraGizmo?.visible ?? false;
     if (this.cameraHelper) this.cameraHelper.visible = false;
     if (this.cameraGizmo) this.cameraGizmo.visible = false;
 
-    // Save renderer state
-    const savedSize = this.renderer.getSize(new THREE.Vector2());
+    // Adjust camera aspect for minimap
     const savedAspect = this.camera.aspect;
-
-    // Render to the main WebGL canvas at minimap resolution
-    const mw = targetCanvas.width;
-    const mh = targetCanvas.height;
-    this.renderer.setSize(mw, mh, false);
-    this.camera.aspect = mw / mh;
+    this.camera.aspect = MINIMAP_W / MINIMAP_H;
     this.camera.updateProjectionMatrix();
+
+    // Render to offscreen target (no main canvas resize)
+    this.renderer.setRenderTarget(target);
     this.renderer.render(this.scene, this.camera);
+    this.renderer.setRenderTarget(null);
 
-    // Copy to target 2D canvas
-    ctx.clearRect(0, 0, mw, mh);
-    ctx.drawImage(this.renderer.domElement, 0, 0, mw, mh);
+    // Read pixels and draw to 2D canvas
+    this.renderer.readRenderTargetPixels(target, 0, 0, MINIMAP_W, MINIMAP_H, buf);
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const imageData = ctx.createImageData(MINIMAP_W, MINIMAP_H);
+      // WebGL readPixels is bottom-up; flip rows for 2D canvas (top-down)
+      for (let y = 0; y < MINIMAP_H; y++) {
+        const srcRow = (MINIMAP_H - 1 - y) * MINIMAP_W * 4;
+        const dstRow = y * MINIMAP_W * 4;
+        imageData.data.set(buf.subarray(srcRow, srcRow + MINIMAP_W * 4), dstRow);
+      }
+      ctx.putImageData(imageData, 0, 0);
+    }
 
-    // Restore renderer state
-    this.renderer.setSize(savedSize.x, savedSize.y, false);
+    // Restore camera aspect and helpers
     this.camera.aspect = savedAspect;
     this.camera.updateProjectionMatrix();
-
-    // Restore helpers
-    if (this.cameraHelper) this.cameraHelper.visible = helperWasVisible;
-    if (this.cameraGizmo) this.cameraGizmo.visible = gizmoWasVisible;
-
-    // Re-render main scene view so the main canvas isn't stale
-    const cam = this.godCamera ?? this.camera;
-    this.renderer.render(this.scene, cam);
+    if (this.cameraHelper) this.cameraHelper.visible = helperVis;
+    if (this.cameraGizmo) this.cameraGizmo.visible = gizmoVis;
   }
 
   /**
@@ -2320,6 +2357,12 @@ export class ExtractorSceneManager {
       this.cameraGizmo = null;
     }
     this.godCamera = null;
+
+    // Clean up minimap
+    this._minimapTarget?.dispose();
+    this._minimapTarget = null;
+    this._minimapCanvas = null;
+    this._minimapBuf = null;
 
     if (this.clonedModel) {
       this.scene.remove(this.clonedModel);

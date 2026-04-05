@@ -55,6 +55,36 @@ import { BackgroundPanel } from "./background-panel";
 import { StudioTemplateSelector } from "./studio-template-selector";
 import { SceneViewControls, type SelectionInfo } from "./scene-view-controls";
 
+/** Inline editable number field for transform values */
+function TransformInput({
+  label,
+  value,
+  onChange,
+  suffix = "",
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  suffix?: string;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-[10px] text-muted-foreground w-3 shrink-0">{label}</span>
+      <input
+        type="number"
+        step="0.1"
+        value={parseFloat(value.toFixed(2))}
+        onChange={(e) => {
+          const v = parseFloat(e.target.value);
+          if (!isNaN(v)) onChange(v);
+        }}
+        className="h-6 w-full rounded border border-border/50 bg-muted/30 px-1.5 text-xs font-mono tabular-nums text-foreground outline-none focus:border-blue-500/50"
+      />
+      {suffix && <span className="text-[10px] text-muted-foreground shrink-0">{suffix}</span>}
+    </div>
+  );
+}
+
 interface VideoStudioProps {
   sceneManager: SceneManager | null;
   productName: string;
@@ -88,6 +118,11 @@ export function VideoStudio({
   } | null>(null);
   const [transformMode, setTransformMode] = useState<"translate" | "rotate" | "scale">("translate");
 
+  // Undo/redo history
+  const configHistoryRef = useRef<VideoStudioConfig[]>([]);
+  const configFutureRef = useRef<VideoStudioConfig[]>([]);
+  const isUndoRedoRef = useRef(false);
+
   const extractorRef = useRef<ExtractorSceneManager | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const videoUrlRef = useRef<string | null>(null);
@@ -98,7 +133,49 @@ export function VideoStudio({
   const configRef = useRef(config);
   useEffect(() => {
     configRef.current = config;
+    // Push to history (skip if this change came from undo/redo)
+    if (!isUndoRedoRef.current) {
+      configHistoryRef.current = [...configHistoryRef.current.slice(-49), config];
+      configFutureRef.current = [];
+    }
+    isUndoRedoRef.current = false;
   }, [config]);
+
+  const undo = useCallback(() => {
+    if (configHistoryRef.current.length <= 1) return;
+    const current = configHistoryRef.current.pop()!;
+    configFutureRef.current.push(current);
+    const prev = configHistoryRef.current[configHistoryRef.current.length - 1];
+    if (prev) {
+      isUndoRedoRef.current = true;
+      setConfig(structuredClone(prev));
+    }
+  }, []);
+
+  const redo = useCallback(() => {
+    if (configFutureRef.current.length === 0) return;
+    const next = configFutureRef.current.pop()!;
+    isUndoRedoRef.current = true;
+    configHistoryRef.current.push(next);
+    setConfig(structuredClone(next));
+  }, []);
+
+  // Ctrl+Z / Ctrl+Shift+Z keyboard handler
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [open, undo, redo]);
 
   const updateConfig = useCallback(
     <K extends keyof VideoStudioConfig>(key: K, value: VideoStudioConfig[K]) => {
@@ -115,6 +192,26 @@ export function VideoStudio({
       return next;
     });
   }, []);
+
+  const applyTransformValue = useCallback((
+    axis: "x" | "y" | "z",
+    prop: "position" | "rotation" | "scale",
+    value: number
+  ) => {
+    if (!transformValues || !sceneViewControlsRef.current) return;
+    const newValues = structuredClone(transformValues);
+    newValues[prop][axis] = value;
+    setTransformValues(newValues);
+
+    const pos = new THREE.Vector3(newValues.position.x, newValues.position.y, newValues.position.z);
+    const rot = new THREE.Euler(
+      THREE.MathUtils.degToRad(newValues.rotation.x),
+      THREE.MathUtils.degToRad(newValues.rotation.y),
+      THREE.MathUtils.degToRad(newValues.rotation.z)
+    );
+    const scl = new THREE.Vector3(newValues.scale.x, newValues.scale.y, newValues.scale.z);
+    sceneViewControlsRef.current.applyTransform(pos, rot, scl);
+  }, [transformValues]);
 
   // Setup ExtractorSceneManager when dialog opens
   useEffect(() => {
@@ -159,7 +256,7 @@ export function VideoStudio({
             setConfig((prev) => ({ ...prev, cameraStart: kf }));
           },
           () => configRef.current.cueConfig,
-          // Selection change → update selection info + auto-expand matching section
+          // Selection change → update selection info + auto-expand transform section
           (info) => {
             setSelectionInfo(info);
             if (info.type && info.object) {
@@ -173,8 +270,19 @@ export function VideoStudio({
                 },
                 scale: { x: obj.scale.x, y: obj.scale.y, z: obj.scale.z },
               });
+              // Auto-expand the transform section
+              setExpandedSections((prev) => {
+                const next = new Set(prev);
+                next.add("transform");
+                return next;
+              });
             } else {
               setTransformValues(null);
+              setExpandedSections((prev) => {
+                const next = new Set(prev);
+                next.delete("transform");
+                return next;
+              });
             }
           },
           // Object transform → sync 3D position back to config
@@ -513,19 +621,19 @@ export function VideoStudio({
 
             {/* Transform controls — shown when object selected in scene view */}
             {viewMode === "scene" && selectionInfo.type && (
-              <div className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+              <div className="rounded-lg border-2 border-blue-600/60 bg-card/30 overflow-hidden">
                 <button
                   type="button"
                   className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
                   onClick={() => toggleSection("transform")}
                 >
-                  <Move className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span>Transform — {selectionInfo.type}</span>
+                  <Move className="h-3.5 w-3.5 text-blue-400" />
+                  <span className="text-blue-300">{selectionInfo.type}</span>
                   <span className="flex-1" />
                   {expandedSections.has("transform") ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
                 </button>
                 {expandedSections.has("transform") && (
-                  <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-2">
+                  <div className="px-3 pb-3 pt-2 border-t border-blue-600/30 space-y-3">
                     {/* Mode buttons */}
                     <div className="flex gap-1">
                       <Button
@@ -553,26 +661,32 @@ export function VideoStudio({
                         <Maximize2 className="h-3 w-3 mr-1" /> Scale
                       </Button>
                     </div>
-                    {/* Value readouts */}
+                    {/* Editable value inputs */}
                     {transformValues && (
-                      <div className="space-y-1.5 text-xs">
-                        <div className="flex items-center justify-between">
-                          <span className="text-muted-foreground">Position</span>
-                          <span className="font-mono tabular-nums">
-                            {transformValues.position.x.toFixed(2)}, {transformValues.position.y.toFixed(2)}, {transformValues.position.z.toFixed(2)}
-                          </span>
+                      <div className="space-y-2">
+                        <div className="space-y-1">
+                          <Label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Position</Label>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            <TransformInput label="X" value={transformValues.position.x} onChange={(v) => applyTransformValue("x", "position", v)} />
+                            <TransformInput label="Y" value={transformValues.position.y} onChange={(v) => applyTransformValue("y", "position", v)} />
+                            <TransformInput label="Z" value={transformValues.position.z} onChange={(v) => applyTransformValue("z", "position", v)} />
+                          </div>
                         </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-muted-foreground">Rotation</span>
-                          <span className="font-mono tabular-nums">
-                            {transformValues.rotation.x.toFixed(1)}°, {transformValues.rotation.y.toFixed(1)}°, {transformValues.rotation.z.toFixed(1)}°
-                          </span>
+                        <div className="space-y-1">
+                          <Label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Rotation</Label>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            <TransformInput label="X" value={transformValues.rotation.x} onChange={(v) => applyTransformValue("x", "rotation", v)} suffix="°" />
+                            <TransformInput label="Y" value={transformValues.rotation.y} onChange={(v) => applyTransformValue("y", "rotation", v)} suffix="°" />
+                            <TransformInput label="Z" value={transformValues.rotation.z} onChange={(v) => applyTransformValue("z", "rotation", v)} suffix="°" />
+                          </div>
                         </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-muted-foreground">Scale</span>
-                          <span className="font-mono tabular-nums">
-                            {transformValues.scale.x.toFixed(2)}, {transformValues.scale.y.toFixed(2)}, {transformValues.scale.z.toFixed(2)}
-                          </span>
+                        <div className="space-y-1">
+                          <Label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Scale</Label>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            <TransformInput label="X" value={transformValues.scale.x} onChange={(v) => applyTransformValue("x", "scale", v)} />
+                            <TransformInput label="Y" value={transformValues.scale.y} onChange={(v) => applyTransformValue("y", "scale", v)} />
+                            <TransformInput label="Z" value={transformValues.scale.z} onChange={(v) => applyTransformValue("z", "scale", v)} />
+                          </div>
                         </div>
                       </div>
                     )}

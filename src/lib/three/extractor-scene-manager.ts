@@ -134,7 +134,9 @@ export class ExtractorSceneManager {
       preserveDrawingBuffer: true,
     });
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(1); // Fixed for consistent output
+    this.renderer.setPixelRatio(Math.min(
+      typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2
+    ));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.2;
@@ -1223,7 +1225,8 @@ export class ExtractorSceneManager {
 
     // Table from surface frames — single 2048×2048 canvas, no tiling
     // Position table at bottom edge of wall: wallY - wallHeight/2 = 4.5 - 11 = -6.5
-    const wallBottomY = this.backdrop.position.y - 11;
+    // Small gap (0.05) prevents z-fighting and gives a visible seam between wall and table
+    const wallBottomY = this.backdrop.position.y - 11 - 0.05;
     const tableImages = await preloadFrameImages(config.tableSurface.frames);
     const tableTex = compositeSurfaceFrames(config.tableSurface, 2048, 2048, tableImages);
     tableTex.wrapS = THREE.ClampToEdgeWrapping;
@@ -1478,6 +1481,8 @@ export class ExtractorSceneManager {
     const qp = VIDEO_QUALITY_PRESETS[config.quality];
 
     return new Promise((resolve, reject) => {
+      // Use pixelRatio 1 during recording for consistent output
+      this.renderer.setPixelRatio(1);
       this.renderer.setSize(qp.width, qp.height);
       this.camera.aspect = qp.width / qp.height;
       this.camera.updateProjectionMatrix();
@@ -1607,6 +1612,7 @@ export class ExtractorSceneManager {
   render(): void {
     if (this.isDisposed) return;
     this.updateCameraSmooth();
+    this.camera.updateMatrixWorld(true);
     if (this.cameraHelper) this.cameraHelper.update();
     const cam = this.isSceneView && this.godCamera ? this.godCamera : this.camera;
     this.renderer.render(this.scene, cam);
@@ -1957,6 +1963,7 @@ export class ExtractorSceneManager {
     this.camera.lookAt(targetX, targetY, targetZ);
     this.camera.up.set(0, 1, 0);
     this.camera.updateProjectionMatrix();
+    this.camera.updateMatrixWorld(true);
 
     // Instant jump — sync target so lerp doesn't animate from old position
     this.cameraTargetPos.copy(this.camera.position);
@@ -2056,6 +2063,7 @@ export class ExtractorSceneManager {
     this.camera.position.copy(this.cameraGizmo.position);
     this.camera.quaternion.copy(this.cameraGizmo.quaternion);
     this.camera.updateProjectionMatrix();
+    this.camera.updateMatrixWorld(true);
     this.cameraTargetPos.copy(this.camera.position);
     if (this.cameraHelper) this.cameraHelper.update();
   }
@@ -2101,6 +2109,10 @@ export class ExtractorSceneManager {
   }
 
   resize(width: number, height: number) {
+    // Restore device pixel ratio for preview quality (recording sets it to 1)
+    this.renderer.setPixelRatio(Math.min(
+      typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2
+    ));
     // Pass updateStyle: false to prevent Three.js from overwriting canvas CSS styles
     // This allows the canvas to scale via CSS (100% width/height) while maintaining
     // the internal rendering resolution

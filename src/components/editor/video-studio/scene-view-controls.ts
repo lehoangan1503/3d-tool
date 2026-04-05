@@ -371,6 +371,30 @@ export class SceneViewControls {
     return (this.transformControls?.mode as "translate" | "rotate" | "scale") ?? "translate";
   }
 
+  /** Apply typed transform values to the currently selected object */
+  applyTransform(
+    position: THREE.Vector3,
+    rotation: THREE.Euler,
+    scale: THREE.Vector3
+  ): void {
+    if (!this.currentSelection.object) return;
+    const obj = this.currentSelection.object;
+    obj.position.copy(position);
+    obj.rotation.copy(rotation);
+    obj.scale.copy(scale);
+
+    // Trigger the same sync as dragging
+    this.onObjectTransform?.(
+      { ...this.currentSelection },
+      obj.position.clone(),
+      obj.rotation.clone(),
+      obj.scale.clone()
+    );
+    if (this.currentSelection.type === "camera") {
+      this.esm.syncCameraFromGizmo();
+    }
+  }
+
   update(): void {
     if (this.orbitControls) this.orbitControls.update();
   }

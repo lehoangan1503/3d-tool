@@ -1197,22 +1197,22 @@ export class ExtractorSceneManager {
       this.scene.add(fill);
     });
 
-    // Wall from surface frames
+    // Wall from surface frames — single 2048×2048 canvas, no tiling
     const wallImages = await preloadFrameImages(config.wallSurface.frames);
-    const wallTex = compositeSurfaceFrames(config.wallSurface, 1024, 1024, wallImages);
-    wallTex.wrapS = THREE.RepeatWrapping;
-    wallTex.wrapT = THREE.RepeatWrapping;
-    wallTex.repeat.set(5, 5);
+    const wallTex = compositeSurfaceFrames(config.wallSurface, 2048, 2048, wallImages);
+    wallTex.wrapS = THREE.ClampToEdgeWrapping;
+    wallTex.wrapT = THREE.ClampToEdgeWrapping;
+    wallTex.repeat.set(1, 1);
     this.backdrop = createWallBackdrop(wallTex, 34, 22);
     this.backdrop.position.set(0, 4.5, -5.5);
     this.scene.add(this.backdrop);
 
-    // Table from surface frames
+    // Table from surface frames — single 2048×2048 canvas, no tiling
     const tableImages = await preloadFrameImages(config.tableSurface.frames);
-    const tableTex = compositeSurfaceFrames(config.tableSurface, 1024, 1024, tableImages);
-    tableTex.wrapS = THREE.RepeatWrapping;
-    tableTex.wrapT = THREE.RepeatWrapping;
-    tableTex.repeat.set(4, 4);
+    const tableTex = compositeSurfaceFrames(config.tableSurface, 2048, 2048, tableImages);
+    tableTex.wrapS = THREE.ClampToEdgeWrapping;
+    tableTex.wrapT = THREE.ClampToEdgeWrapping;
+    tableTex.repeat.set(1, 1);
     this.tableSurface = createTableSurface(tableTex, 28, 5, -1.2);
     this.scene.add(this.tableSurface);
 

@@ -1616,47 +1616,39 @@ export class ExtractorSceneManager {
     if (this.cameraHelper) this.cameraHelper.update();
     const cam = this.isSceneView && this.godCamera ? this.godCamera : this.camera;
     this.renderer.render(this.scene, cam);
-
-    // Minimap: render camera view inset when in scene view
-    if (this.isSceneView && this.godCamera) {
-      this.renderMinimap();
-    }
   }
 
-  /** Render a small camera-view inset in the top-right corner */
-  private renderMinimap(): void {
-    const gl = this.renderer.getContext();
-    const canvas = this.renderer.domElement;
-    const dpr = this.renderer.getPixelRatio();
-    const cw = canvas.width;
-    const ch = canvas.height;
+  /** Render the camera view to a separate canvas for minimap display */
+  renderMinimapToCanvas(targetCanvas: HTMLCanvasElement): void {
+    if (this.isDisposed || !this.isSceneView) return;
 
-    // Minimap size: ~25% of canvas width, maintain 16:9 aspect
-    const mw = Math.round(cw * 0.25);
-    const mh = Math.round(mw * 9 / 16);
-    const mx = cw - mw - Math.round(12 * dpr);
-    const my = ch - mh - Math.round(12 * dpr); // WebGL Y is bottom-up
+    const ctx = targetCanvas.getContext('2d');
+    if (!ctx) return;
 
-    // Hide camera helper so it doesn't appear in minimap
+    // Temporarily hide scene-view-only helpers
     const helperWasVisible = this.cameraHelper?.visible ?? false;
-    if (this.cameraHelper) this.cameraHelper.visible = false;
-    // Hide camera gizmo
     const gizmoWasVisible = this.cameraGizmo?.visible ?? false;
+    if (this.cameraHelper) this.cameraHelper.visible = false;
     if (this.cameraGizmo) this.cameraGizmo.visible = false;
 
-    // Save and set camera aspect for minimap
+    // Save renderer state
+    const savedSize = this.renderer.getSize(new THREE.Vector2());
     const savedAspect = this.camera.aspect;
+
+    // Render to the main WebGL canvas at minimap resolution
+    const mw = targetCanvas.width;
+    const mh = targetCanvas.height;
+    this.renderer.setSize(mw, mh, false);
     this.camera.aspect = mw / mh;
     this.camera.updateProjectionMatrix();
-
-    this.renderer.setScissorTest(true);
-    this.renderer.setViewport(mx, my, mw, mh);
-    this.renderer.setScissor(mx, my, mw, mh);
     this.renderer.render(this.scene, this.camera);
-    this.renderer.setScissorTest(false);
 
-    // Restore full viewport and camera aspect
-    this.renderer.setViewport(0, 0, cw, ch);
+    // Copy to target 2D canvas
+    ctx.clearRect(0, 0, mw, mh);
+    ctx.drawImage(this.renderer.domElement, 0, 0, mw, mh);
+
+    // Restore renderer state
+    this.renderer.setSize(savedSize.x, savedSize.y, false);
     this.camera.aspect = savedAspect;
     this.camera.updateProjectionMatrix();
 
@@ -1664,12 +1656,9 @@ export class ExtractorSceneManager {
     if (this.cameraHelper) this.cameraHelper.visible = helperWasVisible;
     if (this.cameraGizmo) this.cameraGizmo.visible = gizmoWasVisible;
 
-    // Draw border around minimap
-    const ctx2d = (canvas as HTMLCanvasElement).getContext?.('2d');
-    if (!ctx2d) {
-      // WebGL canvas — draw border via a second pass overlay would be complex;
-      // Instead use a CSS overlay in the React component
-    }
+    // Re-render main scene view so the main canvas isn't stale
+    const cam = this.godCamera ?? this.camera;
+    this.renderer.render(this.scene, cam);
   }
 
   /**
@@ -1950,8 +1939,8 @@ export class ExtractorSceneManager {
   /** Initialize scene view with god camera + studio camera frustum helper */
   initSceneView(): void {
     this.godCamera = new THREE.PerspectiveCamera(60, this.width / this.height, 0.1, 200);
-    this.godCamera.position.set(0, 8, 15);
-    this.godCamera.lookAt(0, 2, 0);
+    this.godCamera.position.set(0, 5, 22);
+    this.godCamera.lookAt(0, 3, 0);
 
     this.cameraHelper = new THREE.CameraHelper(this.camera);
     this.cameraHelper.visible = false;

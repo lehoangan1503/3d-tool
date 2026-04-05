@@ -129,6 +129,7 @@ export function VideoStudio({
 
   const extractorRef = useRef<ExtractorSceneManager | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
+  const minimapCanvasRef = useRef<HTMLCanvasElement>(null);
   const videoUrlRef = useRef<string | null>(null);
   const blobUrlsRef = useRef<string[]>([]);
   const sceneViewControlsRef = useRef<SceneViewControls | null>(null);
@@ -180,6 +181,22 @@ export function VideoStudio({
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [open, undo, redo]);
+
+  // Minimap: render camera view to the dashboard canvas periodically when in scene view
+  useEffect(() => {
+    if (!open || viewMode !== "scene") return;
+    let rafId = 0;
+    const renderLoop = () => {
+      const canvas = minimapCanvasRef.current;
+      const esm = extractorRef.current;
+      if (canvas && esm) {
+        esm.renderMinimapToCanvas(canvas);
+      }
+      rafId = requestAnimationFrame(renderLoop);
+    };
+    rafId = requestAnimationFrame(renderLoop);
+    return () => cancelAnimationFrame(rafId);
+  }, [open, viewMode]);
 
   const updateConfig = useCallback(
     <K extends keyof VideoStudioConfig>(key: K, value: VideoStudioConfig[K]) => {
@@ -586,16 +603,6 @@ export function VideoStudio({
                   <Loader2 className="h-6 w-6 animate-spin text-white" />
                 </div>
               )}
-              {/* Minimap border overlay — positioned to match the WebGL scissor viewport */}
-              {viewMode === "scene" && (
-                <div
-                  className="absolute pointer-events-none z-10"
-                  style={{ top: 12, right: 12, width: '25%', aspectRatio: '16/9' }}
-                >
-                  <div className="w-full h-full rounded border border-white/30 shadow-lg" />
-                  <span className="absolute top-1 left-2 text-[9px] text-white/60 font-medium">Camera</span>
-                </div>
-              )}
             </div>
 
             {/* Key hints for scene view */}
@@ -650,6 +657,21 @@ export function VideoStudio({
 
           {/* Right: Controls */}
           <div className="w-80 shrink-0 border-l border-border overflow-y-auto p-4 space-y-3">
+            {/* Camera minimap — live preview, fixed at top */}
+            {viewMode === "scene" && (
+              <div className="relative rounded-lg overflow-hidden border border-border/50 bg-black">
+                <canvas
+                  ref={minimapCanvasRef}
+                  width={288}
+                  height={162}
+                  className="w-full h-auto block"
+                />
+                <span className="absolute top-1.5 left-2 text-[9px] text-white/70 font-medium bg-black/40 px-1.5 py-0.5 rounded">
+                  Camera View
+                </span>
+              </div>
+            )}
+
             {/* Template selector — always visible at top */}
             <StudioTemplateSelector
               productId={productId}

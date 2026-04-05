@@ -67,7 +67,7 @@ export class SceneViewControls {
       this.orbitControls = new OrbitControls(godCam, canvas);
       this.orbitControls.enableDamping = true;
       this.orbitControls.dampingFactor = 0.1;
-      this.orbitControls.target.set(0, 2, 0);
+      this.orbitControls.target.set(0, 3, 0);
 
       this.transformControls = new TransformControls(godCam, canvas);
       this.transformControls.setMode("translate");

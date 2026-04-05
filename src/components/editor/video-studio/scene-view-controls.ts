@@ -59,7 +59,8 @@ export class SceneViewControls {
       position: THREE.Vector3,
       rotation: THREE.Euler,
       scale: THREE.Vector3
-    ) => void
+    ) => void,
+    private onTransformModeChange?: (mode: "translate" | "rotate" | "scale") => void
   ) {
     const godCam = esm.getGodCamera();
     if (godCam) {
@@ -97,6 +98,10 @@ export class SceneViewControls {
             obj.rotation.clone(),
             obj.scale.clone()
           );
+        }
+        // Keep frustum lines in sync when camera gizmo is dragged
+        if (this.currentSelection.type === "camera") {
+          this.esm.syncCameraFromGizmo();
         }
       });
     }
@@ -300,10 +305,13 @@ export class SceneViewControls {
     // TransformControls mode switching
     if (key === "g" && this.transformControls) {
       this.transformControls.setMode("translate");
+      this.onTransformModeChange?.("translate");
     } else if (key === "r" && this.transformControls) {
       this.transformControls.setMode("rotate");
+      this.onTransformModeChange?.("rotate");
     } else if (key === "s" && this.transformControls) {
       this.transformControls.setMode("scale");
+      this.onTransformModeChange?.("scale");
     }
 
     // Escape → deselect (stop propagation so dialog doesn't close)
@@ -350,6 +358,17 @@ export class SceneViewControls {
   setEnabled(enabled: boolean): void {
     if (this.orbitControls) this.orbitControls.enabled = enabled;
     if (this.transformControls) this.transformControls.enabled = enabled;
+  }
+
+  setTransformMode(mode: "translate" | "rotate" | "scale"): void {
+    if (this.transformControls) {
+      this.transformControls.setMode(mode);
+      this.onTransformModeChange?.(mode);
+    }
+  }
+
+  getTransformMode(): "translate" | "rotate" | "scale" {
+    return (this.transformControls?.mode as "translate" | "rotate" | "scale") ?? "translate";
   }
 
   update(): void {

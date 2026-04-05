@@ -1,5 +1,6 @@
 "use client";
 
+import * as THREE from "three";
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Dialog,
@@ -29,6 +30,14 @@ import {
   RotateCcw,
   Eye,
   Camera,
+  ChevronDown,
+  ChevronUp,
+  Box,
+  Move,
+  Maximize2,
+  Sun,
+  Image as ImageIcon,
+  Sparkles,
 } from "lucide-react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import {
@@ -70,16 +79,20 @@ export function VideoStudio({
   const [error, setError] = useState<string | null>(null);
   const [isRebuilding, setIsRebuilding] = useState(false);
   const [viewMode, setViewMode] = useState<"scene" | "camera">("camera");
-  const [activePanel, setActivePanel] = useState<string | null>(null);
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+  const [selectionInfo, setSelectionInfo] = useState<SelectionInfo>({ type: null });
+  const [transformValues, setTransformValues] = useState<{
+    position: { x: number; y: number; z: number };
+    rotation: { x: number; y: number; z: number };
+    scale: { x: number; y: number; z: number };
+  } | null>(null);
+  const [transformMode, setTransformMode] = useState<"translate" | "rotate" | "scale">("translate");
 
   const extractorRef = useRef<ExtractorSceneManager | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const videoUrlRef = useRef<string | null>(null);
   const blobUrlsRef = useRef<string[]>([]);
   const sceneViewControlsRef = useRef<SceneViewControls | null>(null);
-  const cuePanelRef = useRef<HTMLDivElement>(null);
-  const cameraPanelRef = useRef<HTMLDivElement>(null);
-  const backgroundPanelRef = useRef<HTMLDivElement>(null);
 
   // Keep a ref to config so SceneViewControls callback always reads latest
   const configRef = useRef(config);
@@ -93,6 +106,15 @@ export function VideoStudio({
     },
     []
   );
+
+  const toggleSection = useCallback((id: string) => {
+    setExpandedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   // Setup ExtractorSceneManager when dialog opens
   useEffect(() => {
@@ -137,21 +159,41 @@ export function VideoStudio({
             setConfig((prev) => ({ ...prev, cameraStart: kf }));
           },
           () => configRef.current.cueConfig,
-          // Selection change → highlight & scroll the matching panel
+          // Selection change → update selection info + auto-expand matching section
           (info) => {
-            const panelMap: Record<string, string> = {
-              camera: "camera-panel",
-              cue: "cue-panel",
-              wall: "background-panel",
-              table: "background-panel",
-              wallFrame: "background-panel",
-              tableFrame: "background-panel",
-            };
-            setActivePanel(info.type ? panelMap[info.type] || null : null);
+            setSelectionInfo(info);
+            if (info.type && info.object) {
+              const obj = info.object;
+              setTransformValues({
+                position: { x: obj.position.x, y: obj.position.y, z: obj.position.z },
+                rotation: {
+                  x: THREE.MathUtils.radToDeg(obj.rotation.x),
+                  y: THREE.MathUtils.radToDeg(obj.rotation.y),
+                  z: THREE.MathUtils.radToDeg(obj.rotation.z),
+                },
+                scale: { x: obj.scale.x, y: obj.scale.y, z: obj.scale.z },
+              });
+            } else {
+              setTransformValues(null);
+            }
           },
           // Object transform → sync 3D position back to config
-          (info, position) => {
-            if (info.type === "cue") {
+          (info, position, rotation, scale) => {
+            setTransformValues({
+              position: { x: position.x, y: position.y, z: position.z },
+              rotation: {
+                x: THREE.MathUtils.radToDeg(rotation.x),
+                y: THREE.MathUtils.radToDeg(rotation.y),
+                z: THREE.MathUtils.radToDeg(rotation.z),
+              },
+              scale: { x: scale.x, y: scale.y, z: scale.z },
+            });
+            if (info.type === "camera") {
+              if (extractorRef.current) {
+                const kf = extractorRef.current.getCameraKeyframeFromPosition(configRef.current.cueConfig);
+                setConfig((prev) => ({ ...prev, cameraStart: kf }));
+              }
+            } else if (info.type === "cue") {
               setConfig((prev) => {
                 const instances = [...prev.cueConfig.instances];
                 if (instances[0]) {
@@ -183,6 +225,10 @@ export function VideoStudio({
                 return { ...prev, tableSurface: { ...prev.tableSurface, frames } };
               });
             }
+          },
+          // Transform mode change (G/R/S keys)
+          (mode) => {
+            setTransformMode(mode);
           }
         );
       }
@@ -219,18 +265,6 @@ export function VideoStudio({
     if (!extractorRef.current) return;
     extractorRef.current.setViewMode(viewMode);
   }, [viewMode]);
-
-  // Auto-scroll to the active panel when selection changes
-  useEffect(() => {
-    if (!activePanel) return;
-    const refMap: Record<string, React.RefObject<HTMLDivElement | null>> = {
-      "cue-panel": cuePanelRef,
-      "camera-panel": cameraPanelRef,
-      "background-panel": backgroundPanelRef,
-    };
-    const ref = refMap[activePanel];
-    ref?.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [activePanel]);
 
   // Debounced preview updates on config change
   useEffect(() => {
@@ -449,159 +483,264 @@ export function VideoStudio({
           </div>
 
           {/* Right: Controls */}
-          <div className="w-80 shrink-0 border-l border-border overflow-y-auto p-4 space-y-4">
-            {/* Template selector */}
+          <div className="w-80 shrink-0 border-l border-border overflow-y-auto p-4 space-y-3">
+            {/* Template selector — always visible at top */}
             <StudioTemplateSelector
               productId={productId}
               currentConfig={config}
               onLoadConfig={(c) => setConfig(c)}
             />
 
-            {/* Quality & Duration */}
-            <div className="space-y-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Quality</Label>
-                <Select
-                  value={config.quality}
-                  onValueChange={(v) =>
-                    updateConfig("quality", v as VideoStudioConfig["quality"])
-                  }
-                >
-                  <SelectTrigger className="h-8">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="hd">HD (1920×1080)</SelectItem>
-                    <SelectItem value="2k">2K (2560×1440)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">
-                  Estimated Duration
-                </Label>
-                <p className="text-sm font-mono">{duration.toFixed(1)}s</p>
-              </div>
+            {/* Quality & Duration — always visible */}
+            <div className="flex items-center gap-2 text-xs">
+              <Select
+                value={config.quality}
+                onValueChange={(v) =>
+                  updateConfig("quality", v as VideoStudioConfig["quality"])
+                }
+              >
+                <SelectTrigger className="h-7 w-32 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="hd">HD 1080p</SelectItem>
+                  <SelectItem value="2k">2K 1440p</SelectItem>
+                </SelectContent>
+              </Select>
+              <span className="text-muted-foreground">·</span>
+              <span className="font-mono text-muted-foreground">{duration.toFixed(1)}s</span>
             </div>
 
-            <div className="border-t border-border/50" />
+            {/* Transform controls — shown when object selected in scene view */}
+            {viewMode === "scene" && selectionInfo.type && (
+              <div className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
+                  onClick={() => toggleSection("transform")}
+                >
+                  <Move className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span>Transform — {selectionInfo.type}</span>
+                  <span className="flex-1" />
+                  {expandedSections.has("transform") ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+                </button>
+                {expandedSections.has("transform") && (
+                  <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-2">
+                    {/* Mode buttons */}
+                    <div className="flex gap-1">
+                      <Button
+                        variant={transformMode === "translate" ? "secondary" : "ghost"}
+                        size="sm"
+                        className="flex-1 h-7 text-xs"
+                        onClick={() => { sceneViewControlsRef.current?.setTransformMode("translate"); setTransformMode("translate"); }}
+                      >
+                        <Move className="h-3 w-3 mr-1" /> Move
+                      </Button>
+                      <Button
+                        variant={transformMode === "rotate" ? "secondary" : "ghost"}
+                        size="sm"
+                        className="flex-1 h-7 text-xs"
+                        onClick={() => { sceneViewControlsRef.current?.setTransformMode("rotate"); setTransformMode("rotate"); }}
+                      >
+                        <RotateCcw className="h-3 w-3 mr-1" /> Rotate
+                      </Button>
+                      <Button
+                        variant={transformMode === "scale" ? "secondary" : "ghost"}
+                        size="sm"
+                        className="flex-1 h-7 text-xs"
+                        onClick={() => { sceneViewControlsRef.current?.setTransformMode("scale"); setTransformMode("scale"); }}
+                      >
+                        <Maximize2 className="h-3 w-3 mr-1" /> Scale
+                      </Button>
+                    </div>
+                    {/* Value readouts */}
+                    {transformValues && (
+                      <div className="space-y-1.5 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="text-muted-foreground">Position</span>
+                          <span className="font-mono tabular-nums">
+                            {transformValues.position.x.toFixed(2)}, {transformValues.position.y.toFixed(2)}, {transformValues.position.z.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-muted-foreground">Rotation</span>
+                          <span className="font-mono tabular-nums">
+                            {transformValues.rotation.x.toFixed(1)}°, {transformValues.rotation.y.toFixed(1)}°, {transformValues.rotation.z.toFixed(1)}°
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-muted-foreground">Scale</span>
+                          <span className="font-mono tabular-nums">
+                            {transformValues.scale.x.toFixed(2)}, {transformValues.scale.y.toFixed(2)}, {transformValues.scale.z.toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Cue Setup */}
-            <div
-              ref={cuePanelRef}
-              className={`rounded-lg transition-all ${activePanel === "cue-panel" ? "border border-blue-500 p-2 -m-2" : ""}`}
-            >
-              <CueSetupPanel
-                cueConfig={config.cueConfig}
-                onChange={(cueConfig) => updateConfig("cueConfig", cueConfig)}
-              />
+            <div className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
+                onClick={() => toggleSection("cue")}
+              >
+                <Box className="h-3.5 w-3.5 text-muted-foreground" />
+                <span>Cue Setup</span>
+                <span className="flex-1" />
+                {expandedSections.has("cue") ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+              </button>
+              {expandedSections.has("cue") && (
+                <div className="px-3 pb-3 pt-2 border-t border-border/30">
+                  <CueSetupPanel
+                    cueConfig={config.cueConfig}
+                    onChange={(cueConfig) => updateConfig("cueConfig", cueConfig)}
+                  />
+                </div>
+              )}
             </div>
-
-            <div className="border-t border-border/50" />
 
             {/* Camera Controls */}
-            <div
-              ref={cameraPanelRef}
-              className={`rounded-lg transition-all ${activePanel === "camera-panel" ? "border border-blue-500 p-2 -m-2" : ""}`}
-            >
-              <CameraControlsPanel
-                cameraDirection={config.cameraDirection}
-                cameraStart={config.cameraStart}
-                cameraEnd={config.cameraEnd}
-                cameraSpeed={config.cameraSpeed}
-                lockDistance={config.lockDistance}
-                easing={config.easing}
-                onDirectionChange={(d) => updateConfig("cameraDirection", d)}
-                onStartChange={(s) => updateConfig("cameraStart", s)}
-                onEndChange={(e) => updateConfig("cameraEnd", e)}
-                onSpeedChange={(s) => updateConfig("cameraSpeed", s)}
-                onLockDistanceChange={(l) => updateConfig("lockDistance", l)}
-                onEasingChange={(e) => updateConfig("easing", e)}
-                onSetStart={handleSetStart}
-                onSetEnd={handleSetEnd}
-              />
+            <div className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
+                onClick={() => toggleSection("camera")}
+              >
+                <Camera className="h-3.5 w-3.5 text-muted-foreground" />
+                <span>Camera</span>
+                <span className="flex-1" />
+                {expandedSections.has("camera") ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+              </button>
+              {expandedSections.has("camera") && (
+                <div className="px-3 pb-3 pt-2 border-t border-border/30">
+                  <CameraControlsPanel
+                    cameraDirection={config.cameraDirection}
+                    cameraStart={config.cameraStart}
+                    cameraEnd={config.cameraEnd}
+                    cameraSpeed={config.cameraSpeed}
+                    lockDistance={config.lockDistance}
+                    easing={config.easing}
+                    onDirectionChange={(d) => updateConfig("cameraDirection", d)}
+                    onStartChange={(s) => updateConfig("cameraStart", s)}
+                    onEndChange={(e) => updateConfig("cameraEnd", e)}
+                    onSpeedChange={(s) => updateConfig("cameraSpeed", s)}
+                    onLockDistanceChange={(l) => updateConfig("lockDistance", l)}
+                    onEasingChange={(e) => updateConfig("easing", e)}
+                    onSetStart={handleSetStart}
+                    onSetEnd={handleSetEnd}
+                  />
+                </div>
+              )}
             </div>
-
-            <div className="border-t border-border/50" />
 
             {/* HDRI Lighting */}
-            <div className="space-y-3">
-              <Label className="text-xs font-medium text-muted-foreground">
-                HDRI Lighting
-              </Label>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">
-                  Environment
-                </Label>
-                <Select
-                  value={config.hdriFile}
-                  onValueChange={(v) => updateConfig("hdriFile", v)}
-                >
-                  <SelectTrigger className="h-8">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {HDRI_OPTIONS_FALLBACK.map((h) => (
-                      <SelectItem key={h.id} value={h.id}>
-                        {h.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
+                onClick={() => toggleSection("hdri")}
+              >
+                <Sun className="h-3.5 w-3.5 text-muted-foreground" />
+                <span>HDRI Lighting</span>
+                <span className="flex-1" />
+                {expandedSections.has("hdri") ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+              </button>
+              {expandedSections.has("hdri") && (
+                <div className="px-3 pb-3 pt-2 border-t border-border/30">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">
+                      Environment
+                    </Label>
+                    <Select
+                      value={config.hdriFile}
+                      onValueChange={(v) => updateConfig("hdriFile", v)}
+                    >
+                      <SelectTrigger className="h-8">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {HDRI_OPTIONS_FALLBACK.map((h) => (
+                          <SelectItem key={h.id} value={h.id}>
+                            {h.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
             </div>
-
-            <div className="border-t border-border/50" />
 
             {/* Background */}
-            <div
-              ref={backgroundPanelRef}
-              className={`rounded-lg transition-all ${activePanel === "background-panel" ? "border border-blue-500 p-2 -m-2" : ""}`}
-            >
-              <BackgroundPanel
-                wallSurface={config.wallSurface}
-                tableSurface={config.tableSurface}
-                onWallSurfaceChange={(s) => updateConfig("wallSurface", s)}
-                onTableSurfaceChange={(s) => updateConfig("tableSurface", s)}
-              />
+            <div className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
+                onClick={() => toggleSection("background")}
+              >
+                <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                <span>Background</span>
+                <span className="flex-1" />
+                {expandedSections.has("background") ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+              </button>
+              {expandedSections.has("background") && (
+                <div className="px-3 pb-3 pt-2 border-t border-border/30">
+                  <BackgroundPanel
+                    wallSurface={config.wallSurface}
+                    tableSurface={config.tableSurface}
+                    onWallSurfaceChange={(s) => updateConfig("wallSurface", s)}
+                    onTableSurfaceChange={(s) => updateConfig("tableSurface", s)}
+                  />
+                </div>
+              )}
             </div>
 
-            <div className="border-t border-border/50" />
-
             {/* Shadow */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs font-medium text-muted-foreground">
-                  Shadow
-                </Label>
+            <div className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
+                onClick={() => toggleSection("shadow")}
+              >
+                <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
+                <span>Shadow</span>
+                <span className="flex-1" />
                 <Checkbox
                   checked={config.shadow.enabled}
-                  onCheckedChange={(checked) =>
+                  onCheckedChange={(checked) => {
                     updateConfig("shadow", {
                       ...config.shadow,
                       enabled: checked === true,
-                    })
-                  }
+                    });
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="h-3.5 w-3.5"
                 />
-              </div>
-              {config.shadow.enabled && (
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">
-                    Intensity — {Math.round(config.shadow.intensity * 100)}%
-                  </Label>
-                  <Slider
-                    value={[config.shadow.intensity]}
-                    onValueChange={([v]) =>
-                      updateConfig("shadow", {
-                        ...config.shadow,
-                        intensity: v,
-                      })
-                    }
-                    min={0}
-                    max={1}
-                    step={0.05}
-                  />
+                {expandedSections.has("shadow") ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+              </button>
+              {expandedSections.has("shadow") && config.shadow.enabled && (
+                <div className="px-3 pb-3 pt-2 border-t border-border/30">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">
+                      Intensity — {Math.round(config.shadow.intensity * 100)}%
+                    </Label>
+                    <Slider
+                      value={[config.shadow.intensity]}
+                      onValueChange={([v]) =>
+                        updateConfig("shadow", {
+                          ...config.shadow,
+                          intensity: v,
+                        })
+                      }
+                      min={0}
+                      max={1}
+                      step={0.05}
+                    />
+                  </div>
                 </div>
               )}
             </div>

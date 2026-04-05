@@ -1953,8 +1953,8 @@ export class ExtractorSceneManager {
       targetZ + keyframe.distanceFromCue
     );
 
-    const cueYCenter = cueBottom + cueHeight / 2;
-    this.camera.lookAt(targetX, cueYCenter, targetZ);
+    // Look straight at cue at camera's own Y — cameraman on vertical rail
+    this.camera.lookAt(targetX, targetY, targetZ);
     this.camera.up.set(0, 1, 0);
     this.camera.updateProjectionMatrix();
 
@@ -2050,19 +2050,26 @@ export class ExtractorSceneManager {
     this.cameraGizmo.quaternion.copy(this.camera.quaternion);
   }
 
+  /** Reverse sync: copy gizmo position/rotation back to the studio camera + update helper */
+  syncCameraFromGizmo(): void {
+    if (!this.cameraGizmo) return;
+    this.camera.position.copy(this.cameraGizmo.position);
+    this.camera.quaternion.copy(this.cameraGizmo.quaternion);
+    this.camera.updateProjectionMatrix();
+    this.cameraTargetPos.copy(this.camera.position);
+    if (this.cameraHelper) this.cameraHelper.update();
+  }
+
   /** Update smooth camera interpolation — call each frame */
   updateCameraSmooth(): void {
     if (!this.cameraSmoothEnabled) return;
     this.camera.position.lerp(this.cameraTargetPos, 0.15);
 
-    // LookAt cue along Y axis, offset adjustable from bottom to top
+    // Look straight at cue at camera's own Y level — cameraman on vertical rail
     const mainCue = this.currentCueConfig?.instances.find(i => i.isMain)
       || this.currentCueConfig?.instances[0];
     if (mainCue) {
-      const cueBottom = mainCue.positionY - 1.2;
-      const cueHeight = mainCue.scale * 1.3;
-      const lookAtY = cueBottom + cueHeight * this.cameraLookAtYOffset;
-      this.camera.lookAt(mainCue.positionX, lookAtY, mainCue.positionZ);
+      this.camera.lookAt(mainCue.positionX, this.camera.position.y, mainCue.positionZ);
     }
 
     this.camera.updateProjectionMatrix();

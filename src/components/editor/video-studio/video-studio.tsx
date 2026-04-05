@@ -44,7 +44,7 @@ import { CameraControlsPanel } from "./camera-controls-panel";
 import { CueSetupPanel } from "./cue-setup-panel";
 import { BackgroundPanel } from "./background-panel";
 import { StudioTemplateSelector } from "./studio-template-selector";
-import { SceneViewControls } from "./scene-view-controls";
+import { SceneViewControls, type SelectionInfo } from "./scene-view-controls";
 
 interface VideoStudioProps {
   sceneManager: SceneManager | null;
@@ -70,12 +70,16 @@ export function VideoStudio({
   const [error, setError] = useState<string | null>(null);
   const [isRebuilding, setIsRebuilding] = useState(false);
   const [viewMode, setViewMode] = useState<"scene" | "camera">("camera");
+  const [activePanel, setActivePanel] = useState<string | null>(null);
 
   const extractorRef = useRef<ExtractorSceneManager | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const videoUrlRef = useRef<string | null>(null);
   const blobUrlsRef = useRef<string[]>([]);
   const sceneViewControlsRef = useRef<SceneViewControls | null>(null);
+  const cuePanelRef = useRef<HTMLDivElement>(null);
+  const cameraPanelRef = useRef<HTMLDivElement>(null);
+  const backgroundPanelRef = useRef<HTMLDivElement>(null);
 
   // Keep a ref to config so SceneViewControls callback always reads latest
   const configRef = useRef(config);
@@ -132,7 +136,54 @@ export function VideoStudio({
           (kf: CameraKeyframe) => {
             setConfig((prev) => ({ ...prev, cameraStart: kf }));
           },
-          () => configRef.current.cueConfig
+          () => configRef.current.cueConfig,
+          // Selection change → highlight & scroll the matching panel
+          (info) => {
+            const panelMap: Record<string, string> = {
+              camera: "camera-panel",
+              cue: "cue-panel",
+              wall: "background-panel",
+              table: "background-panel",
+              wallFrame: "background-panel",
+              tableFrame: "background-panel",
+            };
+            setActivePanel(info.type ? panelMap[info.type] || null : null);
+          },
+          // Object transform → sync 3D position back to config
+          (info, position) => {
+            if (info.type === "cue") {
+              setConfig((prev) => {
+                const instances = [...prev.cueConfig.instances];
+                if (instances[0]) {
+                  instances[0] = {
+                    ...instances[0],
+                    positionX: position.x,
+                    positionY: position.y,
+                    positionZ: position.z,
+                  };
+                }
+                return { ...prev, cueConfig: { ...prev.cueConfig, instances } };
+              });
+            } else if (info.type === "wallFrame" && info.frameId) {
+              setConfig((prev) => {
+                const frames = prev.wallSurface.frames.map((f) =>
+                  f.id === info.frameId
+                    ? { ...f, x: position.x / 34 + 0.5, y: 0.5 - position.y / 22 }
+                    : f
+                );
+                return { ...prev, wallSurface: { ...prev.wallSurface, frames } };
+              });
+            } else if (info.type === "tableFrame" && info.frameId) {
+              setConfig((prev) => {
+                const frames = prev.tableSurface.frames.map((f) =>
+                  f.id === info.frameId
+                    ? { ...f, x: position.x / 28 + 0.5, y: position.z / 5 + 0.5 }
+                    : f
+                );
+                return { ...prev, tableSurface: { ...prev.tableSurface, frames } };
+              });
+            }
+          }
         );
       }
 
@@ -168,6 +219,18 @@ export function VideoStudio({
     if (!extractorRef.current) return;
     extractorRef.current.setViewMode(viewMode);
   }, [viewMode]);
+
+  // Auto-scroll to the active panel when selection changes
+  useEffect(() => {
+    if (!activePanel) return;
+    const refMap: Record<string, React.RefObject<HTMLDivElement | null>> = {
+      "cue-panel": cuePanelRef,
+      "camera-panel": cameraPanelRef,
+      "background-panel": backgroundPanelRef,
+    };
+    const ref = refMap[activePanel];
+    ref?.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [activePanel]);
 
   // Debounced preview updates on config change
   useEffect(() => {
@@ -328,14 +391,23 @@ export function VideoStudio({
 
             {/* Key hints for scene view */}
             {viewMode === "scene" && (
-              <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground px-1">
+              <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground px-1 flex-wrap">
                 <span className="font-mono bg-muted px-1.5 py-0.5 rounded">X</span>
                 <span>X-axis</span>
                 <span className="font-mono bg-muted px-1.5 py-0.5 rounded">Y</span>
                 <span>Y-axis</span>
                 <span className="font-mono bg-muted px-1.5 py-0.5 rounded">Z</span>
                 <span>Z-axis</span>
-                <span className="text-muted-foreground/60">— hold + drag to move camera</span>
+                <span className="text-muted-foreground/60">— hold + drag camera</span>
+                <span className="text-muted-foreground/30">|</span>
+                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">G</span>
+                <span>Move</span>
+                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">R</span>
+                <span>Rotate</span>
+                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">S</span>
+                <span>Scale</span>
+                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">Esc</span>
+                <span>Deselect</span>
               </div>
             )}
 
@@ -414,30 +486,40 @@ export function VideoStudio({
             <div className="border-t border-border/50" />
 
             {/* Cue Setup */}
-            <CueSetupPanel
-              cueConfig={config.cueConfig}
-              onChange={(cueConfig) => updateConfig("cueConfig", cueConfig)}
-            />
+            <div
+              ref={cuePanelRef}
+              className={`rounded-lg transition-all ${activePanel === "cue-panel" ? "ring-2 ring-primary/50 p-2 -m-2" : ""}`}
+            >
+              <CueSetupPanel
+                cueConfig={config.cueConfig}
+                onChange={(cueConfig) => updateConfig("cueConfig", cueConfig)}
+              />
+            </div>
 
             <div className="border-t border-border/50" />
 
             {/* Camera Controls */}
-            <CameraControlsPanel
-              cameraDirection={config.cameraDirection}
-              cameraStart={config.cameraStart}
-              cameraEnd={config.cameraEnd}
-              cameraSpeed={config.cameraSpeed}
-              lockDistance={config.lockDistance}
-              easing={config.easing}
-              onDirectionChange={(d) => updateConfig("cameraDirection", d)}
-              onStartChange={(s) => updateConfig("cameraStart", s)}
-              onEndChange={(e) => updateConfig("cameraEnd", e)}
-              onSpeedChange={(s) => updateConfig("cameraSpeed", s)}
-              onLockDistanceChange={(l) => updateConfig("lockDistance", l)}
-              onEasingChange={(e) => updateConfig("easing", e)}
-              onSetStart={handleSetStart}
-              onSetEnd={handleSetEnd}
-            />
+            <div
+              ref={cameraPanelRef}
+              className={`rounded-lg transition-all ${activePanel === "camera-panel" ? "ring-2 ring-primary/50 p-2 -m-2" : ""}`}
+            >
+              <CameraControlsPanel
+                cameraDirection={config.cameraDirection}
+                cameraStart={config.cameraStart}
+                cameraEnd={config.cameraEnd}
+                cameraSpeed={config.cameraSpeed}
+                lockDistance={config.lockDistance}
+                easing={config.easing}
+                onDirectionChange={(d) => updateConfig("cameraDirection", d)}
+                onStartChange={(s) => updateConfig("cameraStart", s)}
+                onEndChange={(e) => updateConfig("cameraEnd", e)}
+                onSpeedChange={(s) => updateConfig("cameraSpeed", s)}
+                onLockDistanceChange={(l) => updateConfig("lockDistance", l)}
+                onEasingChange={(e) => updateConfig("easing", e)}
+                onSetStart={handleSetStart}
+                onSetEnd={handleSetEnd}
+              />
+            </div>
 
             <div className="border-t border-border/50" />
 
@@ -471,12 +553,17 @@ export function VideoStudio({
             <div className="border-t border-border/50" />
 
             {/* Background */}
-            <BackgroundPanel
-              wallSurface={config.wallSurface}
-              tableSurface={config.tableSurface}
-              onWallSurfaceChange={(s) => updateConfig("wallSurface", s)}
-              onTableSurfaceChange={(s) => updateConfig("tableSurface", s)}
-            />
+            <div
+              ref={backgroundPanelRef}
+              className={`rounded-lg transition-all ${activePanel === "background-panel" ? "ring-2 ring-primary/50 p-2 -m-2" : ""}`}
+            >
+              <BackgroundPanel
+                wallSurface={config.wallSurface}
+                tableSurface={config.tableSurface}
+                onWallSurfaceChange={(s) => updateConfig("wallSurface", s)}
+                onTableSurfaceChange={(s) => updateConfig("tableSurface", s)}
+              />
+            </div>
 
             <div className="border-t border-border/50" />
 

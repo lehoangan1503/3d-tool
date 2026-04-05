@@ -1458,6 +1458,9 @@ export class ExtractorSceneManager {
     // Update cue instances
     this.updateCueInstances(config.cueConfig);
 
+    // Sync frame plane positions/scales from config
+    this.updateFramePlaneTransforms(config);
+
     // Update camera from start keyframe
     this.setCameraFromKeyframe(config.cameraStart, config.cueConfig);
     this.camera.fov = 50;

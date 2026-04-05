@@ -256,7 +256,7 @@ export function VideoStudio({
             setConfig((prev) => ({ ...prev, cameraStart: kf }));
           },
           () => configRef.current.cueConfig,
-          // Selection change → update selection info + auto-expand transform section
+          // Selection change → update selection info + auto-expand transform + matching section
           (info) => {
             setSelectionInfo(info);
             if (info.type && info.object) {
@@ -270,10 +270,20 @@ export function VideoStudio({
                 },
                 scale: { x: obj.scale.x, y: obj.scale.y, z: obj.scale.z },
               });
-              // Auto-expand the transform section
+              // Map selection type → section ID
+              const sectionMap: Record<string, string> = {
+                cue: "cue",
+                camera: "camera",
+                wall: "background",
+                table: "background",
+                wallFrame: "background",
+                tableFrame: "background",
+              };
+              const matchedSection = sectionMap[info.type];
               setExpandedSections((prev) => {
                 const next = new Set(prev);
                 next.add("transform");
+                if (matchedSection) next.add(matchedSection);
                 return next;
               });
             } else {
@@ -310,6 +320,7 @@ export function VideoStudio({
                     positionX: position.x,
                     positionY: position.y,
                     positionZ: position.z,
+                    scale: scale.x,
                   };
                 }
                 return { ...prev, cueConfig: { ...prev.cueConfig, instances } };
@@ -368,10 +379,13 @@ export function VideoStudio({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, sceneManager]);
 
-  // Sync view mode to extractor
+  // Sync view mode to extractor + enable/disable scene view controls
   useEffect(() => {
     if (!extractorRef.current) return;
     extractorRef.current.setViewMode(viewMode);
+    if (sceneViewControlsRef.current) {
+      sceneViewControlsRef.current.setEnabled(viewMode === "scene");
+    }
   }, [viewMode]);
 
   // Debounced preview updates on config change
@@ -815,10 +829,12 @@ export function VideoStudio({
 
             {/* Shadow */}
             <div className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
+              <div
+                role="button"
+                tabIndex={0}
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors cursor-pointer"
                 onClick={() => toggleSection("shadow")}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection("shadow"); } }}
               >
                 <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
                 <span>Shadow</span>
@@ -835,7 +851,7 @@ export function VideoStudio({
                   className="h-3.5 w-3.5"
                 />
                 {expandedSections.has("shadow") ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
-              </button>
+              </div>
               {expandedSections.has("shadow") && config.shadow.enabled && (
                 <div className="px-3 pb-3 pt-2 border-t border-border/30">
                   <div className="space-y-1.5">

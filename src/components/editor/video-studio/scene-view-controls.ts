@@ -299,6 +299,7 @@ export class SceneViewControls {
   // ---------------------------------------------------------------------------
 
   private handleKeyDown(e: KeyboardEvent) {
+    if (!this._enabled) return;
     if (e.repeat) return;
     const key = e.key.toLowerCase();
 
@@ -329,6 +330,7 @@ export class SceneViewControls {
   }
 
   private handleMouseUp(e: MouseEvent) {
+    if (!this._enabled) return;
     // Click detection: only fire selection if mouse barely moved
     if (e.button !== 0) return;
     const dx = e.clientX - this.mouseDownX;
@@ -355,9 +357,15 @@ export class SceneViewControls {
     this.setSelection({ type: null });
   }
 
+  private _enabled = true;
+
   setEnabled(enabled: boolean): void {
+    this._enabled = enabled;
     if (this.orbitControls) this.orbitControls.enabled = enabled;
     if (this.transformControls) this.transformControls.enabled = enabled;
+    if (!enabled) {
+      this.setSelection({ type: null });
+    }
   }
 
   setTransformMode(mode: "translate" | "rotate" | "scale"): void {

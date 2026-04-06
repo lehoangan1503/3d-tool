@@ -418,8 +418,8 @@ export class SceneViewControls {
       if (axis === "z") pos.z += dx * speed;
       obj.position.copy(pos);
     } else if (this.activeHotkey === "r") {
-      // Rotate: horizontal mouse = rotation around selected axis
-      const angle = dx * Math.PI * 2;
+      // Rotate: drag UP = increase value, drag DOWN = decrease value
+      const angle = -dy * Math.PI * 2;
       const rot = this.hotkeyOriginalRot.clone();
       const axis = this.hotkeyAxisLock ?? "y";
       if (axis === "x") rot.x += angle;

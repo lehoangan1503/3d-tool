@@ -45,8 +45,20 @@ export class SceneViewControls {
   private savedEmissives = new Map<THREE.Material, THREE.Color>();
 
   private boundKeyDown: (e: KeyboardEvent) => void;
+  private boundKeyUp: (e: KeyboardEvent) => void;
   private boundMouseDown: (e: MouseEvent) => void;
   private boundMouseUp: (e: MouseEvent) => void;
+  private boundMouseMove: (e: MouseEvent) => void;
+
+  // Blender-like immediate drag state
+  private activeHotkey: "g" | "r" | "s" | null = null;
+  private hotkeyAxisLock: "x" | "y" | "z" | null = null;
+  private hotkeyDragging = false;
+  private hotkeyDragStartX = 0;
+  private hotkeyDragStartY = 0;
+  private hotkeyOriginalPos = new THREE.Vector3();
+  private hotkeyOriginalRot = new THREE.Euler();
+  private hotkeyOriginalScl = new THREE.Vector3();
 
   constructor(
     private esm: ExtractorSceneManager,
@@ -111,12 +123,16 @@ export class SceneViewControls {
     }
 
     this.boundKeyDown = this.handleKeyDown.bind(this);
+    this.boundKeyUp = this.handleKeyUp.bind(this);
     this.boundMouseDown = this.handleMouseDown.bind(this);
     this.boundMouseUp = this.handleMouseUp.bind(this);
+    this.boundMouseMove = this.handleMouseMove.bind(this);
 
     window.addEventListener("keydown", this.boundKeyDown);
+    window.addEventListener("keyup", this.boundKeyUp);
     canvas.addEventListener("mousedown", this.boundMouseDown);
     window.addEventListener("mouseup", this.boundMouseUp);
+    canvas.addEventListener("mousemove", this.boundMouseMove);
   }
 
   // ---------------------------------------------------------------------------
@@ -308,34 +324,146 @@ export class SceneViewControls {
     if (e.repeat) return;
     const key = e.key.toLowerCase();
 
-    // Axis lock: X/Y/Z while transform controls are active
-    if ((key === "x" || key === "y" || key === "z") && this.transformControls?.object) {
+    // Axis lock while hotkey is active: G then X/Y/Z
+    if ((key === "x" || key === "y" || key === "z") && this.activeHotkey && this.currentSelection.object) {
+      this.hotkeyAxisLock = key as "x" | "y" | "z";
+      // Also update TransformControls axis visibility for visual feedback
       this.setAxisLock(key as "x" | "y" | "z");
       return;
     }
 
-    // TransformControls mode switching — also works without prior click selection
-    if (key === "g" && this.transformControls) {
-      this.transformControls.setMode("translate");
-      this.onTransformModeChange?.("translate");
+    // G/R/S hotkey — activate immediate drag mode
+    if ((key === "g" || key === "r" || key === "s") && this.currentSelection.object) {
+      if (key === "s" && this.currentSelection.type === "camera") return;
+      const mode = key === "g" ? "translate" : key === "r" ? "rotate" : "scale";
+      this.activeHotkey = key;
+      this.hotkeyAxisLock = null;
+      this.hotkeyDragging = false;
+
+      // Save original transform for relative delta computation
+      const obj = this.currentSelection.object;
+      this.hotkeyOriginalPos.copy(obj.position);
+      this.hotkeyOriginalRot.copy(obj.rotation);
+      this.hotkeyOriginalScl.copy(obj.scale);
+
+      // Hide TransformControls gizmo to avoid conflict
+      if (this.transformControls) {
+        this.transformControls.setMode(mode);
+        this.transformControls.enabled = false;
+      }
+      if (this.orbitControls) this.orbitControls.enabled = false;
+      this.onTransformModeChange?.(mode);
       this.resetAxisLock();
-    } else if (key === "r" && this.transformControls) {
-      this.transformControls.setMode("rotate");
-      this.onTransformModeChange?.("rotate");
-      this.resetAxisLock();
-    } else if (key === "s" && this.transformControls) {
-      if (this.currentSelection.type === "camera") return;
-      this.transformControls.setMode("scale");
-      this.onTransformModeChange?.("scale");
-      this.resetAxisLock();
+      return;
     }
 
-    // Escape → deselect (stop propagation so dialog doesn't close)
+    // Escape → cancel hotkey drag or deselect
     if (key === "escape") {
+      if (this.activeHotkey && this.currentSelection.object) {
+        // Cancel — restore original transform
+        const obj = this.currentSelection.object;
+        obj.position.copy(this.hotkeyOriginalPos);
+        obj.rotation.copy(this.hotkeyOriginalRot);
+        obj.scale.copy(this.hotkeyOriginalScl);
+        this.endHotkeyDrag(false);
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       this.setSelection({ type: null });
     }
+  }
+
+  private handleKeyUp(e: KeyboardEvent) {
+    const key = e.key.toLowerCase();
+    if ((key === "g" || key === "r" || key === "s") && this.activeHotkey === key) {
+      // Commit the transform on key release
+      this.endHotkeyDrag(true);
+    }
+  }
+
+  private handleMouseMove(e: MouseEvent) {
+    if (!this.activeHotkey || !this.currentSelection.object) return;
+
+    if (!this.hotkeyDragging) {
+      // Start dragging on first mouse move after hotkey press
+      this.hotkeyDragging = true;
+      this.hotkeyDragStartX = e.clientX;
+      this.hotkeyDragStartY = e.clientY;
+      this.onDragStart?.();
+    }
+
+    const dx = (e.clientX - this.hotkeyDragStartX) / this.canvas.clientWidth;
+    const dy = (e.clientY - this.hotkeyDragStartY) / this.canvas.clientHeight;
+    const obj = this.currentSelection.object;
+
+    if (this.activeHotkey === "g") {
+      // Translate: map screen-space delta to world-space
+      const speed = 20;
+      const pos = this.hotkeyOriginalPos.clone();
+      const axis = this.hotkeyAxisLock;
+      if (!axis || axis === "x") pos.x += dx * speed;
+      if (!axis || axis === "y") pos.y -= dy * speed;
+      if (axis === "z") pos.z += dx * speed;
+      obj.position.copy(pos);
+    } else if (this.activeHotkey === "r") {
+      // Rotate: horizontal mouse = rotation around selected axis
+      const angle = dx * Math.PI * 2;
+      const rot = this.hotkeyOriginalRot.clone();
+      const axis = this.hotkeyAxisLock ?? "y";
+      if (axis === "x") rot.x += angle;
+      if (axis === "y") rot.y += angle;
+      if (axis === "z") rot.z += angle;
+      obj.rotation.copy(rot);
+    } else if (this.activeHotkey === "s") {
+      // Scale: horizontal mouse = uniform or axis scale
+      const factor = 1 + dx * 2;
+      const scl = this.hotkeyOriginalScl.clone();
+      const axis = this.hotkeyAxisLock;
+      if (!axis) {
+        scl.multiplyScalar(factor);
+      } else {
+        if (axis === "x") scl.x *= factor;
+        if (axis === "y") scl.y *= factor;
+        if (axis === "z") scl.z *= factor;
+      }
+      obj.scale.copy(scl);
+    }
+
+    // Fire transform callback
+    this.onObjectTransform?.(
+      { ...this.currentSelection },
+      obj.position.clone(),
+      obj.rotation.clone(),
+      obj.scale.clone()
+    );
+    if (this.currentSelection.type === "camera") {
+      this.esm.syncCameraFromGizmo();
+    }
+  }
+
+  private endHotkeyDrag(commit: boolean): void {
+    if (this.hotkeyDragging && commit) {
+      this.onDragEnd?.();
+    } else if (this.hotkeyDragging) {
+      // Cancel — fire transform to revert UI state
+      if (this.currentSelection.object) {
+        this.onObjectTransform?.(
+          { ...this.currentSelection },
+          this.currentSelection.object.position.clone(),
+          this.currentSelection.object.rotation.clone(),
+          this.currentSelection.object.scale.clone()
+        );
+      }
+      this.onDragEnd?.();
+    }
+    this.activeHotkey = null;
+    this.hotkeyAxisLock = null;
+    this.hotkeyDragging = false;
+    // Restore controls
+    if (this.transformControls) this.transformControls.enabled = true;
+    if (this.orbitControls) this.orbitControls.enabled = this._enabled;
+    this.resetAxisLock();
   }
 
   private setAxisLock(axis: "x" | "y" | "z"): void {
@@ -354,14 +482,15 @@ export class SceneViewControls {
 
   private handleMouseDown(e: MouseEvent) {
     if (e.button !== 0) return;
+    if (this.activeHotkey) return; // Suppress during hotkey drag
     this.mouseDownX = e.clientX;
     this.mouseDownY = e.clientY;
   }
 
   private handleMouseUp(e: MouseEvent) {
     if (!this._enabled) return;
-    // Click detection: only fire selection if mouse barely moved
     if (e.button !== 0) return;
+    if (this.activeHotkey) return; // Suppress during hotkey drag
     const dx = e.clientX - this.mouseDownX;
     const dy = e.clientY - this.mouseDownY;
     if (Math.sqrt(dx * dx + dy * dy) >= CLICK_THRESHOLD_PX) return;
@@ -441,8 +570,10 @@ export class SceneViewControls {
     this.isDisposed = true;
 
     window.removeEventListener("keydown", this.boundKeyDown);
+    window.removeEventListener("keyup", this.boundKeyUp);
     this.canvas.removeEventListener("mousedown", this.boundMouseDown);
     window.removeEventListener("mouseup", this.boundMouseUp);
+    this.canvas.removeEventListener("mousemove", this.boundMouseMove);
 
     this.clearHighlight();
     this.detachTransformControls();

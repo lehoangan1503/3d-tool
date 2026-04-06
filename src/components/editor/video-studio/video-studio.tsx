@@ -355,7 +355,15 @@ export function VideoStudio({
                     scale: scale.x,
                   };
                 }
-                return { ...prev, cueConfig: { ...prev.cueConfig, instances } };
+                return {
+                  ...prev,
+                  cueConfig: {
+                    ...prev.cueConfig,
+                    instances,
+                    spinX: rotation.x,
+                    spinY: rotation.y,
+                  },
+                };
               });
             } else if (info.type === "wallFrame" && info.frameId) {
               setConfig((prev) => {
@@ -969,6 +977,26 @@ export function VideoStudio({
                               </div>
                               {config.surfaceHdri?.enabled && (
                                 <div className="space-y-2 pl-1">
+                                  <div className="space-y-1">
+                                    <Label className="text-[10px] text-muted-foreground">Environment</Label>
+                                    <Select
+                                      value={config.surfaceHdri.hdriFile}
+                                      onValueChange={(v) =>
+                                        updateConfig("surfaceHdri", { ...config.surfaceHdri, hdriFile: v })
+                                      }
+                                    >
+                                      <SelectTrigger className="h-7 text-[10px]">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {HDRI_OPTIONS_FALLBACK.map((h) => (
+                                          <SelectItem key={h.id} value={h.id}>
+                                            {h.label}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
                                   <div className="space-y-1">
                                     <Label className="text-[10px] text-muted-foreground">
                                       Intensity — {((config.surfaceHdri.intensity ?? 0.3) * 100).toFixed(0)}%

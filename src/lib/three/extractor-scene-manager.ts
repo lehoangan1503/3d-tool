@@ -78,6 +78,7 @@ export class ExtractorSceneManager {
   private currentHdriLayers: HdriLayer[] = [];
   private lastHdriLayersKey: string = ''; // Track last applied layers to skip redundant updates
   private pendingHdriUpdate: boolean = false;
+  private _lastHdriRotKey: string = '';
 
   // Studio elements (for video)
   private backdrop: THREE.Mesh | null = null;
@@ -86,6 +87,7 @@ export class ExtractorSceneManager {
   private spotLight: THREE.SpotLight | null = null;
   private fillLights: THREE.PointLight[] = [];
   private directionalLight: THREE.DirectionalLight | null = null;
+  private blackEnvMap: THREE.Texture | null = null;
 
   // Wrapper group used during video recording to apply tilt independently from spin
   private videoWrapperGroup: THREE.Group | null = null;
@@ -1490,6 +1492,26 @@ export class ExtractorSceneManager {
     // Apply shadow settings
     this.updateShadowFromConfig(config);
 
+    // Apply HDRI rotation from first layer (live update — only when changed)
+    if (config.hdriConfig.layers.length > 0 && this.hdriTexture) {
+      const layer = config.hdriConfig.layers[0];
+      const rotX = layer.rotationX ?? 0;
+      const rotY = layer.rotationY ?? 0;
+      const rotKey = `${rotX},${rotY}`;
+      if (rotKey !== this._lastHdriRotKey) {
+        this._lastHdriRotKey = rotKey;
+        const rotated = this.createRotatedHdriTextureXY(this.hdriTexture, rotX, rotY);
+        if (rotated) {
+          rotated.mapping = THREE.EquirectangularReflectionMapping;
+          const rt = this.pmremGenerator.fromEquirectangular(rotated);
+          rotated.dispose();
+          if (this.envRenderTarget) this.envRenderTarget.dispose();
+          this.envRenderTarget = rt;
+          this.scene.environment = rt.texture;
+        }
+      }
+    }
+
     // Apply HDRI intensity
     this.updateHdriIntensity(config);
 
@@ -1525,18 +1547,28 @@ export class ExtractorSceneManager {
   /** Apply separate HDRI to wall/table surfaces (or remove it) */
   private updateSurfaceHdri(config: VideoStudioConfig): void {
     const surfCfg = config.surfaceHdri;
-    if (!surfCfg) return;
-
     const targets = [this.backdrop, this.tableSurface].filter(Boolean) as THREE.Mesh[];
+
+    // Create a tiny black envMap once to block scene.environment inheritance
+    if (!this.blackEnvMap) {
+      const size = 4;
+      const data = new Uint8Array(size * size * 4); // RGBA all zeros = black
+      const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      tex.needsUpdate = true;
+      const rt = this.pmremGenerator.fromEquirectangular(tex);
+      tex.dispose();
+      this.blackEnvMap = rt.texture;
+    }
+
     for (const mesh of targets) {
       const mat = mesh.material as THREE.MeshStandardMaterial;
-      if (!surfCfg.enabled) {
-        // No HDRI on surfaces — remove envMap so they're lit only by lights
-        mat.envMap = null;
+      if (!surfCfg || !surfCfg.enabled) {
+        // Assign black envMap to override scene.environment — prevents HDRI bleed
+        mat.envMap = this.blackEnvMap;
         mat.envMapIntensity = 0;
         mat.needsUpdate = true;
       } else {
-        // Use scene environment with custom intensity
         mat.envMap = this.scene.environment;
         mat.envMapIntensity = surfCfg.intensity ?? 0.3;
         mat.needsUpdate = true;

@@ -135,6 +135,8 @@ export function VideoStudio({
   const videoUrlRef = useRef<string | null>(null);
   const blobUrlsRef = useRef<string[]>([]);
   const sceneViewControlsRef = useRef<SceneViewControls | null>(null);
+  const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rebuildTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep a ref to config so SceneViewControls callback always reads latest
   const configRef = useRef(config);
@@ -440,10 +442,14 @@ export function VideoStudio({
   // Debounced preview updates on config change
   useEffect(() => {
     if (!extractorRef.current || !open) return;
-    const timer = setTimeout(() => {
+    if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
+    updateTimerRef.current = setTimeout(() => {
       extractorRef.current?.updateStudioPreviewConfig(config);
+      updateTimerRef.current = null;
     }, 100);
-    return () => clearTimeout(timer);
+    return () => {
+      if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
+    };
   }, [config, open]);
 
   // Rebuild scene for expensive changes (backgrounds, HDRI, shadow, instance count)
@@ -451,6 +457,9 @@ export function VideoStudio({
     if (!extractorRef.current) return;
     setIsRebuilding(true);
     try {
+      // Detach TransformControls before clearing scene — prevents
+      // "attached 3D object must be a part of the scene graph" error
+      sceneViewControlsRef.current?.deselect();
       extractorRef.current.stopVideoPreview();
       await extractorRef.current.setupStudioFromStudioConfig(config);
       extractorRef.current.startStudioVideoPreview(config);
@@ -461,10 +470,16 @@ export function VideoStudio({
 
   useEffect(() => {
     if (!extractorRef.current || !open) return;
-    const timer = setTimeout(() => {
+    // Cancel pending lightweight update — rebuild supersedes it
+    if (updateTimerRef.current) { clearTimeout(updateTimerRef.current); updateTimerRef.current = null; }
+    if (rebuildTimerRef.current) clearTimeout(rebuildTimerRef.current);
+    rebuildTimerRef.current = setTimeout(() => {
       rebuildScene();
+      rebuildTimerRef.current = null;
     }, 500);
-    return () => clearTimeout(timer);
+    return () => {
+      if (rebuildTimerRef.current) clearTimeout(rebuildTimerRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.wallSurface, config.tableSurface, config.hdriFile, config.shadow.enabled, config.cueConfig.instances.length, open]);
 

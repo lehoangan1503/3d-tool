@@ -208,6 +208,11 @@ export class SceneViewControls {
       return;
     }
 
+    // Cancel any active hotkey drag before changing selection
+    if (this.activeHotkey) {
+      this.endHotkeyDrag(false);
+    }
+
     this.clearHighlight();
     this.detachTransformControls();
     this.resetAxisLock();
@@ -522,6 +527,7 @@ export class SceneViewControls {
     if (this.orbitControls) this.orbitControls.enabled = enabled;
     if (this.transformControls) this.transformControls.enabled = enabled;
     if (!enabled) {
+      if (this.activeHotkey) this.endHotkeyDrag(false);
       this.setSelection({ type: null });
     }
   }

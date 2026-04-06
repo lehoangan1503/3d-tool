@@ -61,6 +61,7 @@ export interface CueConfig {
   spinSpeed: number;         // Continuous Y-rotation speed (0–1) — shared
   spinX: number;             // Model X rotation (radians, 0–2π) — shared
   spinSpeedX: number;        // Continuous X-rotation speed (0–1) — shared
+  spinZ: number;             // Model Z rotation (radians, 0–2π) — shared
 }
 
 export const DEFAULT_CUE_CONFIG: CueConfig = {
@@ -76,6 +77,7 @@ export const DEFAULT_CUE_CONFIG: CueConfig = {
   spinSpeed: 0,
   spinX: 0,
   spinSpeedX: 0,
+  spinZ: 0,
 };
 
 // ── Easing ──

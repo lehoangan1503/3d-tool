@@ -132,6 +132,7 @@ export class ExtractorSceneManager {
   private animationFrameId: number | null = null;
   private mediaRecorder: MediaRecorder | null = null;
   private recordedChunks: Blob[] = [];
+  private _spinPaused = false;
 
   constructor(
     private width: number = 2048,
@@ -1001,6 +1002,12 @@ export class ExtractorSceneManager {
     }
   }
 
+  /** Pause continuous spin animation (during manual rotation) */
+  pauseSpin(): void { this._spinPaused = true; }
+
+  /** Resume continuous spin animation */
+  resumeSpin(): void { this._spinPaused = false; }
+
   /**
    * Set camera vertical orbit (phi angle)
    * Like main preview: vertical drag moves camera up/down around cue
@@ -1464,7 +1471,7 @@ export class ExtractorSceneManager {
       const cfg = this.studioConfigRef;
       const hasSpinY = cfg.cueConfig.spinSpeed > 0;
       const hasSpinX = (cfg.cueConfig.spinSpeedX || 0) > 0;
-      if (hasSpinY || hasSpinX) {
+      if ((hasSpinY || hasSpinX) && !this._spinPaused) {
         this.spinCueInstances(
           hasSpinY ? cfg.cueConfig.spinSpeed * 0.02 : 0,
           hasSpinX ? (cfg.cueConfig.spinSpeedX || 0) * 0.02 : 0
@@ -2289,7 +2296,7 @@ export class ExtractorSceneManager {
         const inst = instances[0];
         this.clonedModel.position.set(inst.positionX, inst.positionY, inst.positionZ);
         this.clonedModel.scale.setScalar(inst.scale);
-        this.clonedModel.rotation.set(config.spinX || 0, config.spinY || 0, 0);
+        this.clonedModel.rotation.set(config.spinX || 0, config.spinY || 0, config.spinZ || 0);
       }
       this.clonedModel.userData = { type: 'cue' };
       return;
@@ -2321,7 +2328,7 @@ export class ExtractorSceneManager {
         const inst = instances[i];
         dummy.position.set(inst.positionX, inst.positionY, inst.positionZ);
         dummy.scale.setScalar(inst.scale);
-        dummy.rotation.set(config.spinX || 0, config.spinY, 0);
+        dummy.rotation.set(config.spinX || 0, config.spinY, config.spinZ || 0);
         dummy.updateMatrix();
         im.setMatrixAt(i, dummy.matrix);
       }
@@ -2347,7 +2354,7 @@ export class ExtractorSceneManager {
         const inst = instances[0];
         this.clonedModel.position.set(inst.positionX, inst.positionY, inst.positionZ);
         this.clonedModel.scale.setScalar(inst.scale);
-        this.clonedModel.rotation.set(config.spinX || 0, config.spinY, 0);
+        this.clonedModel.rotation.set(config.spinX || 0, config.spinY, config.spinZ || 0);
       }
       return;
     }
@@ -2372,7 +2379,7 @@ export class ExtractorSceneManager {
         const inst = instances[i];
         dummy.position.set(inst.positionX, inst.positionY, inst.positionZ);
         dummy.scale.setScalar(inst.scale);
-        dummy.rotation.set(config.spinX || 0, config.spinY, 0);
+        dummy.rotation.set(config.spinX || 0, config.spinY, config.spinZ || 0);
         dummy.updateMatrix();
         im.setMatrixAt(i, dummy.matrix);
       }
@@ -2386,11 +2393,12 @@ export class ExtractorSceneManager {
     const instances = this.currentCueConfig.instances;
     const currentY = (this.currentCueConfig.spinY || 0) + spinDeltaY;
     const currentX = (this.currentCueConfig.spinX || 0) + spinDeltaX;
+    const currentZ = this.currentCueConfig.spinZ || 0;
     this.currentCueConfig = { ...this.currentCueConfig, spinY: currentY, spinX: currentX };
 
     if (instances.length <= 1 && this.instancedMeshes.length === 0) {
       if (this.clonedModel) {
-        this.clonedModel.rotation.set(currentX, currentY, 0);
+        this.clonedModel.rotation.set(currentX, currentY, currentZ);
       }
       return;
     }
@@ -2401,7 +2409,7 @@ export class ExtractorSceneManager {
         const inst = instances[i];
         dummy.position.set(inst.positionX, inst.positionY, inst.positionZ);
         dummy.scale.setScalar(inst.scale);
-        dummy.rotation.set(currentX, currentY, 0);
+        dummy.rotation.set(currentX, currentY, currentZ);
         dummy.updateMatrix();
         im.setMatrixAt(i, dummy.matrix);
       }

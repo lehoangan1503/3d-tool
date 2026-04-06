@@ -94,8 +94,11 @@ export class SceneViewControls {
           if (this.orbitControls)
             this.orbitControls.enabled = !event.value;
           if (event.value) {
+            // Pause spin during gizmo drag to prevent fighting
+            this.esm.pauseSpin();
             this.onDragStart?.();
           } else {
+            this.esm.resumeSpin();
             this.onDragEnd?.();
           }
         }
@@ -351,6 +354,9 @@ export class SceneViewControls {
       this.hotkeyOriginalRot.copy(obj.rotation);
       this.hotkeyOriginalScl.copy(obj.scale);
 
+      // Pause spin animation to prevent fighting with manual rotation
+      this.esm.pauseSpin();
+
       // Hide TransformControls gizmo to avoid conflict
       if (this.transformControls) {
         this.transformControls.setMode(mode);
@@ -449,6 +455,16 @@ export class SceneViewControls {
 
   private endHotkeyDrag(commit: boolean): void {
     if (this.hotkeyDragging && commit) {
+      // Fire final transform to ensure config is fully synced before drag end
+      if (this.currentSelection.object) {
+        const obj = this.currentSelection.object;
+        this.onObjectTransform?.(
+          { ...this.currentSelection },
+          obj.position.clone(),
+          obj.rotation.clone(),
+          obj.scale.clone()
+        );
+      }
       this.onDragEnd?.();
     } else if (this.hotkeyDragging) {
       // Cancel — fire transform to revert UI state
@@ -465,6 +481,8 @@ export class SceneViewControls {
     this.activeHotkey = null;
     this.hotkeyAxisLock = null;
     this.hotkeyDragging = false;
+    // Resume spin animation
+    this.esm.resumeSpin();
     // Restore controls
     if (this.transformControls) this.transformControls.enabled = true;
     if (this.orbitControls) this.orbitControls.enabled = this._enabled;

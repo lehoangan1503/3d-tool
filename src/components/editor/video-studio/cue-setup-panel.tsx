@@ -60,6 +60,7 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
 
   const spinYDeg = Math.round(cueConfig.spinY * (180 / Math.PI));
   const spinXDeg = Math.round((cueConfig.spinX || 0) * (180 / Math.PI));
+  const spinZDeg = Math.round((cueConfig.spinZ || 0) * (180 / Math.PI));
 
   return (
     <div className="space-y-3">
@@ -137,6 +138,26 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
           min={0}
           max={1}
           step={0.05}
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs text-muted-foreground flex items-center gap-1">
+            <RotateCcw className="h-3 w-3" /> Spin Z
+          </Label>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {spinZDeg}°
+          </span>
+        </div>
+        <Slider
+          value={[spinZDeg]}
+          onValueChange={([v]) =>
+            onChange({ ...cueConfig, spinZ: v * (Math.PI / 180) })
+          }
+          min={0}
+          max={360}
+          step={1}
         />
       </div>
 

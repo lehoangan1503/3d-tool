@@ -364,6 +364,7 @@ export function VideoStudio({
                     instances,
                     spinX: rotation.x,
                     spinY: rotation.y,
+                    spinZ: rotation.z,
                   },
                 };
               });

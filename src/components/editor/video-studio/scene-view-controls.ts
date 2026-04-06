@@ -418,14 +418,19 @@ export class SceneViewControls {
       if (axis === "z") pos.z += dx * speed;
       obj.position.copy(pos);
     } else if (this.activeHotkey === "r") {
-      // Rotate: drag UP = increase value, drag DOWN = decrease value
+      // Rotate around world axis using quaternions (matches TransformControls behavior)
       const angle = -dy * Math.PI * 2;
-      const rot = this.hotkeyOriginalRot.clone();
       const axis = this.hotkeyAxisLock ?? "y";
-      if (axis === "x") rot.x += angle;
-      if (axis === "y") rot.y += angle;
-      if (axis === "z") rot.z += angle;
-      obj.rotation.copy(rot);
+      const originalQuat = new THREE.Quaternion().setFromEuler(this.hotkeyOriginalRot);
+      const axisVec =
+        axis === "x" ? new THREE.Vector3(1, 0, 0) :
+        axis === "z" ? new THREE.Vector3(0, 0, 1) :
+                       new THREE.Vector3(0, 1, 0);
+      const deltaQuat = new THREE.Quaternion().setFromAxisAngle(axisVec, angle);
+      // Pre-multiply: world-space rotation applied to existing orientation
+      const resultQuat = deltaQuat.multiply(originalQuat);
+      obj.quaternion.copy(resultQuat);
+      obj.rotation.setFromQuaternion(resultQuat, obj.rotation.order);
     } else if (this.activeHotkey === "s") {
       // Scale: horizontal mouse = uniform or axis scale
       const factor = 1 + dx * 2;

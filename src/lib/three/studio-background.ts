@@ -1,5 +1,130 @@
 import * as THREE from 'three';
 
+// ─── Texture Pack Manifest Types ───
+
+export interface TexturePackInfo {
+  id: string;
+  name: string;
+  folder: string;
+  maps: string[];
+  tiling: [number, number];
+  roughnessValue: number;
+  metalnessValue: number;
+  displacementScale: number;
+}
+
+export interface TextureManifest {
+  wall: TexturePackInfo[];
+  table: TexturePackInfo[];
+}
+
+let cachedManifest: TextureManifest | null = null;
+
+/** Load the texture manifest from the server */
+export async function loadTextureManifest(): Promise<TextureManifest> {
+  if (cachedManifest) return cachedManifest;
+  const res = await fetch('/textures/studio/textures.json');
+  cachedManifest = await res.json() as TextureManifest;
+  return cachedManifest;
+}
+
+/** Find a texture pack by ID across wall and table categories */
+export function findTexturePack(
+  manifest: TextureManifest,
+  id: string
+): TexturePackInfo | undefined {
+  return manifest.wall.find(p => p.id === id) ?? manifest.table.find(p => p.id === id);
+}
+
+// ─── PBR Texture Loader ───
+
+const textureLoader = new THREE.TextureLoader();
+
+function loadTex(url: string, tiling: [number, number]): Promise<THREE.Texture> {
+  return new Promise((resolve, reject) => {
+    textureLoader.load(
+      url,
+      (tex) => {
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.repeat.set(tiling[0], tiling[1]);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        resolve(tex);
+      },
+      undefined,
+      reject
+    );
+  });
+}
+
+function loadTexLinear(url: string, tiling: [number, number]): Promise<THREE.Texture> {
+  return new Promise((resolve, reject) => {
+    textureLoader.load(
+      url,
+      (tex) => {
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.repeat.set(tiling[0], tiling[1]);
+        tex.colorSpace = THREE.LinearSRGBColorSpace;
+        resolve(tex);
+      },
+      undefined,
+      reject
+    );
+  });
+}
+
+/**
+ * Load a full PBR texture pack and create a MeshStandardMaterial.
+ * Maps loaded: diffuse, normal, roughness, AO, displacement (if available).
+ */
+export async function loadPBRTexturePack(
+  pack: TexturePackInfo
+): Promise<THREE.MeshStandardMaterial> {
+  const basePath = `/textures/studio/${pack.folder}`;
+  const tiling = pack.tiling;
+
+  const promises: Record<string, Promise<THREE.Texture>> = {};
+
+  if (pack.maps.includes('diff')) {
+    promises.map = loadTex(`${basePath}/diff.jpg`, tiling);
+  }
+  if (pack.maps.includes('normal')) {
+    promises.normalMap = loadTexLinear(`${basePath}/normal.jpg`, tiling);
+  }
+  if (pack.maps.includes('roughness')) {
+    promises.roughnessMap = loadTexLinear(`${basePath}/roughness.jpg`, tiling);
+  }
+  if (pack.maps.includes('ao')) {
+    promises.aoMap = loadTexLinear(`${basePath}/ao.jpg`, tiling);
+  }
+  if (pack.maps.includes('displacement')) {
+    promises.displacementMap = loadTexLinear(`${basePath}/displacement.jpg`, tiling);
+  }
+
+  const keys = Object.keys(promises);
+  const textures = await Promise.all(Object.values(promises));
+  const texMap: Record<string, THREE.Texture> = {};
+  keys.forEach((k, i) => { texMap[k] = textures[i]; });
+
+  const matParams: THREE.MeshStandardMaterialParameters = {
+    roughness: pack.roughnessValue,
+    metalness: pack.metalnessValue,
+    side: THREE.DoubleSide,
+  };
+
+  if (texMap.map) matParams.map = texMap.map;
+  if (texMap.normalMap) matParams.normalMap = texMap.normalMap;
+  if (texMap.roughnessMap) matParams.roughnessMap = texMap.roughnessMap;
+  if (texMap.aoMap) matParams.aoMap = texMap.aoMap;
+  if (texMap.displacementMap) {
+    matParams.displacementMap = texMap.displacementMap;
+    matParams.displacementScale = pack.displacementScale;
+  }
+
+  return new THREE.MeshStandardMaterial(matParams);
+}
+
 /**
  * Dark velvet fabric texture for the pool table surface.
  * Near-black with a subtle directional sheen and fine micro-fiber noise.
@@ -179,26 +304,26 @@ export function createFabricTexture(
 // ─── Scene geometry helpers ───
 
 /**
- * Flat vertical wall backdrop for cement wall background.
- * No cyclorama curve — just a plain vertical plane far from the cue.
+ * Flat vertical wall backdrop.
+ * Accepts a Texture (legacy) or pre-built MeshStandardMaterial (PBR).
  */
 export function createWallBackdrop(
-  texture: THREE.Texture,
+  textureOrMaterial: THREE.Texture | THREE.MeshStandardMaterial,
   width: number = 30,
   height: number = 14
 ): THREE.Mesh {
   const geometry = new THREE.PlaneGeometry(width, height);
-  const material = new THREE.MeshStandardMaterial({
-    map: texture,
-    roughness: 0.95,
-    metalness: 0,
-    side: THREE.DoubleSide,
-  });
+  const material = textureOrMaterial instanceof THREE.MeshStandardMaterial
+    ? textureOrMaterial
+    : new THREE.MeshStandardMaterial({
+        map: textureOrMaterial,
+        roughness: 0.95,
+        metalness: 0,
+        side: THREE.DoubleSide,
+      });
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.receiveShadow = true;
-  // Elevated so bottom edge is above table, creating visible gap
-  // z=-5.5: far from cue, with gap visible between table edge and wall
   mesh.position.set(0, 3.0, -5.5);
   return mesh;
 }
@@ -206,32 +331,41 @@ export function createWallBackdrop(
 
 export function createShadowFloor(width: number = 20, depth: number = 10): THREE.Mesh {
   const geometry = new THREE.PlaneGeometry(width, depth);
-  const material = new THREE.ShadowMaterial({ opacity: 0.4 });
+  const material = new THREE.ShadowMaterial({ opacity: 0.5 });
   const floor = new THREE.Mesh(geometry, material);
   floor.rotation.x = -Math.PI / 2;
-  floor.position.y = -0.38;
   floor.receiveShadow = true;
   return floor;
 }
 
+/** Shadow-receiving plane for wall backdrop (vertical orientation). */
+export function createWallShadowPlane(width: number = 30, height: number = 14): THREE.Mesh {
+  const geometry = new THREE.PlaneGeometry(width, height);
+  const material = new THREE.ShadowMaterial({ opacity: 0.35 });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
 /**
- * Horizontal table surface (dark velvet).
- * depth is kept shallow so the far edge is visible, creating a gap to the wall.
- * Replace with tableTextureUrl for a real texture (TextureLoader in scene manager).
+ * Horizontal table surface.
+ * Accepts a Texture (legacy) or pre-built MeshStandardMaterial (PBR).
  */
 export function createTableSurface(
-  texture: THREE.Texture,
+  textureOrMaterial: THREE.Texture | THREE.MeshStandardMaterial,
   width: number = 28,
   depth: number = 5,
   yPosition: number = -0.4
 ): THREE.Mesh {
   const geometry = new THREE.PlaneGeometry(width, depth);
-  const material = new THREE.MeshStandardMaterial({
-    map: texture,
-    roughness: 0.35,
-    metalness: 0.0,
-    side: THREE.DoubleSide,
-  });
+  const material = textureOrMaterial instanceof THREE.MeshStandardMaterial
+    ? textureOrMaterial
+    : new THREE.MeshStandardMaterial({
+        map: textureOrMaterial,
+        roughness: 0.35,
+        metalness: 0.0,
+        side: THREE.DoubleSide,
+      });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.y = yPosition;

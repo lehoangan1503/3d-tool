@@ -40,6 +40,8 @@ import {
   Sparkles,
   Undo2,
   Redo2,
+  Save,
+  RefreshCw,
 } from "lucide-react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import {
@@ -54,7 +56,7 @@ import {
 import { CameraControlsPanel } from "./camera-controls-panel";
 import { CueSetupPanel } from "./cue-setup-panel";
 import { BackgroundPanel } from "./background-panel";
-import { StudioTemplateSelector } from "./studio-template-selector";
+import { StudioTemplateSelector, type StudioTemplateSelectorHandle } from "./studio-template-selector";
 import { SceneViewControls, type SelectionInfo } from "./scene-view-controls";
 
 /** Inline editable number field for transform values */
@@ -137,6 +139,7 @@ export function VideoStudio({
   const sceneViewControlsRef = useRef<SceneViewControls | null>(null);
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rebuildTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const templateSelectorRef = useRef<StudioTemplateSelectorHandle>(null);
 
   // Keep a ref to config so SceneViewControls callback always reads latest
   const configRef = useRef(config);
@@ -342,7 +345,7 @@ export function VideoStudio({
             });
             if (info.type === "camera") {
               if (extractorRef.current) {
-                const kf = extractorRef.current.getCameraKeyframeFromPosition(configRef.current.cueConfig);
+                const kf = extractorRef.current.getCameraKeyframeFromPosition();
                 setConfig((prev) => ({ ...prev, cameraStart: kf }));
               }
             } else if (info.type === "cue") {
@@ -482,7 +485,18 @@ export function VideoStudio({
       if (rebuildTimerRef.current) clearTimeout(rebuildTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.wallSurface, config.tableSurface, config.hdriFile, config.shadow.enabled, config.cueConfig.instances.length, open]);
+  }, [
+    config.wallSurface.texturePreset,
+    config.tableSurface.texturePreset,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    JSON.stringify(config.wallSurface.frames),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    JSON.stringify(config.tableSurface.frames),
+    config.hdriFile,
+    config.shadow.enabled,
+    config.cueConfig.instances.length,
+    open,
+  ]);
 
   // Cleanup blob URLs on unmount
   useEffect(() => {
@@ -494,15 +508,15 @@ export function VideoStudio({
 
   const handleSetStart = useCallback(() => {
     if (!extractorRef.current) return;
-    const kf = extractorRef.current.getCameraKeyframeFromPosition(config.cueConfig);
+    const kf = extractorRef.current.getCameraKeyframeFromPosition();
     setConfig((prev) => ({ ...prev, cameraStart: kf }));
-  }, [config.cueConfig]);
+  }, []);
 
   const handleSetEnd = useCallback(() => {
     if (!extractorRef.current) return;
-    const kf = extractorRef.current.getCameraKeyframeFromPosition(config.cueConfig);
+    const kf = extractorRef.current.getCameraKeyframeFromPosition();
     setConfig((prev) => ({ ...prev, cameraEnd: kf }));
-  }, [config.cueConfig]);
+  }, []);
 
   const handleRecord = async () => {
     if (!extractorRef.current) return;
@@ -556,7 +570,8 @@ export function VideoStudio({
   const duration = computeVideoDuration(
     config.cameraStart,
     config.cameraEnd,
-    config.cameraSpeed
+    config.cameraSpeed,
+    config.cameraDirection
   );
 
   return (
@@ -708,6 +723,7 @@ export function VideoStudio({
 
             {/* Template selector — always visible at top */}
             <StudioTemplateSelector
+              ref={templateSelectorRef}
               productId={productId}
               currentConfig={config}
               onLoadConfig={(c) => setConfig(c)}
@@ -863,13 +879,11 @@ export function VideoStudio({
                               cameraStart={config.cameraStart}
                               cameraEnd={config.cameraEnd}
                               cameraSpeed={config.cameraSpeed}
-                              lockDistance={config.lockDistance}
                               easing={config.easing}
                               onDirectionChange={(d) => updateConfig("cameraDirection", d)}
                               onStartChange={(s) => updateConfig("cameraStart", s)}
                               onEndChange={(e) => updateConfig("cameraEnd", e)}
                               onSpeedChange={(s) => updateConfig("cameraSpeed", s)}
-                              onLockDistanceChange={(l) => updateConfig("lockDistance", l)}
                               onEasingChange={(e) => updateConfig("easing", e)}
                               onSetStart={handleSetStart}
                               onSetEnd={handleSetEnd}
@@ -976,82 +990,6 @@ export function VideoStudio({
                               onWallSurfaceChange={(s) => updateConfig("wallSurface", s)}
                               onTableSurfaceChange={(s) => updateConfig("tableSurface", s)}
                             />
-                            {/* Surface HDRI */}
-                            <div className="rounded-md border border-border/30 p-2 space-y-2">
-                              <div className="flex items-center gap-2">
-                                <Checkbox
-                                  checked={config.surfaceHdri?.enabled ?? false}
-                                  onCheckedChange={(checked) =>
-                                    updateConfig("surfaceHdri", {
-                                      ...(config.surfaceHdri ?? { enabled: false, hdriFile: config.hdriFile, rotationX: 0, rotationY: 0, intensity: 0.3 }),
-                                      enabled: checked === true,
-                                    })
-                                  }
-                                  className="h-3.5 w-3.5"
-                                />
-                                <Label className="text-xs text-muted-foreground">Surface HDRI</Label>
-                              </div>
-                              {config.surfaceHdri?.enabled && (
-                                <div className="space-y-2 pl-1">
-                                  <div className="space-y-1">
-                                    <Label className="text-[10px] text-muted-foreground">Environment</Label>
-                                    <Select
-                                      value={config.surfaceHdri.hdriFile}
-                                      onValueChange={(v) =>
-                                        updateConfig("surfaceHdri", { ...config.surfaceHdri, hdriFile: v })
-                                      }
-                                    >
-                                      <SelectTrigger className="h-7 text-[10px]">
-                                        <SelectValue />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        {HDRI_OPTIONS_FALLBACK.map((h) => (
-                                          <SelectItem key={h.id} value={h.id}>
-                                            {h.label}
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
-                                  </div>
-                                  <div className="space-y-1">
-                                    <Label className="text-[10px] text-muted-foreground">
-                                      Intensity — {((config.surfaceHdri.intensity ?? 0.3) * 100).toFixed(0)}%
-                                    </Label>
-                                    <Slider
-                                      value={[config.surfaceHdri.intensity ?? 0.3]}
-                                      onValueChange={([v]) =>
-                                        updateConfig("surfaceHdri", { ...config.surfaceHdri, intensity: v })
-                                      }
-                                      min={0} max={2} step={0.05}
-                                    />
-                                  </div>
-                                  <div className="space-y-1">
-                                    <Label className="text-[10px] text-muted-foreground">
-                                      Rotation X — {config.surfaceHdri.rotationX ?? 0}°
-                                    </Label>
-                                    <Slider
-                                      value={[config.surfaceHdri.rotationX ?? 0]}
-                                      onValueChange={([v]) =>
-                                        updateConfig("surfaceHdri", { ...config.surfaceHdri, rotationX: v })
-                                      }
-                                      min={0} max={360} step={1}
-                                    />
-                                  </div>
-                                  <div className="space-y-1">
-                                    <Label className="text-[10px] text-muted-foreground">
-                                      Rotation Y — {config.surfaceHdri.rotationY ?? 0}°
-                                    </Label>
-                                    <Slider
-                                      value={[config.surfaceHdri.rotationY ?? 0]}
-                                      onValueChange={([v]) =>
-                                        updateConfig("surfaceHdri", { ...config.surfaceHdri, rotationY: v })
-                                      }
-                                      min={0} max={360} step={1}
-                                    />
-                                  </div>
-                                </div>
-                              )}
-                            </div>
                           </div>
                         )}
                       </div>
@@ -1168,27 +1106,32 @@ export function VideoStudio({
               <RotateCcw className="h-4 w-4 mr-1" /> Reset
             </Button>
             <div className="flex-1" />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onClose}
-              disabled={isRecording}
-            >
-              Cancel
-            </Button>
             {isRecording ? (
               <Button variant="destructive" size="sm" onClick={handleStop}>
                 <Square className="h-4 w-4 mr-1" /> Stop
               </Button>
             ) : videoUrl ? (
-              <Button size="sm" onClick={handleDownload}>
-                <Download className="h-4 w-4 mr-1" /> Download
-              </Button>
+              <>
+                <Button variant="outline" size="sm" onClick={handleRecord}>
+                  <RefreshCw className="h-4 w-4 mr-1" /> Re-record
+                </Button>
+                <Button size="sm" onClick={handleDownload}>
+                  <Download className="h-4 w-4 mr-1" /> Download
+                </Button>
+              </>
             ) : (
               <Button size="sm" onClick={handleRecord}>
                 <Video className="h-4 w-4 mr-1" /> Record
               </Button>
             )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => templateSelectorRef.current?.triggerSave()}
+              disabled={isRecording}
+            >
+              <Save className="h-4 w-4 mr-1" /> Save Template
+            </Button>
           </div>
         </DialogFooter>
       </DialogContent>

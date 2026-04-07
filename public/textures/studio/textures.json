@@ -1,0 +1,26 @@
+{
+  "wall": [
+    {
+      "id": "plastered_wall_05",
+      "name": "Plastered Wall",
+      "folder": "wall/plastered_wall_05",
+      "maps": ["diff", "normal", "roughness", "ao", "displacement"],
+      "tiling": [3, 3],
+      "roughnessValue": 0.95,
+      "metalnessValue": 0,
+      "displacementScale": 0.05
+    }
+  ],
+  "table": [
+    {
+      "id": "denim_fabric_06",
+      "name": "Denim Fabric",
+      "folder": "table/denim_fabric_06",
+      "maps": ["diff", "normal", "roughness", "displacement"],
+      "tiling": [4, 4],
+      "roughnessValue": 0.95,
+      "metalnessValue": 0,
+      "displacementScale": 0.02
+    }
+  ]
+}

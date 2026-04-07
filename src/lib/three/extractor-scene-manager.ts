@@ -12,12 +12,16 @@ import {
   createCementWallTexture,
   createWallBackdrop,
   createShadowFloor,
+  createWallShadowPlane,
   createTableSurface,
   createFabricTexture,
   createStudioBackdrop,
+  loadTextureManifest,
+  findTexturePack,
+  loadPBRTexturePack,
 } from './studio-background';
 import type { VideoStudioConfig, CameraKeyframe, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig } from '@/types/video-studio';
-import { computeVideoDuration, createEasingFunction, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS } from '@/types/video-studio';
+import { computeVideoDuration, createEasingFunction, applyDirection, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS } from '@/types/video-studio';
 import { compositeSurfaceFrames, preloadFrameImages } from './background-compositor';
 
 // Available HDRI options (same as editor-client)
@@ -83,8 +87,10 @@ export class ExtractorSceneManager {
   // Studio elements (for video)
   private backdrop: THREE.Mesh | null = null;
   private shadowFloor: THREE.Mesh | null = null;
+  private wallShadowPlane: THREE.Mesh | null = null;
   private tableSurface: THREE.Mesh | null = null;
   private spotLight: THREE.SpotLight | null = null;
+  private spotLightBasePos = new THREE.Vector3(2, 5, 3); // HDRI-synced base position
   private fillLights: THREE.PointLight[] = [];
   private directionalLight: THREE.DirectionalLight | null = null;
 
@@ -125,7 +131,6 @@ export class ExtractorSceneManager {
 
   // Smooth camera interpolation
   private cameraTargetPos = new THREE.Vector3();
-  private cameraLookAtYOffset = 0.5; // 0 = cue bottom, 1 = cue top, default center
   private cameraSmoothEnabled = false;
 
   // Animation state
@@ -283,6 +288,9 @@ export class ExtractorSceneManager {
     this.clearFramePlanes();
     if (this.spotLight) {
       this.scene.remove(this.spotLight);
+      if (this.spotLight.target.parent) {
+        this.scene.remove(this.spotLight.target);
+      }
       this.spotLight.dispose();
       this.spotLight = null;
     }
@@ -306,6 +314,12 @@ export class ExtractorSceneManager {
       (this.shadowFloor.material as THREE.Material).dispose();
       this.shadowFloor.geometry.dispose();
       this.shadowFloor = null;
+    }
+    if (this.wallShadowPlane) {
+      this.scene.remove(this.wallShadowPlane);
+      (this.wallShadowPlane.material as THREE.Material).dispose();
+      this.wallShadowPlane.geometry.dispose();
+      this.wallShadowPlane = null;
     }
     if (this.tableSurface) {
       this.scene.remove(this.tableSurface);
@@ -1200,25 +1214,35 @@ export class ExtractorSceneManager {
     }
 
     // Apply HDRI rotation from first layer
-    if (config.hdriConfig.layers.length > 0) {
-      const firstLayer = config.hdriConfig.layers[0];
-      if (firstLayer.rotationY !== 0) this.setHdriRotation(firstLayer.rotationY);
+    const hdriRotY = config.hdriConfig.layers[0]?.rotationY ?? 0;
+    if (config.hdriConfig.layers.length > 0 && hdriRotY !== 0) {
+      this.setHdriRotation(hdriRotY);
     }
 
-    // Key spotlight
+    // Apply HDRI intensity (unified — affects cue + everything)
+    this.updateHdriIntensity(config);
+
+    // Key spotlight — position syncs with HDRI rotation for physically-correct shadows
+    const spotAngleRad = (hdriRotY * Math.PI) / 180;
+    const spotRadius = 6;
+    const spotX = Math.sin(spotAngleRad) * spotRadius;
+    const spotZ = Math.cos(spotAngleRad) * spotRadius;
+    this.spotLightBasePos.set(spotX, 5, spotZ);
     this.spotLight = new THREE.SpotLight(0xffffff, 2.2);
-    this.spotLight.position.set(2, 5, 3);
-    this.spotLight.angle = Math.PI / 4.5;
+    this.spotLight.position.copy(this.spotLightBasePos);
+    this.spotLight.target.position.set(0, 0, 0);
+    this.spotLight.angle = Math.PI / 3;
     this.spotLight.penumbra = 0.45;
     this.spotLight.decay = 1.3;
-    this.spotLight.distance = 22;
+    this.spotLight.distance = 30;
     this.spotLight.castShadow = true;
     this.spotLight.shadow.mapSize.set(2048, 2048);
     this.spotLight.shadow.camera.near = 0.5;
-    this.spotLight.shadow.camera.far = 22;
-    this.spotLight.shadow.bias = -0.0001;
-    this.spotLight.shadow.radius = 2;
+    this.spotLight.shadow.camera.far = 30;
+    this.spotLight.shadow.bias = -0.0005;
+    this.spotLight.shadow.radius = 3;
     this.scene.add(this.spotLight);
+    this.scene.add(this.spotLight.target);
 
     // Fill lights
     const fillPositions: [number, number, number][] = [[-3, 1, 2], [0, -1, 3], [3, 0.5, -1]];
@@ -1229,49 +1253,75 @@ export class ExtractorSceneManager {
       this.scene.add(fill);
     });
 
-    // Wall from surface frames — single 2048×2048 canvas, no tiling
-    const wallImages = await preloadFrameImages(config.wallSurface.frames);
-    const wallTex = compositeSurfaceFrames(config.wallSurface, 2048, 2048, wallImages);
-    wallTex.wrapS = THREE.ClampToEdgeWrapping;
-    wallTex.wrapT = THREE.ClampToEdgeWrapping;
-    wallTex.repeat.set(1, 1);
-    this.backdrop = createWallBackdrop(wallTex, 34, 24);
+    // ── Load PBR textures for wall and table ──
+    const manifest = await loadTextureManifest();
+
+    // Wall: PBR texture + frame overlays
+    const wallPack = findTexturePack(manifest, config.wallSurface.texturePreset);
+    let wallMaterial: THREE.MeshStandardMaterial;
+    if (wallPack) {
+      wallMaterial = await loadPBRTexturePack(wallPack);
+    } else {
+      // Fallback: use old compositor approach
+      const wallImages = await preloadFrameImages(config.wallSurface.frames);
+      const wallTex = compositeSurfaceFrames(config.wallSurface, 2048, 2048, wallImages);
+      wallTex.wrapS = THREE.ClampToEdgeWrapping;
+      wallTex.wrapT = THREE.ClampToEdgeWrapping;
+      wallTex.repeat.set(1, 1);
+      wallMaterial = new THREE.MeshStandardMaterial({
+        map: wallTex, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
+      });
+    }
+    wallMaterial.envMapIntensity = config.wallSurface.envMapIntensity ?? 0.6;
+    this.backdrop = createWallBackdrop(wallMaterial, 34, 24);
     this.backdrop.position.set(0, 4.5, -5.5);
     this.scene.add(this.backdrop);
     this.backdrop.userData = { type: 'wall' };
 
-    // Table from surface frames — single 2048×2048 canvas, no tiling
-    // Cue model is center-normalized to 2 units then scaled (default 7).
-    // Model bottom ≈ positionY - scale * 1.0 = 0 - 7 = -7.0
-    // Wall bottom: 4.5 - 12 = -7.5. Table sits flush at wall bottom.
+    // Table: PBR texture + frame overlays
     const tableY = -7.5;
     const tableDepth = 12;
-    const tableImages = await preloadFrameImages(config.tableSurface.frames);
-    const tableTex = compositeSurfaceFrames(config.tableSurface, 2048, 2048, tableImages);
-    tableTex.wrapS = THREE.ClampToEdgeWrapping;
-    tableTex.wrapT = THREE.ClampToEdgeWrapping;
-    tableTex.repeat.set(1, 1);
-    this.tableSurface = createTableSurface(tableTex, 34, tableDepth, tableY);
-    this.tableSurface.position.z = -5.5 + tableDepth / 2; // back edge flush with wall
+    const tablePack = findTexturePack(manifest, config.tableSurface.texturePreset);
+    let tableMaterial: THREE.MeshStandardMaterial;
+    if (tablePack) {
+      tableMaterial = await loadPBRTexturePack(tablePack);
+    } else {
+      const tableImages = await preloadFrameImages(config.tableSurface.frames);
+      const tableTex = compositeSurfaceFrames(config.tableSurface, 2048, 2048, tableImages);
+      tableTex.wrapS = THREE.ClampToEdgeWrapping;
+      tableTex.wrapT = THREE.ClampToEdgeWrapping;
+      tableTex.repeat.set(1, 1);
+      tableMaterial = new THREE.MeshStandardMaterial({
+        map: tableTex, roughness: 0.35, metalness: 0, side: THREE.DoubleSide,
+      });
+    }
+    tableMaterial.envMapIntensity = config.tableSurface.envMapIntensity ?? 0.4;
+    this.tableSurface = createTableSurface(tableMaterial, 34, tableDepth, tableY);
+    this.tableSurface.position.z = -5.5 + tableDepth / 2;
     this.scene.add(this.tableSurface);
     this.tableSurface.userData = { type: 'table' };
 
-    // Build frame planes for interactive scene view
-    this.wallFramePlanes = this.buildFramePlanes(config.wallSurface, this.backdrop!, false, wallImages);
-    this.tableFramePlanes = this.buildFramePlanes(config.tableSurface, this.tableSurface!, true, tableImages);
+    // Build frame overlay planes for interactive scene view
+    const wallImages2 = await preloadFrameImages(config.wallSurface.frames);
+    const tableImages2 = await preloadFrameImages(config.tableSurface.frames);
+    this.wallFramePlanes = this.buildFramePlanes(config.wallSurface, this.backdrop!, false, wallImages2);
+    this.tableFramePlanes = this.buildFramePlanes(config.tableSurface, this.tableSurface!, true, tableImages2);
 
-    // Shadow floor — at table level for crisp shadow
+    // Shadow floor — at table level, matching table dimensions
     if (config.shadow.enabled) {
-      this.shadowFloor = createShadowFloor();
-      this.shadowFloor.position.y = tableY + 0.01;
+      this.shadowFloor = createShadowFloor(36, tableDepth + 2);
+      this.shadowFloor.position.y = tableY + 0.02;
+      this.shadowFloor.position.z = -5.5 + tableDepth / 2;
       this.scene.add(this.shadowFloor);
+
+      // Wall shadow plane — same position/size as wall backdrop, slightly in front
+      this.wallShadowPlane = createWallShadowPlane(34, 24);
+      this.wallShadowPlane.position.set(0, 4.5, -5.49);
+      this.scene.add(this.wallShadowPlane);
     }
 
     // Setup cue instances
     this.setupCueInstances(config.cueConfig);
-
-    // Apply surface HDRI settings (envMapIntensity) after surfaces are created
-    this.updateSurfaceHdri(config);
   }
 
   /** Create material for a frame plane based on its type */
@@ -1461,7 +1511,7 @@ export class ExtractorSceneManager {
     this.setupCueInstances(cue);
 
     // Camera at start position
-    this.setCameraFromKeyframe(config.cameraStart, cue);
+    this.setCameraFromKeyframe(config.cameraStart);
     this.camera.fov = 50;
     this.camera.updateProjectionMatrix();
 
@@ -1492,11 +1542,6 @@ export class ExtractorSceneManager {
 
     // Sync frame plane positions/scales from config
     this.updateFramePlaneTransforms(config);
-
-    // Update camera from start keyframe
-    this.setCameraFromKeyframe(config.cameraStart, config.cueConfig);
-    this.camera.fov = 50;
-    this.camera.updateProjectionMatrix();
 
     // Apply shadow settings
     this.updateShadowFromConfig(config);
@@ -1536,11 +1581,18 @@ export class ExtractorSceneManager {
     if (this.spotLight) {
       this.spotLight.shadow.radius = s.blur ?? 3;
       this.spotLight.penumbra = s.softness ?? 0.45;
-      // Offset light position for shadow direction control
-      this.spotLight.position.set(2 + (s.offsetX ?? 0), 5, 3 + (s.offsetY ?? 0));
+      // Apply offset relative to HDRI-synced base position
+      this.spotLight.position.set(
+        this.spotLightBasePos.x + (s.offsetX ?? 0),
+        this.spotLightBasePos.y,
+        this.spotLightBasePos.z + (s.offsetY ?? 0)
+      );
     }
     if (this.shadowFloor) {
       (this.shadowFloor.material as THREE.ShadowMaterial).opacity = s.intensity;
+    }
+    if (this.wallShadowPlane) {
+      (this.wallShadowPlane.material as THREE.ShadowMaterial).opacity = s.intensity * 0.6;
     }
   }
 
@@ -1553,21 +1605,18 @@ export class ExtractorSceneManager {
     }
   }
 
-  /** Apply separate HDRI to wall/table surfaces (or remove it) */
+  /** Apply per-surface envMapIntensity from config (unified HDRI approach) */
   private updateSurfaceHdri(config: VideoStudioConfig): void {
-    const surfCfg = config.surfaceHdri;
-    const targets = [this.backdrop, this.tableSurface].filter(Boolean) as THREE.Mesh[];
+    const targets: Array<{ mesh: THREE.Mesh | null; intensity: number }> = [
+      { mesh: this.backdrop, intensity: config.wallSurface.envMapIntensity ?? 0.6 },
+      { mesh: this.tableSurface, intensity: config.tableSurface.envMapIntensity ?? 0.4 },
+    ];
 
-    for (const mesh of targets) {
+    for (const { mesh, intensity } of targets) {
+      if (!mesh) continue;
       const mat = mesh.material as THREE.MeshStandardMaterial;
-      if (!surfCfg || !surfCfg.enabled) {
-        // Zero out environment contribution — preserves original texture color
-        mat.envMapIntensity = 0;
-        mat.needsUpdate = true;
-      } else {
-        mat.envMapIntensity = surfCfg.intensity ?? 0.3;
-        mat.needsUpdate = true;
-      }
+      mat.envMapIntensity = intensity;
+      mat.needsUpdate = true;
     }
   }
 
@@ -1608,8 +1657,11 @@ export class ExtractorSceneManager {
     this.camera.fov = 50;
     this.camera.updateProjectionMatrix();
 
+    // Compute effective end position based on direction constraint
+    const effectiveEnd = applyDirection(config.cameraStart, config.cameraEnd, config.cameraDirection);
+
     // Compute duration from path + speed
-    const duration = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed);
+    const duration = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, config.cameraDirection);
     const totalFrames = Math.ceil(qp.fps * duration);
     const easingFn = createEasingFunction(config.easing);
 
@@ -1635,7 +1687,7 @@ export class ExtractorSceneManager {
     const frameDuration = 1000 / qp.fps;
     let lastTimestamp = -1;
     const start = config.cameraStart;
-    const end = config.cameraEnd;
+    const end = effectiveEnd;
     const cue = config.cueConfig;
 
     const animate = (timestamp: number) => {
@@ -1657,11 +1709,11 @@ export class ExtractorSceneManager {
 
       // Interpolate camera keyframe
       const interpolatedKeyframe = {
-        cuePercent: start.cuePercent + (end.cuePercent - start.cuePercent) * t,
-        distanceFromCue: start.distanceFromCue + (end.distanceFromCue - start.distanceFromCue) * t,
-        offsetX: start.offsetX + (end.offsetX - start.offsetX) * t,
+        x: start.x + (end.x - start.x) * t,
+        y: start.y + (end.y - start.y) * t,
+        z: start.z + (end.z - start.z) * t,
       };
-      this.setCameraFromKeyframe(interpolatedKeyframe, cue);
+      this.setCameraFromKeyframe(interpolatedKeyframe);
 
       // Cue spin
       const hasSpinY = cue.spinSpeed > 0;
@@ -2116,27 +2168,9 @@ export class ExtractorSceneManager {
     return this.godCamera;
   }
 
-  /** Position studio camera from a CameraKeyframe — cuePercent maps to Y along cue length */
-  setCameraFromKeyframe(keyframe: CameraKeyframe, cueConfig: CueConfig): void {
-    const mainCue = cueConfig.instances.find(i => i.isMain) || cueConfig.instances[0];
-    if (!mainCue) return;
-
-    const cueBottom = mainCue.positionY - 1.2;
-    const cueHeight = mainCue.scale * 1.3;
-    const cueTop = cueBottom + cueHeight;
-
-    const targetY = cueBottom + (cueTop - cueBottom) * (keyframe.cuePercent / 100);
-    const targetX = mainCue.positionX;
-    const targetZ = mainCue.positionZ;
-
-    this.camera.position.set(
-      targetX + keyframe.offsetX,
-      targetY,
-      targetZ + keyframe.distanceFromCue
-    );
-
-    this.camera.lookAt(targetX, targetY, targetZ);
-    this.camera.up.set(0, 1, 0);
+  /** Position studio camera from a CameraKeyframe — uses absolute world coordinates, preserves rotation */
+  setCameraFromKeyframe(keyframe: CameraKeyframe): void {
+    this.camera.position.set(keyframe.x, keyframe.y, keyframe.z);
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld(true);
 
@@ -2166,11 +2200,7 @@ export class ExtractorSceneManager {
         this.cameraTargetPos.x += dx * sensitivity;
         break;
       case "y":
-        // Move camera Y position AND slide lookAt point along the cue
         this.cameraTargetPos.y -= dy * sensitivity;
-        this.cameraLookAtYOffset = Math.max(0, Math.min(1,
-          this.cameraLookAtYOffset - dy * 0.005
-        ));
         break;
       case "z":
         this.cameraTargetPos.z -= dy * sensitivity;
@@ -2181,8 +2211,6 @@ export class ExtractorSceneManager {
         break;
     }
 
-    // Camera can move freely — no position clamping
-
     return { x: this.cameraTargetPos.x, y: this.cameraTargetPos.y, z: this.cameraTargetPos.z };
   }
 
@@ -2190,23 +2218,12 @@ export class ExtractorSceneManager {
   // private clampCameraToStudioBounds(): void { ... }
 
   /** Convert current camera position to a CameraKeyframe (for "Set Start/End" buttons) */
-  getCameraKeyframeFromPosition(cueConfig: CueConfig): CameraKeyframe {
-    const mainCue = cueConfig.instances.find(i => i.isMain) || cueConfig.instances[0];
-    if (!mainCue) return { cuePercent: 50, distanceFromCue: 3, offsetX: 0 };
-
-    const cueBottom = mainCue.positionY - 1.2;
-    const cueHeight = mainCue.scale * 1.3;
-    const cueTop = cueBottom + cueHeight;
-
+  getCameraKeyframeFromPosition(): CameraKeyframe {
     const pos = this.camera.position;
-    const cuePercent = ((pos.y - cueBottom) / (cueTop - cueBottom)) * 100;
-    const distanceFromCue = pos.z - mainCue.positionZ;
-    const offsetX = pos.x - mainCue.positionX;
-
     return {
-      cuePercent,
-      distanceFromCue,
-      offsetX,
+      x: pos.x,
+      y: pos.y,
+      z: pos.z,
     };
   }
 
@@ -2238,13 +2255,6 @@ export class ExtractorSceneManager {
   }
 
   getCameraGizmo(): THREE.Group | null { return this.cameraGizmo; }
-
-  /** Set camera lookAt Y offset along cue: 0 = bottom, 0.5 = center, 1 = top */
-  setCameraLookAtYOffset(offset: number): void {
-    this.cameraLookAtYOffset = Math.max(0, Math.min(1, offset));
-  }
-
-  getCameraLookAtYOffset(): number { return this.cameraLookAtYOffset; }
 
   getScene(): THREE.Scene { return this.scene; }
 

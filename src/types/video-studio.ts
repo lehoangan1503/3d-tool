@@ -4,21 +4,21 @@ import { createDefaultHdriLayer } from "./extractor";
 // ── Camera Keyframes (start and end) ──
 
 export interface CameraKeyframe {
-  cuePercent: number;       // 0–100: position along cue length (0%=bottom, 100%=top)
-  distanceFromCue: number;  // 0.5–5.0: how far from cue
-  offsetX: number;          // -2.0 to 2.0: horizontal offset from cue center
+  x: number;  // Camera world X position
+  y: number;  // Camera world Y position
+  z: number;  // Camera world Z position
 }
 
 export const DEFAULT_CAMERA_START: CameraKeyframe = {
-  cuePercent: 10,
-  distanceFromCue: 3.0,
-  offsetX: 0,
+  x: 0,
+  y: 0,
+  z: 3,
 };
 
 export const DEFAULT_CAMERA_END: CameraKeyframe = {
-  cuePercent: 90,
-  distanceFromCue: 1.8,
-  offsetX: 0,
+  x: 0,
+  y: 7,
+  z: 2,
 };
 
 // ── Camera Direction ──
@@ -33,12 +33,12 @@ export interface CameraDirectionPreset {
 
 export const CAMERA_DIRECTION_PRESETS: CameraDirectionPreset[] = [
   { id: "fixed", name: "Fixed",     description: "Camera stays still" },
-  { id: "x",    name: "Slide X",    description: "Left↔right across cue" },
-  { id: "y",    name: "Slide Y",    description: "Bottom↔top along cue" },
-  { id: "z",    name: "Dolly Z",    description: "Close↔far from cue" },
-  { id: "xy",   name: "Cross XY",   description: "Diagonal across + along" },
-  { id: "xz",   name: "Depth XZ",   description: "Across + depth" },
-  { id: "yz",   name: "Along YZ",   description: "Along cue + depth" },
+  { id: "x",    name: "Slide X",    description: "Left ↔ right" },
+  { id: "y",    name: "Slide Y",    description: "Down ↔ up" },
+  { id: "z",    name: "Dolly Z",    description: "Close ↔ far" },
+  { id: "xy",   name: "Cross XY",   description: "Horizontal + vertical" },
+  { id: "xz",   name: "Depth XZ",   description: "Horizontal + depth" },
+  { id: "yz",   name: "Along YZ",   description: "Vertical + depth" },
   { id: "xyz",  name: "Free XYZ",   description: "Unconstrained path" },
 ];
 
@@ -131,17 +131,22 @@ export interface BackgroundFrame {
 }
 
 export interface SurfaceConfig {
-  baseColor: string;
-  frames: BackgroundFrame[];  // Max 4, ordered bottom-to-top
+  texturePreset: string;          // Texture pack ID (e.g. "plastered_wall_05")
+  envMapIntensity: number;        // 0–1, how much HDRI light the surface receives
+  frames: BackgroundFrame[];      // Max 4, ordered bottom-to-top
+  /** @deprecated Use texturePreset instead. Kept for migration. */
+  baseColor?: string;
 }
 
 export const DEFAULT_WALL_SURFACE: SurfaceConfig = {
-  baseColor: "#161616",
+  texturePreset: "plastered_wall_05",
+  envMapIntensity: 0.6,
   frames: [],
 };
 
 export const DEFAULT_TABLE_SURFACE: SurfaceConfig = {
-  baseColor: "#0d0d0d",
+  texturePreset: "denim_fabric_06",
+  envMapIntensity: 0.4,
   frames: [],
 };
 
@@ -218,7 +223,7 @@ export interface VideoStudioConfig {
   cameraStart: CameraKeyframe;
   cameraEnd: CameraKeyframe;
   cameraSpeed: number;
-  lockDistance: boolean;      // When true, start/end share the same distanceFromCue
+  lockDistance: boolean;      // Deprecated — kept for backward compatibility with saved templates
   easing: EasingConfig;
   wallSurface: SurfaceConfig;
   tableSurface: SurfaceConfig;
@@ -227,7 +232,8 @@ export interface VideoStudioConfig {
   quality: "hd" | "2k";
   shadow: { enabled: boolean; intensity: number; blur: number; softness: number; offsetX: number; offsetY: number };
   hdriFile: string;
-  surfaceHdri: { enabled: boolean; hdriFile: string; rotationX: number; rotationY: number; intensity: number };
+  /** @deprecated Unified HDRI now used. Wall/table use envMapIntensity on SurfaceConfig. */
+  surfaceHdri?: { enabled: boolean; hdriFile: string; rotationX: number; rotationY: number; intensity: number };
 }
 
 export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
@@ -245,7 +251,6 @@ export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
   quality: "hd",
   shadow: { enabled: true, intensity: 0.6, blur: 3, softness: 0.45, offsetX: 0, offsetY: 0 },
   hdriFile: "ferndale_studio_07_2k.hdr",
-  surfaceHdri: { enabled: false, hdriFile: "ferndale_studio_07_2k.hdr", rotationX: 0, rotationY: 0, intensity: 0.3 },
 };
 
 // ── Studio Template (DB record) ──
@@ -267,17 +272,33 @@ export const VIDEO_QUALITY_PRESETS = {
 
 // ── Utility: Compute video duration from camera path ──
 
-const CUE_LENGTH_SCENE_UNITS = 3;
+/** Apply direction constraint: only axes included in `direction` interpolate; others stay at start value */
+export function applyDirection(
+  start: CameraKeyframe,
+  end: CameraKeyframe,
+  direction: CameraDirection
+): CameraKeyframe {
+  const moveX = direction === "x" || direction === "xy" || direction === "xz" || direction === "xyz";
+  const moveY = direction === "y" || direction === "xy" || direction === "yz" || direction === "xyz";
+  const moveZ = direction === "z" || direction === "xz" || direction === "yz" || direction === "xyz";
+  return {
+    x: moveX ? end.x : start.x,
+    y: moveY ? end.y : start.y,
+    z: moveZ ? end.z : start.z,
+  };
+}
 
 export function computeVideoDuration(
   start: CameraKeyframe,
   end: CameraKeyframe,
-  cameraSpeed: number
+  cameraSpeed: number,
+  direction: CameraDirection = "xyz"
 ): number {
-  const dY = (end.cuePercent - start.cuePercent) / 100 * CUE_LENGTH_SCENE_UNITS;
-  const dDist = end.distanceFromCue - start.distanceFromCue;
-  const dX = end.offsetX - start.offsetX;
-  const pathLength = Math.sqrt(dY * dY + dDist * dDist + dX * dX);
+  const effectiveEnd = applyDirection(start, end, direction);
+  const dX = effectiveEnd.x - start.x;
+  const dY = effectiveEnd.y - start.y;
+  const dZ = effectiveEnd.z - start.z;
+  const pathLength = Math.sqrt(dX * dX + dY * dY + dZ * dZ);
   const duration = pathLength / Math.max(0.01, cameraSpeed);
   return Math.max(3, Math.min(30, duration));
 }
@@ -351,4 +372,46 @@ export function createCueInstance(): CueInstance {
     scale: 7,
     isMain: false,
   };
+}
+
+// ── Migration: Upgrade old SurfaceConfig to new format ──
+
+/** Migrate a SurfaceConfig from baseColor format to texturePreset format */
+export function migrateSurfaceConfig(
+  surface: SurfaceConfig,
+  defaultPreset: string,
+  defaultIntensity: number
+): SurfaceConfig {
+  if (surface.texturePreset) return surface;
+  return {
+    texturePreset: defaultPreset,
+    envMapIntensity: defaultIntensity,
+    frames: surface.frames ?? [],
+  };
+}
+
+/** Migrate a full VideoStudioConfig from old format */
+export function migrateVideoStudioConfig(config: VideoStudioConfig): VideoStudioConfig {
+  const migrated = { ...config };
+  migrated.wallSurface = migrateSurfaceConfig(
+    config.wallSurface,
+    DEFAULT_WALL_SURFACE.texturePreset,
+    DEFAULT_WALL_SURFACE.envMapIntensity
+  );
+  migrated.tableSurface = migrateSurfaceConfig(
+    config.tableSurface,
+    DEFAULT_TABLE_SURFACE.texturePreset,
+    DEFAULT_TABLE_SURFACE.envMapIntensity
+  );
+  // Migrate HDRI layers to include new intensity/enabled fields
+  if (migrated.hdriConfig?.layers) {
+    migrated.hdriConfig = {
+      layers: migrated.hdriConfig.layers.map(l => ({
+        ...l,
+        intensity: l.intensity ?? 1.0,
+        enabled: l.enabled ?? true,
+      })),
+    };
+  }
+  return migrated;
 }

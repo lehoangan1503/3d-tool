@@ -89,10 +89,23 @@ export class ExtractorSceneManager {
   private shadowFloor: THREE.Mesh | null = null;
   private wallShadowPlane: THREE.Mesh | null = null;
   private tableSurface: THREE.Mesh | null = null;
-  private spotLight: THREE.SpotLight | null = null;
-  private spotLightBasePos = new THREE.Vector3(2, 5, 3); // HDRI-synced base position
-  private fillLights: THREE.PointLight[] = [];
+
+  // HDRI-driven shadow lights (one DirectionalLight per HDRI layer)
+  private hdriShadowLights: Array<{
+    layerId: string;
+    light: THREE.DirectionalLight;
+  }> = [];
+
+  // Per-frame directional light for image extractor
   private directionalLight: THREE.DirectionalLight | null = null;
+
+  // HDRI light helpers — interactive sun spheres on a sky dome
+  private static readonly HDRI_DOME_RADIUS = 10;
+  private hdriLightHelpers: Array<{
+    layerId: string;
+    layerIndex: number;
+    helper: THREE.Group;
+  }> = [];
 
   // Wrapper group used during video recording to apply tilt independently from spin
   private videoWrapperGroup: THREE.Group | null = null;
@@ -217,34 +230,27 @@ export class ExtractorSceneManager {
       this.setHdriRotation(config.hdriRotationY);
     }
 
-    // Key spotlight — angled from above-front to cast a clear shadow on the table
-    this.spotLight = new THREE.SpotLight(0xffffff, 2.2);
-    this.spotLight.position.set(2, 5, 3);
-    this.spotLight.angle = Math.PI / 4.5;
-    this.spotLight.penumbra = 0.45;
-    this.spotLight.decay = 1.3;
-    this.spotLight.distance = 22;
-    this.spotLight.castShadow = true;
-    this.spotLight.shadow.mapSize.width = 2048;
-    this.spotLight.shadow.mapSize.height = 2048;
-    this.spotLight.shadow.camera.near = 0.5;
-    this.spotLight.shadow.camera.far = 22;
-    this.spotLight.shadow.bias = -0.0001;
-    this.spotLight.shadow.radius = config.shadowBlur;
-    this.scene.add(this.spotLight);
-
-    // Subtle fill lights so cue details are visible in shadow areas
-    const fillPositions: [number, number, number][] = [
-      [-3, 1, 2],
-      [0, -1, 3],
-      [3, 0.5, -1],
-    ];
-    fillPositions.forEach(([x, y, z]) => {
-      const fill = new THREE.PointLight(0xffffff, 0.2);
-      fill.position.set(x, y, z);
-      this.fillLights.push(fill);
-      this.scene.add(fill);
-    });
+    // HDRI-driven shadow light based on HDRI rotation direction
+    if (config.enableShadow) {
+      const rotY = config.hdriRotationY ?? 0;
+      const pos = this.hdriRotationToPosition(0, rotY);
+      const light = new THREE.DirectionalLight(0xffffff, 0.8);
+      light.position.copy(pos);
+      light.target.position.set(0, 0, 0);
+      light.castShadow = true;
+      light.shadow.mapSize.set(2048, 2048);
+      light.shadow.camera.near = 0.1;
+      light.shadow.camera.far = 50;
+      light.shadow.camera.left = -20;
+      light.shadow.camera.right = 20;
+      light.shadow.camera.top = 20;
+      light.shadow.camera.bottom = -20;
+      light.shadow.bias = -0.0005;
+      light.shadow.radius = config.shadowBlur;
+      this.scene.add(light);
+      this.scene.add(light.target);
+      this.hdriShadowLights.push({ layerId: 'legacy', light });
+    }
 
     // ── Load wall texture (real file or procedural fallback) ──
     let wallTex: THREE.Texture | null = null;
@@ -286,19 +292,8 @@ export class ExtractorSceneManager {
 
   private clearStudioElements() {
     this.clearFramePlanes();
-    if (this.spotLight) {
-      this.scene.remove(this.spotLight);
-      if (this.spotLight.target.parent) {
-        this.scene.remove(this.spotLight.target);
-      }
-      this.spotLight.dispose();
-      this.spotLight = null;
-    }
-    this.fillLights.forEach((light) => {
-      this.scene.remove(light);
-      light.dispose();
-    });
-    this.fillLights = [];
+    this.clearHdriShadowLights();
+    this.clearHdriLightHelpers();
     if (this.backdrop) {
       this.scene.remove(this.backdrop);
       const material = this.backdrop.material as THREE.MeshStandardMaterial;
@@ -335,6 +330,250 @@ export class ExtractorSceneManager {
       (mesh.material as THREE.Material).dispose();
     }
     this.backgroundLayerMeshes = [];
+  }
+
+  // ---------------------------------------------------------------------------
+  // HDRI-driven shadow lights (DirectionalLight per HDRI layer)
+  // ---------------------------------------------------------------------------
+
+  private clearHdriShadowLights(): void {
+    for (const entry of this.hdriShadowLights) {
+      this.scene.remove(entry.light);
+      if (entry.light.target.parent) {
+        this.scene.remove(entry.light.target);
+      }
+      entry.light.dispose();
+    }
+    this.hdriShadowLights = [];
+  }
+
+  /** Create a DirectionalLight for each enabled HDRI layer, positioned by its rotation */
+  private setupHdriShadowLights(config: VideoStudioConfig): void {
+    this.clearHdriShadowLights();
+
+    const shadow = config.shadow;
+    if (!shadow.enabled) return;
+
+    const layers = config.hdriConfig?.layers ?? [];
+    for (const layer of layers) {
+      if (layer.enabled === false) continue;
+
+      const pos = this.hdriRotationToPosition(layer.rotationX, layer.rotationY);
+
+      const light = new THREE.DirectionalLight(0xffffff, (layer.intensity ?? 1) * 0.8);
+      light.position.copy(pos);
+      light.target.position.set(0, 0, 0);
+      light.castShadow = true;
+      light.shadow.mapSize.set(2048, 2048);
+      light.shadow.camera.near = 0.1;
+      light.shadow.camera.far = 50;
+      light.shadow.camera.left = -20;
+      light.shadow.camera.right = 20;
+      light.shadow.camera.top = 20;
+      light.shadow.camera.bottom = -20;
+      light.shadow.bias = -0.0005;
+      light.shadow.radius = shadow.blur ?? 3;
+
+      this.scene.add(light);
+      this.scene.add(light.target);
+      this.hdriShadowLights.push({ layerId: layer.id, light });
+    }
+  }
+
+  /** Update HDRI shadow light positions/properties without full rebuild */
+  private updateHdriShadowLights(config: VideoStudioConfig): void {
+    const shadow = config.shadow;
+    const layers = (config.hdriConfig?.layers ?? []).filter(l => l.enabled !== false);
+
+    if (layers.length !== this.hdriShadowLights.length) {
+      this.setupHdriShadowLights(config);
+      return;
+    }
+
+    for (let i = 0; i < layers.length; i++) {
+      const layer = layers[i];
+      const entry = this.hdriShadowLights[i];
+      if (!entry) continue;
+
+      const pos = this.hdriRotationToPosition(layer.rotationX, layer.rotationY);
+      entry.light.position.copy(pos);
+      entry.light.intensity = (layer.intensity ?? 1) * 0.8;
+      entry.light.castShadow = shadow.enabled;
+      entry.light.shadow.radius = shadow.blur ?? 3;
+    }
+
+    if (this.shadowFloor) {
+      (this.shadowFloor.material as THREE.ShadowMaterial).opacity = shadow.intensity;
+    }
+    if (this.wallShadowPlane) {
+      (this.wallShadowPlane.material as THREE.ShadowMaterial).opacity = shadow.intensity * 0.6;
+    }
+  }
+
+  /** Get HDRI light helper objects for raycasting */
+  getStudioLightHelpers(): THREE.Group[] {
+    return this.hdriLightHelpers.map(e => e.helper);
+  }
+
+  // ---------------------------------------------------------------------------
+  // HDRI Light helpers — interactive sun spheres on a virtual sky dome
+  // ---------------------------------------------------------------------------
+
+  private clearHdriLightHelpers(): void {
+    for (const entry of this.hdriLightHelpers) {
+      this.scene.remove(entry.helper);
+      entry.helper.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+        if (child instanceof THREE.Sprite) {
+          (child.material as THREE.SpriteMaterial).map?.dispose();
+          (child.material as THREE.SpriteMaterial).dispose();
+        }
+      });
+    }
+    this.hdriLightHelpers = [];
+  }
+
+  /** Convert HDRI rotationX/rotationY (degrees) → 3D position on sky dome */
+  private hdriRotationToPosition(rotX: number, rotY: number): THREE.Vector3 {
+    const R = ExtractorSceneManager.HDRI_DOME_RADIUS;
+    const phi = THREE.MathUtils.degToRad(90 - rotX);   // elevation: 0°→horizon, 90°→zenith
+    const theta = THREE.MathUtils.degToRad(rotY);       // azimuth
+    return new THREE.Vector3(
+      R * Math.sin(phi) * Math.sin(theta),
+      R * Math.cos(phi),
+      R * Math.sin(phi) * Math.cos(theta)
+    );
+  }
+
+  /** Convert 3D position → HDRI rotationX/rotationY (degrees) */
+  positionToHdriRotation(pos: THREE.Vector3): { rotationX: number; rotationY: number } {
+    const r = pos.length();
+    if (r < 0.01) return { rotationX: 0, rotationY: 0 };
+    const n = pos.clone().divideScalar(r);
+    const phi = Math.acos(THREE.MathUtils.clamp(n.y, -1, 1));
+    const theta = Math.atan2(n.x, n.z);
+    let rotX = 90 - THREE.MathUtils.radToDeg(phi);
+    let rotY = THREE.MathUtils.radToDeg(theta);
+    if (rotY < 0) rotY += 360;
+    rotX = THREE.MathUtils.clamp(rotX, -90, 90);
+    return { rotationX: rotX, rotationY: rotY % 360 };
+  }
+
+  /** Create a visible HDRI light helper for a layer */
+  private createHdriLightHelper(layer: HdriLayer, index: number): THREE.Group {
+    const group = new THREE.Group();
+    group.userData = { type: 'hdriLight', layerId: layer.id, layerIndex: index };
+
+    // Sun sphere — bright yellow/white, size ∝ intensity
+    const baseScale = 0.3 + (layer.intensity ?? 1) * 0.2;
+    const sphereGeo = new THREE.SphereGeometry(baseScale, 16, 16);
+    const sunColor = new THREE.Color(0xffee88);
+    const sphereMat = new THREE.MeshBasicMaterial({
+      color: sunColor,
+      transparent: true,
+      opacity: layer.enabled !== false ? 0.9 : 0.3,
+    });
+    const sphere = new THREE.Mesh(sphereGeo, sphereMat);
+    group.add(sphere);
+
+    // Glow ring
+    const ringGeo = new THREE.RingGeometry(baseScale * 1.3, baseScale * 1.6, 24);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xffdd44,
+      transparent: true,
+      opacity: layer.enabled !== false ? 0.35 : 0.1,
+      side: THREE.DoubleSide,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.lookAt(0, 0, 0); // Face the center
+    group.add(ring);
+
+    // Label
+    const canvas = document.createElement('canvas');
+    canvas.width = 192;
+    canvas.height = 40;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = layer.enabled !== false ? '#ffffff' : '#666666';
+    ctx.font = 'bold 20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`HDRI ${index + 1}`, 96, 28);
+    const tex = new THREE.CanvasTexture(canvas);
+    const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.8 });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.scale.set(1.4, 0.35, 1);
+    sprite.position.y = baseScale + 0.4;
+    group.add(sprite);
+
+    // Direction line to origin
+    const lineMat = new THREE.LineBasicMaterial({
+      color: 0xffdd44,
+      transparent: true,
+      opacity: layer.enabled !== false ? 0.25 : 0.08,
+    });
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0, 0), // Will point toward origin
+    ]);
+    const line = new THREE.Line(lineGeo, lineMat);
+    line.userData = { isDirectionLine: true };
+    group.add(line);
+
+    // Position on sky dome
+    const pos = this.hdriRotationToPosition(layer.rotationX, layer.rotationY);
+    group.position.copy(pos);
+
+    // Update direction line to point from helper to origin
+    const positions = lineGeo.attributes.position as THREE.BufferAttribute;
+    positions.setXYZ(1, -pos.x, -pos.y, -pos.z);
+    positions.needsUpdate = true;
+
+    return group;
+  }
+
+  /** Setup HDRI light helpers from config layers */
+  setupHdriLightHelpers(config: VideoStudioConfig): void {
+    this.clearHdriLightHelpers();
+    const layers = config.hdriConfig?.layers ?? [];
+    for (let i = 0; i < layers.length; i++) {
+      const layer = layers[i];
+      const helper = this.createHdriLightHelper(layer, i);
+      this.scene.add(helper);
+      this.hdriLightHelpers.push({ layerId: layer.id, layerIndex: i, helper });
+    }
+  }
+
+  /** Update HDRI light helper positions/visuals without full rebuild */
+  updateHdriLightHelpers(config: VideoStudioConfig): void {
+    const layers = config.hdriConfig?.layers ?? [];
+    for (let i = 0; i < Math.min(layers.length, this.hdriLightHelpers.length); i++) {
+      const layer = layers[i];
+      const entry = this.hdriLightHelpers[i];
+      if (!entry || entry.layerId !== layer.id) continue;
+
+      const pos = this.hdriRotationToPosition(layer.rotationX, layer.rotationY);
+      entry.helper.position.copy(pos);
+
+      // Update sun size based on intensity
+      const baseScale = 0.3 + (layer.intensity ?? 1) * 0.2;
+      entry.helper.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshBasicMaterial) {
+          child.material.opacity = layer.enabled !== false ? 0.9 : 0.3;
+        }
+        if (child instanceof THREE.Line && child.userData.isDirectionLine) {
+          const geo = child.geometry as THREE.BufferGeometry;
+          const positions = geo.attributes.position as THREE.BufferAttribute;
+          positions.setXYZ(1, -pos.x, -pos.y, -pos.z);
+          positions.needsUpdate = true;
+        }
+      });
+
+      // Scale the whole helper to reflect intensity
+      const scale = baseScale / (0.3 + 1 * 0.2); // Normalize to default
+      entry.helper.scale.setScalar(scale);
+    }
   }
 
   async loadHDRI(hdriUrl: string): Promise<void> {
@@ -576,13 +815,15 @@ export class ExtractorSceneManager {
    * Apply multiple HDRI layers with X and Y rotation (additive blending)
    */
   async setHdriLayers(layers: HdriLayer[]): Promise<void> {
-    if (layers.length === 0) {
+    // Filter to enabled layers only
+    const activeLayers = layers.filter(l => l.enabled !== false);
+    if (activeLayers.length === 0) {
       console.warn('[ExtractorSceneManager] No HDRI layers provided');
       return;
     }
     
     // Skip if same as last applied (avoid redundant expensive operations)
-    const layersKey = JSON.stringify(layers);
+    const layersKey = JSON.stringify(activeLayers);
     if (layersKey === this.lastHdriLayersKey) {
       return;
     }
@@ -598,10 +839,12 @@ export class ExtractorSceneManager {
     try {
       // Load all needed HDRIs
       const textures: THREE.DataTexture[] = [];
-      for (const layer of layers) {
+      const intensities: number[] = [];
+      for (const layer of activeLayers) {
         try {
           const tex = await this.loadAndCacheHdri(layer.hdriType);
           textures.push(tex);
+          intensities.push(layer.intensity ?? 1);
         } catch (loadError) {
           console.error('[ExtractorSceneManager] Failed to load HDRI:', layer.hdriType, loadError);
         }
@@ -616,7 +859,7 @@ export class ExtractorSceneManager {
       // Create rotated versions of each texture
       const rotatedTextures: THREE.DataTexture[] = [];
       for (let i = 0; i < textures.length; i++) {
-        const layer = layers[i];
+        const layer = activeLayers[i];
         const rotated = this.createRotatedHdriTextureXY(textures[i], layer.rotationX, layer.rotationY);
         if (rotated) {
           rotatedTextures.push(rotated);
@@ -640,12 +883,17 @@ export class ExtractorSceneManager {
         return;
       }
       
-      // Combine textures if multiple, otherwise use single
+      // Combine textures if multiple, otherwise use single (apply intensity weight)
       let finalTexture: THREE.DataTexture;
       if (rotatedTextures.length === 1) {
-        finalTexture = rotatedTextures[0];
+        if (intensities[0] !== 1) {
+          // Apply single weight via blendHdriTextures
+          finalTexture = this.blendHdriTextures(rotatedTextures, intensities);
+        } else {
+          finalTexture = rotatedTextures[0];
+        }
       } else {
-        finalTexture = this.blendHdriTextures(rotatedTextures);
+        finalTexture = this.blendHdriTextures(rotatedTextures, intensities);
         // Dispose individual rotated textures after blending
         rotatedTextures.forEach(t => t.dispose());
       }
@@ -820,7 +1068,7 @@ export class ExtractorSceneManager {
    * Each HDRI contributes its full lighting, not averaged
    * Properly handles half-float (Uint16Array) data encoding
    */
-  private blendHdriTextures(textures: THREE.DataTexture[]): THREE.DataTexture {
+  private blendHdriTextures(textures: THREE.DataTexture[], weights?: number[]): THREE.DataTexture {
     if (textures.length === 0) {
       throw new Error('No textures to blend');
     }
@@ -844,19 +1092,21 @@ export class ExtractorSceneManager {
     // Convert to Float64Array for intermediate calculations
     // If half-float, decode the values first
     const blendedFloat = new Float64Array(totalPixels);
+    const w0 = weights?.[0] ?? 1;
     
     if (isHalfFloat && firstData instanceof Uint16Array) {
       for (let i = 0; i < totalPixels; i++) {
-        blendedFloat[i] = this.halfToFloat(firstData[i]);
+        blendedFloat[i] = this.halfToFloat(firstData[i]) * w0;
       }
     } else {
       for (let i = 0; i < totalPixels; i++) {
-        blendedFloat[i] = firstData[i];
+        blendedFloat[i] = firstData[i] * w0;
       }
     }
     
-    // Add remaining textures (additive - both lights contribute fully)
+    // Add remaining textures (additive blend, each weighted by its intensity)
     for (let t = 1; t < textures.length; t++) {
+      const w = weights?.[t] ?? 1;
       const tex = textures[t];
       const texWidth = tex.image.width;
       const texHeight = tex.image.height;
@@ -872,11 +1122,11 @@ export class ExtractorSceneManager {
       if (texWidth === width && texHeight === height && texData.length === totalPixels) {
         if (texIsHalfFloat && texData instanceof Uint16Array) {
           for (let i = 0; i < totalPixels; i++) {
-            blendedFloat[i] += this.halfToFloat(texData[i]);
+            blendedFloat[i] += this.halfToFloat(texData[i]) * w;
           }
         } else {
           for (let i = 0; i < totalPixels; i++) {
-            blendedFloat[i] += texData[i];
+            blendedFloat[i] += texData[i] * w;
           }
         }
       } else {
@@ -894,7 +1144,7 @@ export class ExtractorSceneManager {
               const val = texIsHalfFloat && texData instanceof Uint16Array 
                 ? this.halfToFloat(texData[srcIdx + c])
                 : texData[srcIdx + c];
-              blendedFloat[dstIdx + c] += val;
+              blendedFloat[dstIdx + c] += val * w;
             }
           }
         }
@@ -1222,47 +1472,21 @@ export class ExtractorSceneManager {
     // Apply HDRI intensity (unified — affects cue + everything)
     this.updateHdriIntensity(config);
 
-    // Key spotlight — position syncs with HDRI rotation for physically-correct shadows
-    const spotAngleRad = (hdriRotY * Math.PI) / 180;
-    const spotRadius = 6;
-    const spotX = Math.sin(spotAngleRad) * spotRadius;
-    const spotZ = Math.cos(spotAngleRad) * spotRadius;
-    this.spotLightBasePos.set(spotX, 5, spotZ);
-    this.spotLight = new THREE.SpotLight(0xffffff, 2.2);
-    this.spotLight.position.copy(this.spotLightBasePos);
-    this.spotLight.target.position.set(0, 0, 0);
-    this.spotLight.angle = Math.PI / 3;
-    this.spotLight.penumbra = 0.45;
-    this.spotLight.decay = 1.3;
-    this.spotLight.distance = 30;
-    this.spotLight.castShadow = true;
-    this.spotLight.shadow.mapSize.set(2048, 2048);
-    this.spotLight.shadow.camera.near = 0.5;
-    this.spotLight.shadow.camera.far = 30;
-    this.spotLight.shadow.bias = -0.0005;
-    this.spotLight.shadow.radius = 3;
-    this.scene.add(this.spotLight);
-    this.scene.add(this.spotLight.target);
+    // Setup HDRI light helpers (interactive scene components)
+    this.setupHdriLightHelpers(config);
 
-    // Fill lights
-    const fillPositions: [number, number, number][] = [[-3, 1, 2], [0, -1, 3], [3, 0.5, -1]];
-    fillPositions.forEach(([x, y, z]) => {
-      const fill = new THREE.PointLight(0xffffff, 0.2);
-      fill.position.set(x, y, z);
-      this.fillLights.push(fill);
-      this.scene.add(fill);
-    });
+    // HDRI-driven shadow lights (one DirectionalLight per HDRI layer)
+    this.setupHdriShadowLights(config);
 
     // ── Load PBR textures for wall and table ──
     const manifest = await loadTextureManifest();
 
-    // Wall: PBR texture + frame overlays
+    // Wall: PBR texture with subdivided geometry for displacement
     const wallPack = findTexturePack(manifest, config.wallSurface.texturePreset);
     let wallMaterial: THREE.MeshStandardMaterial;
     if (wallPack) {
       wallMaterial = await loadPBRTexturePack(wallPack);
     } else {
-      // Fallback: use old compositor approach
       const wallImages = await preloadFrameImages(config.wallSurface.frames);
       const wallTex = compositeSurfaceFrames(config.wallSurface, 2048, 2048, wallImages);
       wallTex.wrapS = THREE.ClampToEdgeWrapping;
@@ -1273,12 +1497,16 @@ export class ExtractorSceneManager {
       });
     }
     wallMaterial.envMapIntensity = config.wallSurface.envMapIntensity ?? 0.6;
-    this.backdrop = createWallBackdrop(wallMaterial, 34, 24);
+
+    // Subdivided wall geometry for better displacement mapping
+    const wallGeo = new THREE.PlaneGeometry(34, 24, 64, 64);
+    this.backdrop = new THREE.Mesh(wallGeo, wallMaterial);
+    this.backdrop.receiveShadow = true;
     this.backdrop.position.set(0, 4.5, -5.5);
     this.scene.add(this.backdrop);
     this.backdrop.userData = { type: 'wall' };
 
-    // Table: PBR texture + frame overlays
+    // Table: PBR texture with subdivided geometry
     const tableY = -7.5;
     const tableDepth = 12;
     const tablePack = findTexturePack(manifest, config.tableSurface.texturePreset);
@@ -1296,7 +1524,13 @@ export class ExtractorSceneManager {
       });
     }
     tableMaterial.envMapIntensity = config.tableSurface.envMapIntensity ?? 0.4;
-    this.tableSurface = createTableSurface(tableMaterial, 34, tableDepth, tableY);
+
+    // Subdivided table geometry for displacement
+    const tableGeo = new THREE.PlaneGeometry(34, tableDepth, 64, 64);
+    this.tableSurface = new THREE.Mesh(tableGeo, tableMaterial);
+    this.tableSurface.rotation.x = -Math.PI / 2;
+    this.tableSurface.position.y = tableY;
+    this.tableSurface.receiveShadow = true;
     this.tableSurface.position.z = -5.5 + tableDepth / 2;
     this.scene.add(this.tableSurface);
     this.tableSurface.userData = { type: 'table' };
@@ -1307,16 +1541,16 @@ export class ExtractorSceneManager {
     this.wallFramePlanes = this.buildFramePlanes(config.wallSurface, this.backdrop!, false, wallImages2);
     this.tableFramePlanes = this.buildFramePlanes(config.tableSurface, this.tableSurface!, true, tableImages2);
 
-    // Shadow floor — at table level, matching table dimensions
+    // Shadow planes — at table level and wall
     if (config.shadow.enabled) {
       this.shadowFloor = createShadowFloor(36, tableDepth + 2);
       this.shadowFloor.position.y = tableY + 0.02;
       this.shadowFloor.position.z = -5.5 + tableDepth / 2;
       this.scene.add(this.shadowFloor);
 
-      // Wall shadow plane — same position/size as wall backdrop, slightly in front
+      // Wall shadow plane — slightly in front of wall for shadow reception
       this.wallShadowPlane = createWallShadowPlane(34, 24);
-      this.wallShadowPlane.position.set(0, 4.5, -5.49);
+      this.wallShadowPlane.position.set(0, 4.5, -5.48);
       this.scene.add(this.wallShadowPlane);
     }
 
@@ -1571,29 +1805,14 @@ export class ExtractorSceneManager {
 
     // Apply surface HDRI separation
     this.updateSurfaceHdri(config);
+
+    // Update HDRI light helpers
+    this.updateHdriLightHelpers(config);
   }
 
-  /** Apply shadow config to spotlight + shadow floor */
+  /** Apply shadow config via HDRI-driven shadow lights */
   private updateShadowFromConfig(config: VideoStudioConfig): void {
-    const s = config.shadow;
-    if (!s.enabled) return;
-
-    if (this.spotLight) {
-      this.spotLight.shadow.radius = s.blur ?? 3;
-      this.spotLight.penumbra = s.softness ?? 0.45;
-      // Apply offset relative to HDRI-synced base position
-      this.spotLight.position.set(
-        this.spotLightBasePos.x + (s.offsetX ?? 0),
-        this.spotLightBasePos.y,
-        this.spotLightBasePos.z + (s.offsetY ?? 0)
-      );
-    }
-    if (this.shadowFloor) {
-      (this.shadowFloor.material as THREE.ShadowMaterial).opacity = s.intensity;
-    }
-    if (this.wallShadowPlane) {
-      (this.wallShadowPlane.material as THREE.ShadowMaterial).opacity = s.intensity * 0.6;
-    }
+    this.updateHdriShadowLights(config);
   }
 
   /** Apply HDRI intensity to scene environment */
@@ -2265,6 +2484,10 @@ export class ExtractorSceneManager {
     if (this.tableSurface) objects.push(this.tableSurface);
     objects.push(...this.wallFramePlanes);
     objects.push(...this.tableFramePlanes);
+    // HDRI light helpers
+    for (const entry of this.hdriLightHelpers) {
+      objects.push(entry.helper);
+    }
     if (this.model) objects.push(this.model);
     for (const im of this.instancedMeshes) objects.push(im);
     return objects;

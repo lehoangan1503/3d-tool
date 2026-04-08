@@ -12,8 +12,13 @@ export interface SelectionInfo {
     | "table"
     | "wallFrame"
     | "tableFrame"
+    | "hdriLight"
     | null;
   frameId?: string;
+  lightId?: string;
+  lightIndex?: number;
+  layerId?: string;
+  layerIndex?: number;
   object?: THREE.Object3D;
 }
 
@@ -28,6 +33,7 @@ const TRANSFORMABLE_TYPES = new Set([
   "table",
   "wallFrame",
   "tableFrame",
+  "hdriLight",
 ]);
 
 export class SceneViewControls {
@@ -193,6 +199,13 @@ export class SceneViewControls {
             return {
               type: "tableFrame",
               frameId: ud.frameId as string | undefined,
+              object: current,
+            };
+          case "hdriLight":
+            return {
+              type: "hdriLight",
+              layerId: ud.layerId as string | undefined,
+              layerIndex: ud.layerIndex as number | undefined,
               object: current,
             };
         }

@@ -42,6 +42,9 @@ import {
   Redo2,
   Save,
   RefreshCw,
+  Lightbulb,
+  Plus,
+  Trash2,
 } from "lucide-react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import {
@@ -53,6 +56,7 @@ import {
   DEFAULT_STUDIO_CONFIG,
   computeVideoDuration,
 } from "@/types/video-studio";
+import { createDefaultHdriLayer } from "@/types/extractor";
 import { CameraControlsPanel } from "./camera-controls-panel";
 import { CueSetupPanel } from "./cue-setup-panel";
 import { BackgroundPanel } from "./background-panel";
@@ -305,6 +309,7 @@ export function VideoStudio({
                 table: "background",
                 wallFrame: "background",
                 tableFrame: "background",
+                hdriLight: "lights",
               };
               const matchedSection = sectionMap[info.type];
               setExpandedSections((prev) => {
@@ -389,6 +394,28 @@ export function VideoStudio({
                 );
                 return { ...prev, tableSurface: { ...prev.tableSurface, frames } };
               });
+            } else if (info.type === "hdriLight" && info.layerId != null) {
+              const extractor = extractorRef.current;
+              if (extractor) {
+                const { rotationX: rotX, rotationY: rotY } =
+                  extractor.positionToHdriRotation(position);
+                // Scale maps to intensity (uniform scale, clamp 0.1–3)
+                const avgScale = (scale.x + scale.y + scale.z) / 3;
+                const newIntensity = Math.max(0.1, Math.min(3, avgScale));
+                setConfig((prev) => {
+                  const layers = [...prev.hdriConfig.layers];
+                  const idx = layers.findIndex((l) => l.id === info.layerId);
+                  if (idx >= 0) {
+                    layers[idx] = {
+                      ...layers[idx],
+                      rotationX: rotX,
+                      rotationY: rotY,
+                      intensity: newIntensity,
+                    };
+                  }
+                  return { ...prev, hdriConfig: { layers } };
+                });
+              }
             }
           },
           // Transform mode change (G/R/S keys)
@@ -495,6 +522,7 @@ export function VideoStudio({
     config.hdriFile,
     config.shadow.enabled,
     config.cueConfig.instances.length,
+    config.hdriConfig.layers.length,
     open,
   ]);
 
@@ -828,7 +856,7 @@ export function VideoStudio({
             {/* ---- Dynamic section cards ---- */}
             {(() => {
               // The active (auto-expanded by selection) section renders first, rest in default order
-              const defaultOrder = ["cue", "camera", "hdri", "background", "shadow"] as const;
+              const defaultOrder = ["cue", "camera", "lights", "hdri", "background", "shadow"] as const;
               const active = autoExpandedSectionRef.current;
               const ordered = active
                 ? [active, ...defaultOrder.filter((s) => s !== active)]
@@ -990,6 +1018,158 @@ export function VideoStudio({
                               onWallSurfaceChange={(s) => updateConfig("wallSurface", s)}
                               onTableSurfaceChange={(s) => updateConfig("tableSurface", s)}
                             />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  case "lights":
+                    return (
+                      <div key="lights" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+                        <div className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors">
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            className="flex items-center gap-2 flex-1 cursor-pointer"
+                            onClick={() => toggleSection("lights")}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection("lights"); } }}
+                          >
+                            <Lightbulb className="h-3.5 w-3.5 text-muted-foreground" />
+                            <span>HDRI Lights</span>
+                            <span className="ml-1 text-muted-foreground/60">({config.hdriConfig.layers.filter(l => l.enabled !== false).length}/{config.hdriConfig.layers.length})</span>
+                          </div>
+                          {config.hdriConfig.layers.length < 3 && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-5 w-5 p-0"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const layers = [...config.hdriConfig.layers];
+                                const newLayer = createDefaultHdriLayer();
+                                // Offset rotation for each new layer
+                                newLayer.rotationY = (layers.length * 120) % 360;
+                                newLayer.intensity = 0.5;
+                                layers.push(newLayer);
+                                setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                              }}
+                            >
+                              <Plus className="h-3 w-3" />
+                            </Button>
+                          )}
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            className="cursor-pointer"
+                            onClick={() => toggleSection("lights")}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection("lights"); } }}
+                          >
+                            {expandedSections.has("lights") ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+                          </div>
+                        </div>
+                        {expandedSections.has("lights") && (
+                          <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
+                            <p className="text-[10px] text-muted-foreground">
+                              Each light is a draggable HDRI environment layer. Use G to move (changes direction), S to scale (changes intensity).
+                            </p>
+                            {config.hdriConfig.layers.map((layer, idx) => (
+                              <div key={layer.id} className="rounded-md border border-border/40 bg-background/30 p-2 space-y-2">
+                                {/* Header */}
+                                <div className="flex items-center gap-1.5">
+                                  <Checkbox
+                                    checked={layer.enabled !== false}
+                                    onCheckedChange={(checked) => {
+                                      const layers = [...config.hdriConfig.layers];
+                                      layers[idx] = { ...layers[idx], enabled: checked === true };
+                                      setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                    }}
+                                    className="h-3 w-3"
+                                  />
+                                  <Sun className="h-3 w-3 text-yellow-400" />
+                                  <span className="text-[10px] font-medium flex-1">HDRI Light {idx + 1}</span>
+                                  {config.hdriConfig.layers.length > 1 && (
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-5 w-5 p-0 text-muted-foreground hover:text-destructive"
+                                      onClick={() => {
+                                        const layers = config.hdriConfig.layers.filter((_, i) => i !== idx);
+                                        setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                      }}
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                  )}
+                                </div>
+                                {/* HDRI File */}
+                                <div className="space-y-0.5">
+                                  <Label className="text-[10px] text-muted-foreground">Environment</Label>
+                                  <Select
+                                    value={layer.hdriType}
+                                    onValueChange={(v) => {
+                                      const layers = [...config.hdriConfig.layers];
+                                      layers[idx] = { ...layers[idx], hdriType: v };
+                                      setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                    }}
+                                  >
+                                    <SelectTrigger className="h-6 text-[10px]">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {HDRI_OPTIONS_FALLBACK.map((h) => (
+                                        <SelectItem key={h.id} value={h.id}>
+                                          {h.label}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                {/* Intensity */}
+                                <div className="space-y-0.5">
+                                  <Label className="text-[10px] text-muted-foreground">
+                                    Intensity — {((layer.intensity ?? 1) * 100).toFixed(0)}%
+                                  </Label>
+                                  <Slider
+                                    value={[layer.intensity ?? 1]}
+                                    onValueChange={([v]) => {
+                                      const layers = [...config.hdriConfig.layers];
+                                      layers[idx] = { ...layers[idx], intensity: v };
+                                      setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                    }}
+                                    min={0} max={3} step={0.05}
+                                  />
+                                </div>
+                                {/* Rotation Y (Direction) */}
+                                <div className="space-y-0.5">
+                                  <Label className="text-[10px] text-muted-foreground">
+                                    Direction — {layer.rotationY.toFixed(0)}°
+                                  </Label>
+                                  <Slider
+                                    value={[layer.rotationY]}
+                                    onValueChange={([v]) => {
+                                      const layers = [...config.hdriConfig.layers];
+                                      layers[idx] = { ...layers[idx], rotationY: v };
+                                      setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                    }}
+                                    min={0} max={360} step={1}
+                                  />
+                                </div>
+                                {/* Rotation X (Elevation) */}
+                                <div className="space-y-0.5">
+                                  <Label className="text-[10px] text-muted-foreground">
+                                    Elevation — {layer.rotationX.toFixed(0)}°
+                                  </Label>
+                                  <Slider
+                                    value={[layer.rotationX]}
+                                    onValueChange={([v]) => {
+                                      const layers = [...config.hdriConfig.layers];
+                                      layers[idx] = { ...layers[idx], rotationX: v };
+                                      setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                    }}
+                                    min={-90} max={90} step={1}
+                                  />
+                                </div>
+                              </div>
+                            ))}
                           </div>
                         )}
                       </div>

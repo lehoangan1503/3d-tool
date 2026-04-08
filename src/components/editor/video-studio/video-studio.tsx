@@ -501,8 +501,6 @@ export function VideoStudio({
 
   useEffect(() => {
     if (!extractorRef.current || !open) return;
-    // Cancel pending lightweight update — rebuild supersedes it
-    if (updateTimerRef.current) { clearTimeout(updateTimerRef.current); updateTimerRef.current = null; }
     if (rebuildTimerRef.current) clearTimeout(rebuildTimerRef.current);
     rebuildTimerRef.current = setTimeout(() => {
       rebuildScene();
@@ -675,11 +673,16 @@ export function VideoStudio({
               ref={previewContainerRef}
               className="flex-1 bg-black rounded-lg overflow-hidden relative"
             >
-              {isRebuilding && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
-                  <Loader2 className="h-6 w-6 animate-spin text-white" />
+              <div
+                className={`absolute inset-0 flex items-center justify-center bg-black z-10 transition-opacity duration-500 pointer-events-none ${
+                  isRebuilding ? "opacity-80" : "opacity-0"
+                }`}
+              >
+                <div className="flex flex-col items-center gap-2">
+                  <Loader2 className="h-8 w-8 animate-spin text-white/70" />
+                  <span className="text-xs text-white/50">Loading…</span>
                 </div>
-              )}
+              </div>
             </div>
 
             {/* Key hints for scene view */}

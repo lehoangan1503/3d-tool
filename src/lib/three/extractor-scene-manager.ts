@@ -99,10 +99,6 @@ export class ExtractorSceneManager {
   // Per-frame directional light for image extractor
   private directionalLight: THREE.DirectionalLight | null = null;
 
-  // Base scene lights (controlled by HDRI intensity)
-  private ambientLight: THREE.AmbientLight | null = null;
-  private hemisphereLight: THREE.HemisphereLight | null = null;
-
   // Track last loaded HDRI file for change detection
   private lastLoadedHdriFile: string = '';
 
@@ -187,15 +183,6 @@ export class ExtractorSceneManager {
 
     this.pmremGenerator = new THREE.PMREMGenerator(this.renderer);
     this.pmremGenerator.compileEquirectangularShader();
-
-    this.setupBasicLighting();
-  }
-
-  private setupBasicLighting() {
-    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
-    this.scene.add(this.ambientLight);
-    this.hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.4);
-    this.scene.add(this.hemisphereLight);
   }
 
   /** Load a texture from a URL, with repeat/wrapping applied */
@@ -367,7 +354,9 @@ export class ExtractorSceneManager {
 
       const pos = this.hdriRotationToPosition(layer.rotationX, layer.rotationY);
 
-      const light = new THREE.DirectionalLight(0xffffff, (layer.intensity ?? 1) * 0.8);
+      const baseIntensity = (layer.intensity ?? 1) * 0.8;
+      const light = new THREE.DirectionalLight(0xffffff, baseIntensity);
+      light.userData = { baseIntensity };
       light.position.copy(pos);
       light.target.position.set(0, 0, 0);
       light.castShadow = true;
@@ -405,7 +394,9 @@ export class ExtractorSceneManager {
 
       const pos = this.hdriRotationToPosition(layer.rotationX, layer.rotationY);
       entry.light.position.copy(pos);
-      entry.light.intensity = (layer.intensity ?? 1) * 0.8;
+      const baseIntensity = (layer.intensity ?? 1) * 0.8;
+      entry.light.intensity = baseIntensity;
+      entry.light.userData = { baseIntensity };
       entry.light.castShadow = shadow.enabled;
       entry.light.shadow.radius = shadow.blur ?? 3;
     }
@@ -468,8 +459,8 @@ export class ExtractorSceneManager {
   /** Convert 3D position → HDRI rotationX/rotationY (degrees) */
   positionToHdriRotation(pos: THREE.Vector3): { rotationX: number; rotationY: number } {
     const r = pos.length();
-    if (r < 0.01) return { rotationX: 0, rotationY: 0 };
-    const n = pos.clone().divideScalar(r);
+    // Normalize to unit vector; use direction even at very short distances
+    const n = r > 0.001 ? pos.clone().divideScalar(r) : new THREE.Vector3(0, 1, 0);
     const phi = Math.acos(THREE.MathUtils.clamp(n.y, -1, 1));
     const theta = Math.atan2(n.x, n.z);
     let rotX = 90 - THREE.MathUtils.radToDeg(phi);
@@ -1842,16 +1833,18 @@ export class ExtractorSceneManager {
     this.updateHdriShadowLights(config);
   }
 
-  /** Apply HDRI intensity to scene environment and base lights */
+  /** Apply HDRI intensity to scene environment and shadow lights */
   private updateHdriIntensity(config: VideoStudioConfig): void {
     const intensity = config.hdriIntensity ?? 1.0;
     // Apply to scene.environmentIntensity (Three.js r155+) — falls back gracefully
     if ('environmentIntensity' in this.scene) {
       (this.scene as THREE.Scene & { environmentIntensity: number }).environmentIntensity = intensity;
     }
-    // Scale base scene lights so intensity=0 means truly dark
-    if (this.ambientLight) this.ambientLight.intensity = 0.3 * intensity;
-    if (this.hemisphereLight) this.hemisphereLight.intensity = 0.4 * intensity;
+    // Scale HDRI shadow lights by global intensity
+    for (const entry of this.hdriShadowLights) {
+      const layerIntensity = entry.light.userData?.baseIntensity ?? entry.light.intensity;
+      entry.light.intensity = layerIntensity * intensity;
+    }
   }
 
   /** Apply per-surface envMapIntensity from config (unified HDRI approach) */

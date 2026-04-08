@@ -99,6 +99,13 @@ export class ExtractorSceneManager {
   // Per-frame directional light for image extractor
   private directionalLight: THREE.DirectionalLight | null = null;
 
+  // Base scene lights (controlled by HDRI intensity)
+  private ambientLight: THREE.AmbientLight | null = null;
+  private hemisphereLight: THREE.HemisphereLight | null = null;
+
+  // Track last loaded HDRI file for change detection
+  private lastLoadedHdriFile: string = '';
+
   // HDRI light helpers — interactive sun spheres on a sky dome
   private static readonly HDRI_DOME_RADIUS = 10;
   private hdriLightHelpers: Array<{
@@ -185,10 +192,10 @@ export class ExtractorSceneManager {
   }
 
   private setupBasicLighting() {
-    const ambient = new THREE.AmbientLight(0xffffff, 0.3);
-    this.scene.add(ambient);
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.4);
-    this.scene.add(hemi);
+    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+    this.scene.add(this.ambientLight);
+    this.hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.4);
+    this.scene.add(this.hemisphereLight);
   }
 
   /** Load a texture from a URL, with repeat/wrapping applied */
@@ -238,7 +245,7 @@ export class ExtractorSceneManager {
       light.position.copy(pos);
       light.target.position.set(0, 0, 0);
       light.castShadow = true;
-      light.shadow.mapSize.set(2048, 2048);
+      light.shadow.mapSize.set(4096, 4096);
       light.shadow.camera.near = 0.1;
       light.shadow.camera.far = 50;
       light.shadow.camera.left = -20;
@@ -364,14 +371,15 @@ export class ExtractorSceneManager {
       light.position.copy(pos);
       light.target.position.set(0, 0, 0);
       light.castShadow = true;
-      light.shadow.mapSize.set(2048, 2048);
+      light.shadow.mapSize.set(4096, 4096);
       light.shadow.camera.near = 0.1;
       light.shadow.camera.far = 50;
-      light.shadow.camera.left = -20;
-      light.shadow.camera.right = 20;
-      light.shadow.camera.top = 20;
-      light.shadow.camera.bottom = -20;
-      light.shadow.bias = -0.0005;
+      light.shadow.camera.left = -12;
+      light.shadow.camera.right = 12;
+      light.shadow.camera.top = 12;
+      light.shadow.camera.bottom = -12;
+      light.shadow.bias = 0.0001;
+      light.shadow.normalBias = 0.02;
       light.shadow.radius = shadow.blur ?? 3;
 
       this.scene.add(light);
@@ -413,6 +421,15 @@ export class ExtractorSceneManager {
   /** Get HDRI light helper objects for raycasting */
   getStudioLightHelpers(): THREE.Group[] {
     return this.hdriLightHelpers.map(e => e.helper);
+  }
+
+  /** Show or hide all editor helpers (HDRI sun spheres, camera helper, camera gizmo) */
+  private setHelpersVisible(visible: boolean): void {
+    for (const entry of this.hdriLightHelpers) {
+      entry.helper.visible = visible;
+    }
+    if (this.cameraHelper) this.cameraHelper.visible = visible;
+    if (this.cameraGizmo) this.cameraGizmo.visible = visible;
   }
 
   // ---------------------------------------------------------------------------
@@ -1459,8 +1476,10 @@ export class ExtractorSceneManager {
 
     // Load HDRI
     if (config.hdriFile) {
-      try { await this.loadHDRI(`/hdri/${config.hdriFile}`); }
-      catch (err) { console.warn('[ESM] Failed to load HDRI:', err); }
+      try {
+        await this.loadHDRI(`/hdri/${config.hdriFile}`);
+        this.lastLoadedHdriFile = config.hdriFile;
+      } catch (err) { console.warn('[ESM] Failed to load HDRI:', err); }
     }
 
     // Apply HDRI rotation from first layer
@@ -1550,7 +1569,7 @@ export class ExtractorSceneManager {
 
       // Wall shadow plane — slightly in front of wall for shadow reception
       this.wallShadowPlane = createWallShadowPlane(34, 24);
-      this.wallShadowPlane.position.set(0, 4.5, -5.48);
+      this.wallShadowPlane.position.set(0, 4.5, -5.35);
       this.scene.add(this.wallShadowPlane);
     }
 
@@ -1771,6 +1790,14 @@ export class ExtractorSceneManager {
     this.studioConfigRef = config;
     if (!this.model) return;
 
+    // Reload HDRI if file selection changed
+    if (config.hdriFile && config.hdriFile !== this.lastLoadedHdriFile) {
+      this.lastLoadedHdriFile = config.hdriFile;
+      this.loadHDRI(`/hdri/${config.hdriFile}`).catch(err =>
+        console.warn('[ESM] Failed to reload HDRI:', err)
+      );
+    }
+
     // Update cue instances
     this.updateCueInstances(config.cueConfig);
 
@@ -1815,13 +1842,16 @@ export class ExtractorSceneManager {
     this.updateHdriShadowLights(config);
   }
 
-  /** Apply HDRI intensity to scene environment */
+  /** Apply HDRI intensity to scene environment and base lights */
   private updateHdriIntensity(config: VideoStudioConfig): void {
     const intensity = config.hdriIntensity ?? 1.0;
     // Apply to scene.environmentIntensity (Three.js r155+) — falls back gracefully
     if ('environmentIntensity' in this.scene) {
       (this.scene as THREE.Scene & { environmentIntensity: number }).environmentIntensity = intensity;
     }
+    // Scale base scene lights so intensity=0 means truly dark
+    if (this.ambientLight) this.ambientLight.intensity = 0.3 * intensity;
+    if (this.hemisphereLight) this.hemisphereLight.intensity = 0.4 * intensity;
   }
 
   /** Apply per-surface envMapIntensity from config (unified HDRI approach) */
@@ -1870,6 +1900,9 @@ export class ExtractorSceneManager {
   ) {
     this.stopVideoPreview();
 
+    // Hide all helpers/gizmos so they don't appear in the recorded video
+    this.setHelpersVisible(false);
+
     // Setup cue instances for recording
     this.setupCueInstances(config.cueConfig);
 
@@ -1896,9 +1929,11 @@ export class ExtractorSceneManager {
     };
 
     this.mediaRecorder.onstop = () => {
+      this.setHelpersVisible(true);
       resolve(new Blob(this.recordedChunks, { type: getSupportedMimeType() }));
     };
     this.mediaRecorder.onerror = () => {
+      this.setHelpersVisible(true);
       reject(new Error('Recording failed'));
     };
 
@@ -2205,6 +2240,9 @@ export class ExtractorSceneManager {
     // Stop any running video preview before starting recording
     this.stopVideoPreview();
 
+    // Hide all helpers/gizmos so they don't appear in the recorded video
+    this.setHelpersVisible(false);
+
     // ── Scale cue ──
     const modelScale = config.modelScale ?? 7;
     const prevScale = this.model!.scale.clone();
@@ -2255,6 +2293,7 @@ export class ExtractorSceneManager {
     };
 
     const cleanup = () => {
+      this.setHelpersVisible(true);
       this.camera.up.set(0, 1, 0); // Reset camera roll
       if (wrapperGroup.parent) this.scene.remove(wrapperGroup);
       wrapperGroup.remove(this.model!);

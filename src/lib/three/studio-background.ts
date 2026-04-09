@@ -407,6 +407,66 @@ export function createWallShadowPlane(width: number = 30, height: number = 14): 
 }
 
 /**
+ * Single L-shaped shadow receiver spanning both wall and table surface.
+ * Eliminates the seam between separate floor/wall shadow planes and ensures
+ * uniform shadow intensity across the corner.
+ * Small offsets are baked into vertices to avoid z-fighting with the actual surfaces.
+ */
+export function createLShapedShadowMesh(
+  wallWidth: number,
+  wallHeight: number,
+  floorDepth: number,
+  cornerY: number,
+  wallZ: number,
+  opacity: number = 0.25
+): THREE.Mesh {
+  const hw = wallWidth / 2;
+  const floorFrontZ = wallZ + floorDepth;
+  // Z-fighting offsets: wall pushed slightly forward, floor pushed slightly up
+  const wallOff = 0.15;   // wall face z offset
+  const floorOff = 0.02;  // floor face y offset
+
+  // Wall face vertices (offset forward in Z)
+  const w0 = [-hw, cornerY,              wallZ + wallOff];
+  const w1 = [ hw, cornerY,              wallZ + wallOff];
+  const w2 = [-hw, cornerY + wallHeight, wallZ + wallOff];
+  const w3 = [ hw, cornerY + wallHeight, wallZ + wallOff];
+
+  // Floor face vertices (offset up in Y)
+  const f0 = [-hw, cornerY + floorOff, wallZ];
+  const f1 = [ hw, cornerY + floorOff, wallZ];
+  const f2 = [-hw, cornerY + floorOff, floorFrontZ];
+  const f3 = [ hw, cornerY + floorOff, floorFrontZ];
+
+  const vertices = new Float32Array([
+    // Wall face (2 triangles) — facing +Z
+    ...w0, ...w1, ...w3,
+    ...w0, ...w3, ...w2,
+    // Floor face (2 triangles) — facing +Y
+    ...f0, ...f3, ...f1,
+    ...f0, ...f2, ...f3,
+  ]);
+
+  const normals = new Float32Array([
+    // Wall face normals
+    0, 0, 1,  0, 0, 1,  0, 0, 1,
+    0, 0, 1,  0, 0, 1,  0, 0, 1,
+    // Floor face normals
+    0, 1, 0,  0, 1, 0,  0, 1, 0,
+    0, 1, 0,  0, 1, 0,  0, 1, 0,
+  ]);
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+
+  const material = new THREE.ShadowMaterial({ opacity });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+/**
  * Horizontal table surface.
  * Accepts a Texture (legacy) or pre-built MeshStandardMaterial (PBR).
  */

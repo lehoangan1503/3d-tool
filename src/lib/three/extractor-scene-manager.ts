@@ -14,6 +14,7 @@ import {
   createWallBackdrop,
   createShadowFloor,
   createWallShadowPlane,
+  createLShapedShadowMesh,
   createTableSurface,
   createFabricTexture,
   createStudioBackdrop,
@@ -416,9 +417,6 @@ export class ExtractorSceneManager {
 
     if (this.shadowFloor) {
       (this.shadowFloor.material as THREE.ShadowMaterial).opacity = shadow.intensity;
-    }
-    if (this.wallShadowPlane) {
-      (this.wallShadowPlane.material as THREE.ShadowMaterial).opacity = shadow.intensity * 0.6;
     }
   }
 
@@ -1729,17 +1727,20 @@ export class ExtractorSceneManager {
     this.wallFramePlanes = this.buildFramePlanes(config.wallSurface, this.backdrop!, false, wallImages2);
     this.tableFramePlanes = this.buildFramePlanes(config.tableSurface, this.tableSurface!, true, tableImages2);
 
-    // Shadow planes — at table level and wall
+    // Single L-shaped shadow receiver spanning wall + table seamlessly
     if (config.shadow.enabled) {
-      this.shadowFloor = createShadowFloor(36, tableDepth + 2);
-      this.shadowFloor.position.y = tableY + 0.02;
-      this.shadowFloor.position.z = -5.5 + tableDepth / 2;
+      const wallZ = -5.5;
+      const shadowMesh = createLShapedShadowMesh(
+        36,                    // width (slightly wider than surfaces)
+        24,                    // wall height
+        tableDepth + 2,        // floor depth
+        tableY,                // corner Y (where wall meets table)
+        wallZ,                 // wall Z position
+        config.shadow.intensity
+      );
+      // Offsets baked into vertices — no position adjustment needed
+      this.shadowFloor = shadowMesh;
       this.scene.add(this.shadowFloor);
-
-      // Wall shadow plane — slightly in front of wall for shadow reception
-      this.wallShadowPlane = createWallShadowPlane(34, 24);
-      this.wallShadowPlane.position.set(0, 4.5, -5.35);
-      this.scene.add(this.wallShadowPlane);
     }
 
     // Setup cue instances

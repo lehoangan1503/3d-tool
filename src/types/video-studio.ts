@@ -407,6 +407,24 @@ export function migrateSurfaceConfig(
   };
 }
 
+/** Merge a partial/old config with defaults so every field is guaranteed present */
+export function ensureFullConfig(partial: Partial<VideoStudioConfig>): VideoStudioConfig {
+  const d = structuredClone(DEFAULT_STUDIO_CONFIG);
+  return {
+    ...d,
+    ...partial,
+    cueConfig: { ...d.cueConfig, ...partial.cueConfig },
+    cameraStart: { ...d.cameraStart, ...partial.cameraStart },
+    cameraEnd: { ...d.cameraEnd, ...partial.cameraEnd },
+    easing: { ...d.easing, ...partial.easing },
+    wallSurface: { ...d.wallSurface, ...partial.wallSurface },
+    tableSurface: { ...d.tableSurface, ...partial.tableSurface },
+    hdriConfig: partial.hdriConfig?.layers ? partial.hdriConfig : d.hdriConfig,
+    cueHdri: { ...d.cueHdri, ...partial.cueHdri },
+    shadow: { ...d.shadow, ...partial.shadow },
+  };
+}
+
 /** Migrate a full VideoStudioConfig from old format */
 export function migrateVideoStudioConfig(config: VideoStudioConfig): VideoStudioConfig {
   const migrated = { ...config };
@@ -433,6 +451,10 @@ export function migrateVideoStudioConfig(config: VideoStudioConfig): VideoStudio
   // Migrate old configs without cueHdri
   if (!migrated.cueHdri) {
     migrated.cueHdri = { ...DEFAULT_CUE_HDRI };
+  }
+  // Migrate old "hd" quality to "2k"
+  if ((migrated.quality as string) === "hd") {
+    migrated.quality = "2k";
   }
   return migrated;
 }

@@ -49,6 +49,15 @@ export function FrameCanvas({
   const previousSelectedIdRef = useRef<string | null>(null);
   const wasDraggingRef = useRef(false);
   
+  // Canvas zoom/pan state (Z + scroll to zoom, Z + drag to pan)
+  const [canvasView, setCanvasView] = useState({ zoom: 1, panX: 0, panY: 0 });
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const zKeyDownRef = useRef(false);
+  const [zKeyDown, setZKeyDown] = useState(false);
+  const [isCanvasPanning, setIsCanvasPanning] = useState(false);
+  const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+  const wasPanningRef = useRef(false);
+
   const [isDragging, setIsDragging] = useState(false);
   const [dragType, setDragType] = useState<'move' | 'resize' | 'rotate' | 'cue-3d' | 'cue-pan' | null>(null);
   const [activeHandle, setActiveHandle] = useState<string | null>(null);
@@ -69,12 +78,20 @@ export function FrameCanvas({
       } else if (e.key.toLowerCase() === 'y' && !axisConstraint) {
         setAxisConstraint('y');
       }
+      if (e.key.toLowerCase() === 'z' && !e.repeat) {
+        zKeyDownRef.current = true;
+        setZKeyDown(true);
+      }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() === 'x' && axisConstraint === 'x') {
         setAxisConstraint(null);
       } else if (e.key.toLowerCase() === 'y' && axisConstraint === 'y') {
         setAxisConstraint(null);
+      }
+      if (e.key.toLowerCase() === 'z') {
+        zKeyDownRef.current = false;
+        setZKeyDown(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -85,8 +102,75 @@ export function FrameCanvas({
     };
   }, [axisConstraint]);
   
-  const scale = DISPLAY_SIZE / CANVAS_SIZE;
+  const renderScale = DISPLAY_SIZE / CANVAS_SIZE;
+  const interactionScale = renderScale * canvasView.zoom;
   const selectedFrame = frames.find(f => f.id === selectedFrameId && isCueFrame(f)) as CueFrame | undefined;
+
+  // Z + scroll → zoom the canvas viewport (native handler to allow preventDefault on wheel)
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+
+    const handler = (e: WheelEvent) => {
+      if (!zKeyDownRef.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const rect = wrapper.getBoundingClientRect();
+      const mx = e.clientX - rect.left - rect.width / 2;
+      const my = e.clientY - rect.top - rect.height / 2;
+
+      const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+
+      setCanvasView(prev => {
+        const newZoom = Math.max(0.25, Math.min(8, prev.zoom * zoomFactor));
+        const ratio = newZoom / prev.zoom;
+        return {
+          zoom: newZoom,
+          panX: mx * (1 - ratio) + prev.panX * ratio,
+          panY: my * (1 - ratio) + prev.panY * ratio,
+        };
+      });
+    };
+
+    wrapper.addEventListener('wheel', handler, { passive: false });
+    return () => wrapper.removeEventListener('wheel', handler);
+  }, []);
+
+  // Z + drag on background → pan the canvas
+  const handleCanvasPanStart = useCallback((e: React.MouseEvent) => {
+    if (!zKeyDownRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    panStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      panX: canvasView.panX,
+      panY: canvasView.panY,
+    };
+    setIsCanvasPanning(true);
+  }, [canvasView.panX, canvasView.panY]);
+
+  useEffect(() => {
+    if (!isCanvasPanning) return;
+    const handlePanMove = (e: MouseEvent) => {
+      setCanvasView(prev => ({
+        ...prev,
+        panX: panStartRef.current.panX + (e.clientX - panStartRef.current.x),
+        panY: panStartRef.current.panY + (e.clientY - panStartRef.current.y),
+      }));
+    };
+    const handlePanEnd = () => {
+      wasPanningRef.current = true;
+      setIsCanvasPanning(false);
+    };
+    window.addEventListener('mousemove', handlePanMove);
+    window.addEventListener('mouseup', handlePanEnd);
+    return () => {
+      window.removeEventListener('mousemove', handlePanMove);
+      window.removeEventListener('mouseup', handlePanEnd);
+    };
+  }, [isCanvasPanning]);
 
   // Pause the 60 FPS WebGL loop when no CUE frame is selected — image frames don't need 3D rendering.
   // Use selectedFrame?.id (not the full object) so this only fires when frame identity changes,
@@ -223,11 +307,15 @@ export function FrameCanvas({
     return () => clearTimeout(timeoutId);
   }, [hdriLayersKey, selectedFrame?.cue.lightAngle, extractorRef, extractorReady]);
 
-  // Only deselect on actual click (not after drag)
+  // Only deselect on actual click (not after drag or pan)
   const handleCanvasClick = (e: React.MouseEvent) => {
     // Ignore if we just finished dragging
     if (wasDraggingRef.current) {
       wasDraggingRef.current = false;
+      return;
+    }
+    if (wasPanningRef.current) {
+      wasPanningRef.current = false;
       return;
     }
     
@@ -311,8 +399,8 @@ export function FrameCanvas({
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!isDragging || !dragType) return;
 
-    const dx = (e.clientX - dragStartRef.current.x) / scale;
-    const dy = (e.clientY - dragStartRef.current.y) / scale;
+    const dx = (e.clientX - dragStartRef.current.x) / interactionScale;
+    const dy = (e.clientY - dragStartRef.current.y) / interactionScale;
     const frame = frames.find(f => f.id === dragStartRef.current.frameId);
     if (!frame) return;
 
@@ -416,7 +504,7 @@ export function FrameCanvas({
         },
       });
     }
-  }, [isDragging, dragType, activeHandle, frames, onFrameChange, scale, axisConstraint]);
+  }, [isDragging, dragType, activeHandle, frames, onFrameChange, interactionScale, axisConstraint]);
 
   const handleMouseUp = useCallback(() => {
     if (isDragging) {
@@ -430,6 +518,7 @@ export function FrameCanvas({
 
   const lastWheelRef = useRef(0);
   const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (zKeyDownRef.current) return; // Z held = canvas zoom, not cue zoom
     if (!selectedFrame) return;
     e.preventDefault();
     const now = Date.now();
@@ -466,13 +555,33 @@ export function FrameCanvas({
   };
 
   return (
-    <div className="flex-1 flex items-center justify-center p-4 bg-muted/20 overflow-auto">
+    <div
+      ref={wrapperRef}
+      className="flex-1 flex items-center justify-center p-4 bg-muted/20 overflow-hidden relative"
+      style={{ cursor: zKeyDown ? (isCanvasPanning ? 'grabbing' : 'zoom-in') : undefined }}
+      onMouseDown={handleCanvasPanStart}
+    >
+      {/* Canvas zoom indicator — fixed to wrapper, always visible */}
+      {!previewMode && canvasView.zoom !== 1 && (
+        <div
+          className="absolute top-2 right-2 bg-black/60 text-white text-xs px-2 py-1 rounded cursor-pointer z-50 hover:bg-black/80 pointer-events-auto"
+          onClick={(e) => {
+            e.stopPropagation();
+            setCanvasView({ zoom: 1, panX: 0, panY: 0 });
+          }}
+        >
+          🔍 {Math.round(canvasView.zoom * 100)}% — Reset
+        </div>
+      )}
+
       <div
         ref={containerRef}
         className="relative bg-background shadow-lg rounded-lg"
         style={{
           width: DISPLAY_SIZE,
           height: DISPLAY_SIZE,
+          transform: `translate(${canvasView.panX}px, ${canvasView.panY}px) scale(${canvasView.zoom})`,
+          transformOrigin: 'center center',
         }}
         onClick={handleCanvasClick}
       >
@@ -508,7 +617,7 @@ export function FrameCanvas({
               screenshot={frameScreenshots[frame.id] || null}
               selected={frame.id === selectedFrameId}
               onSelect={() => onSelectFrame(frame.id)}
-              scale={scale}
+              scale={renderScale}
               onTransformStart={(e, type, handle) => handleTransformStart(e, type, handle, frame)}
               previewMode={previewMode}
             />
@@ -520,10 +629,10 @@ export function FrameCanvas({
               data-frame-id={selectedFrame.id}
               className="absolute"
               style={{
-                left: selectedFrame.transform.x * scale,
-                top: selectedFrame.transform.y * scale,
-                width: selectedFrame.transform.width * scale,
-                height: selectedFrame.transform.height * scale,
+                left: selectedFrame.transform.x * renderScale,
+                top: selectedFrame.transform.y * renderScale,
+                width: selectedFrame.transform.width * renderScale,
+                height: selectedFrame.transform.height * renderScale,
                 transform: `rotate(${selectedFrame.transform.rotation}deg)`,
                 transformOrigin: 'center center',
               }}
@@ -559,10 +668,10 @@ export function FrameCanvas({
           <div
             className="absolute z-20 pointer-events-none"
             style={{
-              left: selectedFrame.transform.x * scale,
-              top: selectedFrame.transform.y * scale,
-              width: selectedFrame.transform.width * scale,
-              height: selectedFrame.transform.height * scale,
+              left: selectedFrame.transform.x * renderScale,
+              top: selectedFrame.transform.y * renderScale,
+              width: selectedFrame.transform.width * renderScale,
+              height: selectedFrame.transform.height * renderScale,
               transform: `rotate(${selectedFrame.transform.rotation}deg)`,
               transformOrigin: 'center center',
             }}
@@ -576,7 +685,7 @@ export function FrameCanvas({
                     className="absolute pointer-events-none"
                     style={{
                       top: '50%',
-                      left: -((selectedFrame.transform.x * scale) + 1000),
+                      left: -((selectedFrame.transform.x * renderScale) + 1000),
                       width: DISPLAY_SIZE + 2000,
                       height: 2,
                       backgroundColor: 'rgba(239, 68, 68, 0.8)',
@@ -590,7 +699,7 @@ export function FrameCanvas({
                     className="absolute pointer-events-none"
                     style={{
                       left: '50%',
-                      top: -((selectedFrame.transform.y * scale) + 1000),
+                      top: -((selectedFrame.transform.y * renderScale) + 1000),
                       width: 2,
                       height: DISPLAY_SIZE + 2000,
                       backgroundColor: 'rgba(34, 197, 94, 0.8)',

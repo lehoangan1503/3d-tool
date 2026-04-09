@@ -35,6 +35,7 @@ interface StudioTemplateSelectorProps {
   productId: string;
   currentConfig: VideoStudioConfig;
   onLoadConfig: (config: VideoStudioConfig) => void;
+  onNewTemplate: () => void;
 }
 
 export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector(
@@ -42,6 +43,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
     productId,
     currentConfig,
     onLoadConfig,
+    onNewTemplate,
   }: StudioTemplateSelectorProps,
   ref: Ref<StudioTemplateSelectorHandle>
 ) {
@@ -77,8 +79,8 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
 
   const handleSelectChange = (value: string) => {
     if (value === NEW_TEMPLATE_VALUE) {
-      setSaveName("");
-      setShowSaveDialog(true);
+      setSelectedId(null);
+      onNewTemplate();
       return;
     }
     setSelectedId(value);

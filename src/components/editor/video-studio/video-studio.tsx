@@ -55,7 +55,9 @@ import type { VideoStudioConfig, CameraKeyframe, CueHdriConfig } from "@/types/v
 import {
   DEFAULT_STUDIO_CONFIG,
   DEFAULT_CUE_HDRI,
-  computeVideoDuration,
+  VIDEO_QUALITY_PRESETS,
+  ensureFullConfig,
+  migrateVideoStudioConfig,
 } from "@/types/video-studio";
 import { createDefaultHdriLayer, STUDIO_WHITE_HDRI } from "@/types/extractor";
 import { CameraControlsPanel } from "./camera-controls-panel";
@@ -598,9 +600,12 @@ export function VideoStudio({
 
   const handleDownload = () => {
     if (!videoUrl) return;
+    const preset = VIDEO_QUALITY_PRESETS[config.quality];
+    const qualityLabel = `2k-${preset.fps}fps`;
+    const safeName = productName.replace(/[^a-zA-Z0-9-_]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
     const a = document.createElement("a");
     a.href = videoUrl;
-    a.download = `${productName}-studio-video.webm`;
+    a.download = `${safeName}-studio-${qualityLabel}.webm`;
     a.click();
   };
 
@@ -610,12 +615,7 @@ export function VideoStudio({
     setError(null);
   };
 
-  const duration = computeVideoDuration(
-    config.cameraStart,
-    config.cameraEnd,
-    config.cameraSpeed,
-    config.cameraDirection
-  );
+
 
   return (
     <Dialog
@@ -753,21 +753,26 @@ export function VideoStudio({
           </div>
 
           {/* Right: Controls */}
-          <div className="w-80 shrink-0 border-l border-border overflow-y-auto p-4 space-y-3">
-            {/* Camera minimap — live preview, fixed at top */}
+          <div className="w-80 shrink-0 border-l border-border flex flex-col">
+            {/* Camera minimap — fixed at top (doesn't scroll with controls) */}
             {viewMode === "scene" && (
-              <div className="relative rounded-lg overflow-hidden border border-border/50 bg-black">
-                <canvas
-                  ref={minimapCanvasRef}
-                  width={576}
-                  height={324}
-                  className="w-full h-auto block"
-                />
-                <span className="absolute top-1.5 left-2 text-[9px] text-white/70 font-medium bg-black/40 px-1.5 py-0.5 rounded">
-                  Camera View
-                </span>
+              <div className="shrink-0 p-4 pb-2 border-b border-border/30">
+                <div className="relative rounded-lg overflow-hidden border border-border/50 bg-black">
+                  <canvas
+                    ref={minimapCanvasRef}
+                    width={576}
+                    height={324}
+                    className="w-full h-auto block"
+                  />
+                  <span className="absolute top-1.5 left-2 text-[9px] text-white/70 font-medium bg-black/40 px-1.5 py-0.5 rounded">
+                    Camera View
+                  </span>
+                </div>
               </div>
             )}
+
+            {/* Scrollable controls area */}
+            <div className="overflow-y-auto p-4 space-y-3 flex-1">
 
             {/* Template selector — always visible at top */}
             <StudioTemplateSelector
@@ -775,13 +780,15 @@ export function VideoStudio({
               productId={productId}
               currentConfig={config}
               onLoadConfig={(c) => {
-                // Migrate old "hd" quality to "2k"
-                if ((c.quality as string) === "hd") c = { ...c, quality: "2k" };
-                setConfig(c);
+                const migrated = migrateVideoStudioConfig(ensureFullConfig(c));
+                setConfig(migrated);
+              }}
+              onNewTemplate={() => {
+                setConfig(structuredClone(DEFAULT_STUDIO_CONFIG));
               }}
             />
 
-            {/* Quality & Duration — always visible */}
+            {/* Quality — always visible */}
             <div className="flex items-center gap-2 text-xs">
               <Select
                 value={config.quality}
@@ -797,8 +804,6 @@ export function VideoStudio({
                   <SelectItem value="2k120">2K 120fps</SelectItem>
                 </SelectContent>
               </Select>
-              <span className="text-muted-foreground">·</span>
-              <span className="font-mono text-muted-foreground">{duration.toFixed(1)}s</span>
             </div>
 
             {/* Transform controls — shown when object selected in scene view */}
@@ -1285,6 +1290,7 @@ export function VideoStudio({
                 }
               });
             })()}
+            </div>
           </div>
         </div>
 

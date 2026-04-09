@@ -4,7 +4,7 @@ import { memo } from "react";
 import { cn } from "@/lib/utils";
 import { RotateCw, ImageIcon } from "lucide-react";
 import type { ExtractorFrame } from "@/types/extractor";
-import { isCueFrame, isImageFrame } from "@/types/extractor";
+import { isCueFrame, isImageFrame, imageGradientToCss } from "@/types/extractor";
 import { resolveStorageUrl } from "@/lib/resolve-storage-url";
 
 interface StaticFrameProps {
@@ -93,7 +93,9 @@ export function StaticFrameInner({
               <div
                 className="absolute inset-0"
                 style={{
-                  backgroundColor: frame.imageSettings.backgroundColor,
+                  ...(frame.imageSettings.backgroundType === "gradient" && frame.imageSettings.backgroundGradient
+                    ? { background: imageGradientToCss(frame.imageSettings.backgroundGradient) }
+                    : { backgroundColor: frame.imageSettings.backgroundColor }),
                   opacity: frame.imageSettings.backgroundOpacity ?? 1,
                 }}
               />

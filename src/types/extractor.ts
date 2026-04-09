@@ -318,10 +318,19 @@ export interface Rotation3D {
   z: number; // degrees, -180 to 180
 }
 
+/** Gradient background for image frames */
+export interface ImageGradient {
+  name: string;     // Gradient preset name
+  colors: string[]; // 2+ hex colors
+  angle: number;    // 0–360 degrees
+}
+
 /** Settings specific to image frames */
 export interface ImageSettings {
   imageUrl: string | null; // Blob/data URL while editing; storage URL after save
+  backgroundType: "color" | "gradient"; // Which background mode is active
   backgroundColor: string; // Hex color (#ffffff)
+  backgroundGradient?: ImageGradient; // Gradient preset + angle
   backgroundEnabled: boolean; // Show background fill behind the image
   backgroundOpacity: number; // 0–1, opacity of the background fill layer
   objectFit: ObjectFit;
@@ -334,6 +343,7 @@ export interface ImageSettings {
 /** Default image settings */
 export const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
   imageUrl: null,
+  backgroundType: "color",
   backgroundColor: "#2a2a2a",
   backgroundEnabled: true,
   backgroundOpacity: 1,
@@ -343,6 +353,11 @@ export const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
   opacity: 1,
   blendMode: "normal",
 };
+
+/** Build a CSS linear-gradient string from an ImageGradient */
+export function imageGradientToCss(g: ImageGradient): string {
+  return `linear-gradient(${g.angle}deg, ${g.colors.join(", ")})`;
+}
 
 /** Frame type discriminator */
 export type FrameType = "cue" | "image";

@@ -6,9 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Images, Trash2, Link2, Link2Off, Check } from "lucide-react";
-import type { ImageFrame, ObjectFit } from "@/types/extractor";
+import { Images, Trash2, Link2, Link2Off, Check, Palette, Blend } from "lucide-react";
+import type { ImageFrame, ObjectFit, ImageGradient } from "@/types/extractor";
+import { imageGradientToCss } from "@/types/extractor";
 import { ImagePickerDialog } from "./image-picker-dialog";
+import { GradientPickerDialog } from "./gradient-picker-dialog";
 import { resolveStorageUrl } from "@/lib/resolve-storage-url";
 
 interface ImageFrameControlsProps {
@@ -25,6 +27,7 @@ const OBJECT_FIT_OPTIONS: { value: ObjectFit; label: string }[] = [
 export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsProps) {
   const [linkedDimensions, setLinkedDimensions] = useState(frame.imageSettings.objectFit !== 'custom');
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [gradientPickerOpen, setGradientPickerOpen] = useState(false);
 
   const { imageSettings, transform } = frame;
 
@@ -149,11 +152,10 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
         </div>
       )}
 
-      {/* Background Color — with toggle */}
+      {/* Background — Color / Gradient */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <Label className="text-xs font-medium text-muted-foreground">Background</Label>
-          {/* Tick toggle */}
           <button
             type="button"
             onClick={() => updateImageSettings({ backgroundEnabled: !bgEnabled })}
@@ -169,21 +171,97 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
         </div>
         {bgEnabled && (
           <div className="space-y-2">
-            <div className="flex gap-2">
-              <Input
-                type="color"
-                value={imageSettings.backgroundColor}
-                onChange={(e) => updateImageSettings({ backgroundColor: e.target.value })}
-                className="w-10 h-8 p-0.5 cursor-pointer"
-              />
-              <Input
-                type="text"
-                value={imageSettings.backgroundColor}
-                onChange={(e) => updateImageSettings({ backgroundColor: e.target.value })}
-                className="flex-1 h-8 font-mono text-xs"
-                placeholder="#2a2a2a"
-              />
+            {/* Tabs: Color | Gradient */}
+            <div className="flex rounded-md border border-border text-xs overflow-hidden">
+              <button
+                type="button"
+                className={`flex-1 flex items-center justify-center gap-1 py-1.5 transition-colors ${
+                  (imageSettings.backgroundType ?? "color") === "color"
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-muted"
+                }`}
+                onClick={() => updateImageSettings({ backgroundType: "color" })}
+              >
+                <Palette className="w-3 h-3" /> Color
+              </button>
+              <button
+                type="button"
+                className={`flex-1 flex items-center justify-center gap-1 py-1.5 transition-colors ${
+                  imageSettings.backgroundType === "gradient"
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-muted"
+                }`}
+                onClick={() => updateImageSettings({ backgroundType: "gradient" })}
+              >
+                <Blend className="w-3 h-3" /> Gradient
+              </button>
             </div>
+
+            {(imageSettings.backgroundType ?? "color") === "color" ? (
+              /* ── Color picker ── */
+              <div className="flex gap-2">
+                <Input
+                  type="color"
+                  value={imageSettings.backgroundColor}
+                  onChange={(e) => updateImageSettings({ backgroundColor: e.target.value })}
+                  className="w-10 h-8 p-0.5 cursor-pointer"
+                />
+                <Input
+                  type="text"
+                  value={imageSettings.backgroundColor}
+                  onChange={(e) => updateImageSettings({ backgroundColor: e.target.value })}
+                  className="flex-1 h-8 font-mono text-xs"
+                  placeholder="#2a2a2a"
+                />
+              </div>
+            ) : (
+              /* ── Gradient picker ── */
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  className="w-full h-10 rounded-md border border-border overflow-hidden hover:border-primary/60 transition-colors"
+                  onClick={() => setGradientPickerOpen(true)}
+                  title={imageSettings.backgroundGradient?.name ?? "Choose gradient"}
+                >
+                  <div
+                    className="w-full h-full"
+                    style={{
+                      background: imageSettings.backgroundGradient
+                        ? imageGradientToCss(imageSettings.backgroundGradient)
+                        : "linear-gradient(90deg, #667eea, #764ba2)",
+                    }}
+                  />
+                </button>
+                {imageSettings.backgroundGradient && (
+                  <p className="text-[10px] text-muted-foreground text-center truncate">
+                    {imageSettings.backgroundGradient.name}
+                  </p>
+                )}
+                {/* Angle slider */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Angle</span>
+                    <span className="text-muted-foreground">{imageSettings.backgroundGradient?.angle ?? 90}°</span>
+                  </div>
+                  <Slider
+                    value={[imageSettings.backgroundGradient?.angle ?? 90]}
+                    onValueChange={([v]) => {
+                      const current = imageSettings.backgroundGradient ?? {
+                        name: "Default",
+                        colors: ["#667eea", "#764ba2"],
+                        angle: 90,
+                      };
+                      updateImageSettings({ backgroundGradient: { ...current, angle: v } });
+                    }}
+                    min={0}
+                    max={360}
+                    step={1}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Opacity — shared by both modes */}
             <div className="space-y-1">
               <div className="flex justify-between text-xs">
                 <span className="text-muted-foreground">Opacity</span>
@@ -200,6 +278,14 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
           </div>
         )}
       </div>
+
+      {/* Gradient Picker Dialog */}
+      <GradientPickerDialog
+        open={gradientPickerOpen}
+        onClose={() => setGradientPickerOpen(false)}
+        onSelect={(g) => updateImageSettings({ backgroundType: "gradient", backgroundGradient: g })}
+        currentAngle={imageSettings.backgroundGradient?.angle ?? 90}
+      />
 
       {/* Dimensions */}
       <div className="space-y-1.5">

@@ -11,7 +11,7 @@ import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import { FrameCanvas, CANVAS_SIZE } from "./frame-canvas";
 import { FrameControlsPanel } from "./frame-controls-panel";
 import { DownloadMultipleDialog } from "./download-multiple-dialog";
-import type { ExtractorFrame, ExtractorReference, TemplateKey, CueFrame, ImageFrame } from "@/types/extractor";
+import type { ExtractorFrame, ExtractorReference, TemplateKey, CueFrame, ImageFrame, ImageGradient } from "@/types/extractor";
 import { createDefaultFrame, createDefaultImageFrame, FRAME_TEMPLATES, isCueFrame, isImageFrame } from "@/types/extractor";
 import { resolveStorageUrl } from "@/lib/resolve-storage-url";
 import { useUndoable } from "@/hooks/use-undoable";
@@ -19,6 +19,25 @@ import { useUndoable } from "@/hooks/use-undoable";
 /**
  * Draws an image onto a 2D canvas context respecting object-fit behaviour,
  * matching the CSS preview in StaticFrame.
+/**
+ * Create a CanvasGradient from an ImageGradient within a rect centred on (0,0).
+ */
+function createCanvasGradient(
+  ctx: CanvasRenderingContext2D,
+  g: ImageGradient,
+  w: number,
+  h: number,
+): CanvasGradient {
+  const rad = (g.angle * Math.PI) / 180;
+  const halfDiag = Math.sqrt(w * w + h * h) / 2;
+  const dx = Math.cos(rad) * halfDiag;
+  const dy = Math.sin(rad) * halfDiag;
+  const grad = ctx.createLinearGradient(-dx, -dy, dx, dy);
+  g.colors.forEach((c, i) => grad.addColorStop(i / Math.max(g.colors.length - 1, 1), c));
+  return grad;
+}
+
+/**
  * The destination rect is centred on (0, 0) — caller must translate first.
  */
 function drawImageWithObjectFit(
@@ -541,7 +560,11 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           // Draw background fill
           if (frame.imageSettings.backgroundEnabled) {
             ctx.globalAlpha = frame.imageSettings.backgroundOpacity ?? 1;
-            ctx.fillStyle = frame.imageSettings.backgroundColor;
+            if (frame.imageSettings.backgroundType === "gradient" && frame.imageSettings.backgroundGradient) {
+              ctx.fillStyle = createCanvasGradient(ctx, frame.imageSettings.backgroundGradient, frame.transform.width, frame.transform.height);
+            } else {
+              ctx.fillStyle = frame.imageSettings.backgroundColor;
+            }
             ctx.fillRect(-hw, -hh, frame.transform.width, frame.transform.height);
             ctx.globalAlpha = 1;
           }
@@ -570,7 +593,10 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       // Download
       const link = document.createElement("a");
       link.href = canvas.toDataURL("image/png");
-      link.download = `${productName.replace(/\s+/g, "-")}-cue-extract.png`;
+      const refName = references.find(r => r.id === selectedReferenceId)?.name;
+      const nameParts = [productName.replace(/\s+/g, "-"), "cue-extract"];
+      if (refName) nameParts.push(refName.replace(/\s+/g, "-"));
+      link.download = `${nameParts.join("-")}.png`;
       link.click();
     } catch (err) {
       setError("Export failed");
@@ -661,7 +687,11 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           // Draw background fill
           if (frame.imageSettings.backgroundEnabled) {
             ctx.globalAlpha = frame.imageSettings.backgroundOpacity ?? 1;
-            ctx.fillStyle = frame.imageSettings.backgroundColor;
+            if (frame.imageSettings.backgroundType === "gradient" && frame.imageSettings.backgroundGradient) {
+              ctx.fillStyle = createCanvasGradient(ctx, frame.imageSettings.backgroundGradient, frame.transform.width, frame.transform.height);
+            } else {
+              ctx.fillStyle = frame.imageSettings.backgroundColor;
+            }
             ctx.fillRect(-hw, -hh, frame.transform.width, frame.transform.height);
             ctx.globalAlpha = 1;
           }

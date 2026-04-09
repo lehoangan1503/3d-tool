@@ -127,6 +127,33 @@ function KeyframeSection({
         max={15}
         step={0.1}
       />
+      <PositionSlider
+        label="Rot X"
+        value={keyframe.rotationX ?? 0}
+        onChange={(v) => update("rotationX", v)}
+        min={-3.14}
+        max={3.14}
+        step={0.01}
+        decimals={2}
+      />
+      <PositionSlider
+        label="Rot Y"
+        value={keyframe.rotationY ?? 0}
+        onChange={(v) => update("rotationY", v)}
+        min={-3.14}
+        max={3.14}
+        step={0.01}
+        decimals={2}
+      />
+      <PositionSlider
+        label="Rot Z"
+        value={keyframe.rotationZ ?? 0}
+        onChange={(v) => update("rotationZ", v)}
+        min={-3.14}
+        max={3.14}
+        step={0.01}
+        decimals={2}
+      />
     </div>
   );
 }

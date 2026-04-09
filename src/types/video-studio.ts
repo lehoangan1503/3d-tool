@@ -218,6 +218,20 @@ export const GRADIENT_PRESETS: GradientPreset[] = [
 
 // ── Full Studio Config ──
 
+export interface CueHdriConfig {
+  hdriType: string;       // HDRI filename (e.g. "bloem_train_track_clear_2k.hdr")
+  rotationX: number;      // 0-360 degrees (vertical shift)
+  rotationY: number;      // 0-360 degrees (horizontal shift)
+  intensity: number;      // 0-3
+}
+
+export const DEFAULT_CUE_HDRI: CueHdriConfig = {
+  hdriType: "bloem_train_track_clear_2k.hdr",
+  rotationX: 0,
+  rotationY: 300,
+  intensity: 1.0,
+};
+
 export interface VideoStudioConfig {
   cueConfig: CueConfig;
   cameraDirection: CameraDirection;
@@ -230,6 +244,7 @@ export interface VideoStudioConfig {
   tableSurface: SurfaceConfig;
   hdriConfig: { layers: HdriLayer[] };
   hdriIntensity: number;               // Environment intensity (0–3, default 1.0)
+  cueHdri: CueHdriConfig;             // Cue-only HDRI lighting (separate from studio surface light)
   quality: "2k" | "2k120";
   shadow: { enabled: boolean; intensity: number; blur: number; softness: number; offsetX: number; offsetY: number };
   hdriFile: string;
@@ -249,6 +264,7 @@ export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
   tableSurface: { ...DEFAULT_TABLE_SURFACE },
   hdriConfig: { layers: [createDefaultHdriLayer()] },
   hdriIntensity: 1.0,
+  cueHdri: { ...DEFAULT_CUE_HDRI },
   quality: "2k",
   shadow: { enabled: true, intensity: 0.35, blur: 4, softness: 0.5, offsetX: 0, offsetY: 0 },
   hdriFile: "ferndale_studio_07_2k.hdr",
@@ -413,6 +429,10 @@ export function migrateVideoStudioConfig(config: VideoStudioConfig): VideoStudio
         enabled: l.enabled ?? true,
       })),
     };
+  }
+  // Migrate old configs without cueHdri
+  if (!migrated.cueHdri) {
+    migrated.cueHdri = { ...DEFAULT_CUE_HDRI };
   }
   return migrated;
 }

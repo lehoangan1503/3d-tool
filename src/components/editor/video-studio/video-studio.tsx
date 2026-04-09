@@ -51,9 +51,10 @@ import {
   ExtractorSceneManager,
   HDRI_OPTIONS_FALLBACK,
 } from "@/lib/three/extractor-scene-manager";
-import type { VideoStudioConfig, CameraKeyframe } from "@/types/video-studio";
+import type { VideoStudioConfig, CameraKeyframe, CueHdriConfig } from "@/types/video-studio";
 import {
   DEFAULT_STUDIO_CONFIG,
+  DEFAULT_CUE_HDRI,
   computeVideoDuration,
 } from "@/types/video-studio";
 import { createDefaultHdriLayer, STUDIO_WHITE_HDRI } from "@/types/extractor";
@@ -559,6 +560,13 @@ export function VideoStudio({
     setVideoUrl(null);
     sceneViewControlsRef.current?.setEnabled(false);
 
+    // Force camera view during recording so user sees the camera path animation
+    const prevViewMode = viewMode;
+    if (viewMode !== "camera") {
+      setViewMode("camera");
+      extractorRef.current.setViewMode("camera");
+    }
+
     try {
       const blob = await extractorRef.current.startStudioRecording(config, (p) =>
         setProgress(p)
@@ -571,7 +579,9 @@ export function VideoStudio({
       setError(err instanceof Error ? err.message : "Recording failed");
     } finally {
       setIsRecording(false);
-      sceneViewControlsRef.current?.setEnabled(true);
+      // Restore previous view mode
+      setViewMode(prevViewMode);
+      sceneViewControlsRef.current?.setEnabled(prevViewMode === "scene");
       // Restart preview at container size
       if (extractorRef.current && previewContainerRef.current) {
         const rect = previewContainerRef.current.getBoundingClientRect();
@@ -870,7 +880,7 @@ export function VideoStudio({
             {/* ---- Dynamic section cards ---- */}
             {(() => {
               // The active (auto-expanded by selection) section renders first, rest in default order
-              const defaultOrder = ["cue", "camera", "lights", "background", "shadow"] as const;
+              const defaultOrder = ["cue", "camera", "cue-hdri", "lights", "background", "shadow"] as const;
               const active = autoExpandedSectionRef.current;
               const ordered = active
                 ? [active, ...defaultOrder.filter((s) => s !== active)]
@@ -959,6 +969,100 @@ export function VideoStudio({
                         )}
                       </div>
                     );
+                  case "cue-hdri":
+                    return (
+                      <div key="cue-hdri" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
+                          onClick={() => toggleSection("cue-hdri")}
+                        >
+                          <Sun className="h-3.5 w-3.5 text-yellow-400" />
+                          <span>Cue HDRI</span>
+                          <span className="flex-1" />
+                          {expandedSections.has("cue-hdri") ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+                        </button>
+                        {expandedSections.has("cue-hdri") && (
+                          <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
+                            <p className="text-[10px] text-muted-foreground">
+                              HDRI environment applied to cue only (not studio surfaces).
+                            </p>
+                            {/* HDRI Type */}
+                            <div className="space-y-0.5">
+                              <Label className="text-[10px] text-muted-foreground">Environment</Label>
+                              <Select
+                                value={config.cueHdri?.hdriType ?? DEFAULT_CUE_HDRI.hdriType}
+                                onValueChange={(v) => {
+                                  setConfig((prev) => ({
+                                    ...prev,
+                                    cueHdri: { ...(prev.cueHdri ?? DEFAULT_CUE_HDRI), hdriType: v },
+                                  }));
+                                }}
+                              >
+                                <SelectTrigger className="h-6 text-[10px]">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {HDRI_OPTIONS_FALLBACK.filter((h) => h.id !== STUDIO_WHITE_HDRI).map((h) => (
+                                    <SelectItem key={h.id} value={h.id}>
+                                      {h.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            {/* Rotation Y (Horizontal) */}
+                            <div className="space-y-0.5">
+                              <Label className="text-[10px] text-muted-foreground">
+                                Horizontal — {(config.cueHdri?.rotationY ?? DEFAULT_CUE_HDRI.rotationY).toFixed(0)}°
+                              </Label>
+                              <Slider
+                                value={[config.cueHdri?.rotationY ?? DEFAULT_CUE_HDRI.rotationY]}
+                                onValueChange={([v]) => {
+                                  setConfig((prev) => ({
+                                    ...prev,
+                                    cueHdri: { ...(prev.cueHdri ?? DEFAULT_CUE_HDRI), rotationY: v },
+                                  }));
+                                }}
+                                min={0} max={360} step={1}
+                              />
+                            </div>
+                            {/* Rotation X (Vertical) */}
+                            <div className="space-y-0.5">
+                              <Label className="text-[10px] text-muted-foreground">
+                                Vertical — {(config.cueHdri?.rotationX ?? DEFAULT_CUE_HDRI.rotationX).toFixed(0)}°
+                              </Label>
+                              <Slider
+                                value={[config.cueHdri?.rotationX ?? DEFAULT_CUE_HDRI.rotationX]}
+                                onValueChange={([v]) => {
+                                  setConfig((prev) => ({
+                                    ...prev,
+                                    cueHdri: { ...(prev.cueHdri ?? DEFAULT_CUE_HDRI), rotationX: v },
+                                  }));
+                                }}
+                                min={0} max={360} step={1}
+                              />
+                            </div>
+                            {/* Intensity */}
+                            <div className="space-y-0.5">
+                              <Label className="text-[10px] text-muted-foreground">
+                                Intensity — {((config.cueHdri?.intensity ?? DEFAULT_CUE_HDRI.intensity) * 100).toFixed(0)}%
+                              </Label>
+                              <Slider
+                                value={[config.cueHdri?.intensity ?? DEFAULT_CUE_HDRI.intensity]}
+                                onValueChange={([v]) => {
+                                  setConfig((prev) => ({
+                                    ...prev,
+                                    cueHdri: { ...(prev.cueHdri ?? DEFAULT_CUE_HDRI), intensity: v },
+                                  }));
+                                }}
+                                min={0} max={3} step={0.05}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
                   case "lights":
                     return (
                       <div key="lights" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
@@ -971,7 +1075,7 @@ export function VideoStudio({
                             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection("lights"); } }}
                           >
                             <Lightbulb className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span>HDRI Lights</span>
+                            <span>Studio Lights</span>
                             <span className="ml-1 text-muted-foreground/60">({config.hdriConfig.layers.filter(l => l.enabled !== false).length}/{config.hdriConfig.layers.length})</span>
                           </div>
                           {config.hdriConfig.layers.length < 3 && (
@@ -1006,7 +1110,7 @@ export function VideoStudio({
                         {expandedSections.has("lights") && (
                           <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
                             <p className="text-[10px] text-muted-foreground">
-                              Each light is a draggable HDRI environment layer. Use G to move (changes direction), S to scale (changes intensity).
+                              Studio lights control shadow direction and surface lighting. Use G to move, S to scale.
                             </p>
                             {config.hdriConfig.layers.map((layer, idx) => (
                               <div key={layer.id} className="rounded-md border border-border/40 bg-background/30 p-2 space-y-2">
@@ -1022,7 +1126,7 @@ export function VideoStudio({
                                     className="h-3 w-3"
                                   />
                                   <Sun className="h-3 w-3 text-yellow-400" />
-                                  <span className="text-[10px] font-medium flex-1">HDRI Light {idx + 1}</span>
+                                  <span className="text-[10px] font-medium flex-1">Studio Light {idx + 1}</span>
                                   {config.hdriConfig.layers.length > 1 && (
                                     <Button
                                       variant="ghost"

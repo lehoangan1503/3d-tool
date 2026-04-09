@@ -21,8 +21,8 @@ import {
   findTexturePack,
   loadPBRTexturePack,
 } from './studio-background';
-import type { VideoStudioConfig, CameraKeyframe, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig } from '@/types/video-studio';
-import { computeVideoDuration, createEasingFunction, applyDirection, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS } from '@/types/video-studio';
+import type { VideoStudioConfig, CameraKeyframe, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig, CueHdriConfig } from '@/types/video-studio';
+import { computeVideoDuration, createEasingFunction, applyDirection, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI } from '@/types/video-studio';
 import { compositeSurfaceFrames, preloadFrameImages } from './background-compositor';
 
 // Available HDRI options (same as editor-client)
@@ -74,6 +74,9 @@ export class ExtractorSceneManager {
   private envRenderTarget: THREE.WebGLRenderTarget | null = null;
   /** Solid white env map for wall/table surfaces — prevents HDRI reflections */
   private surfaceEnvRT: THREE.WebGLRenderTarget | null = null;
+  /** Cue-only HDRI env map (separate from studio surfaces) */
+  private cueEnvRT: THREE.WebGLRenderTarget | null = null;
+  private lastCueHdriKey: string = '';
   private isDisposed = false;
 
   // HDRI state - supports multi-HDRI
@@ -806,6 +809,75 @@ export class ExtractorSceneManager {
     return this.surfaceEnvRT.texture;
   }
 
+  /** Apply an HDRI environment to cue materials only (not surfaces).
+   *  Loads the HDRI, applies rotation, processes through PMREM, and sets
+   *  material.envMap on all cue model meshes. */
+  async setCueHdri(config: CueHdriConfig): Promise<void> {
+    const key = JSON.stringify({
+      t: config.hdriType,
+      rx: Math.round(config.rotationX),
+      ry: Math.round(config.rotationY),
+      i: config.intensity,
+    });
+    if (key === this.lastCueHdriKey) return;
+
+    try {
+      let tex = await this.loadAndCacheHdri(config.hdriType);
+
+      // Apply rotation Y (horizontal)
+      if (config.rotationY !== 0) {
+        const rotRad = (config.rotationY * Math.PI) / 180;
+        const rotated = this.createRotatedHdriTexture(tex, rotRad);
+        if (rotated) {
+          tex.dispose();
+          tex = rotated;
+        }
+      }
+
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      const rt = this.pmremGenerator.fromEquirectangular(tex);
+      tex.dispose();
+
+      if (this.cueEnvRT) {
+        this.cueEnvRT.dispose();
+      }
+      this.cueEnvRT = rt;
+      this.lastCueHdriKey = key;
+
+      this.applyCueEnvMap(rt.texture, config.intensity);
+    } catch (err) {
+      console.error('[ESM] Failed to set cue HDRI:', err);
+    }
+  }
+
+  /** Walk all cue materials (clonedModel + instancedMeshes) and set envMap */
+  private applyCueEnvMap(envMap: THREE.Texture | null, intensity: number): void {
+    if (this.clonedModel) {
+      this.clonedModel.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+          child.material.envMap = envMap;
+          child.material.envMapIntensity = intensity;
+          child.material.needsUpdate = true;
+        }
+      });
+    }
+    for (const im of this.instancedMeshes) {
+      if (im.material instanceof THREE.MeshStandardMaterial) {
+        im.material.envMap = envMap;
+        im.material.envMapIntensity = intensity;
+        im.material.needsUpdate = true;
+      } else if (Array.isArray(im.material)) {
+        for (const mat of im.material) {
+          if (mat instanceof THREE.MeshStandardMaterial) {
+            mat.envMap = envMap;
+            mat.envMapIntensity = intensity;
+            mat.needsUpdate = true;
+          }
+        }
+      }
+    }
+  }
+
   private async loadAndCacheHdri(hdriType: string): Promise<THREE.DataTexture> {
     const url = `/hdri/${encodeURIComponent(hdriType)}`;
     
@@ -980,7 +1052,9 @@ export class ExtractorSceneManager {
         this.envRenderTarget.dispose();
       }
       this.envRenderTarget = rt;
-      this.scene.environment = rt.texture;
+      // Do NOT set scene.environment — cue uses its own envMap via setCueHdri(),
+      // and surfaces use their own solid-white envMap via getSurfaceEnvMap().
+      // scene.environment is kept null so nothing gets unintended HDRI reflections.
       
       // Mark as successfully applied
       this.lastHdriLayersKey = layersKey;
@@ -1545,13 +1619,16 @@ export class ExtractorSceneManager {
   async setupStudioFromStudioConfig(config: VideoStudioConfig): Promise<void> {
     this.clearStudioElements();
 
-    // Apply multi-layer HDRI environment (loads, rotates, blends all layers — or clears if none active)
+    // Ensure scene.environment is null — cue and surfaces each get their own envMap
+    this.scene.environment = null;
+
+    // Apply multi-layer HDRI for shadow lights (no longer sets scene.environment)
     const layers = config.hdriConfig?.layers ?? [];
     try {
       await this.setHdriLayers(layers);
     } catch (err) { console.warn('[ESM] Failed to apply HDRI layers:', err); }
 
-    // Apply HDRI intensity (unified — affects cue + everything)
+    // Apply HDRI intensity
     this.updateHdriIntensity(config);
 
     // Setup HDRI light helpers (interactive scene components)
@@ -1559,6 +1636,12 @@ export class ExtractorSceneManager {
 
     // HDRI-driven shadow lights (one DirectionalLight per HDRI layer)
     this.setupHdriShadowLights(config);
+
+    // Apply cue-only HDRI (isolated from studio surfaces)
+    const cueHdri = config.cueHdri ?? DEFAULT_CUE_HDRI;
+    try {
+      await this.setCueHdri(cueHdri);
+    } catch (err) { console.warn('[ESM] Failed to apply cue HDRI:', err); }
 
     // ── Load PBR textures for wall and table ──
     const manifest = await loadTextureManifest();
@@ -1862,10 +1945,16 @@ export class ExtractorSceneManager {
     this.studioConfigRef = config;
     if (!this.model) return;
 
-    // Apply multi-layer HDRI environment (live update — deduplicates internally, queues if busy)
+    // Apply multi-layer HDRI for shadow lights (live update — deduplicates internally, queues if busy)
     const layers = config.hdriConfig?.layers ?? [];
     this.setHdriLayers(layers).catch(err =>
       console.warn('[ESM] Failed to update HDRI layers:', err)
+    );
+
+    // Apply cue-only HDRI (separate from studio surfaces)
+    const cueHdri = config.cueHdri ?? DEFAULT_CUE_HDRI;
+    this.setCueHdri(cueHdri).catch(err =>
+      console.warn('[ESM] Failed to update cue HDRI:', err)
     );
 
     // Update cue instances
@@ -1970,6 +2059,11 @@ export class ExtractorSceneManager {
     // Setup cue instances for recording
     this.setupCueInstances(config.cueConfig);
 
+    // Save pre-recording spin state so we can restore it after recording
+    const savedSpinY = config.cueConfig.spinY || 0;
+    const savedSpinX = config.cueConfig.spinX || 0;
+    const savedSpinZ = config.cueConfig.spinZ || 0;
+
     this.camera.fov = 50;
     this.camera.updateProjectionMatrix();
 
@@ -1994,6 +2088,22 @@ export class ExtractorSceneManager {
 
     this.mediaRecorder.onstop = () => {
       this.setHelpersVisible(true);
+      // Restore pre-recording spin state to prevent rotation drift
+      if (this.currentCueConfig) {
+        this.currentCueConfig = {
+          ...this.currentCueConfig,
+          spinY: savedSpinY,
+          spinX: savedSpinX,
+          spinZ: savedSpinZ,
+        };
+      }
+      if (this.clonedModel) {
+        this.clonedModel.rotation.set(savedSpinX, savedSpinY, savedSpinZ);
+      }
+      // Reset instanced meshes too
+      if (this.instancedMeshes.length > 0 && this.currentCueConfig) {
+        this.setupCueInstances(this.currentCueConfig);
+      }
       resolve(new Blob(this.recordedChunks, { type: getSupportedMimeType() }));
     };
     this.mediaRecorder.onerror = () => {
@@ -2800,6 +2910,11 @@ export class ExtractorSceneManager {
     if (this.surfaceEnvRT) {
       this.surfaceEnvRT.dispose();
       this.surfaceEnvRT = null;
+    }
+
+    if (this.cueEnvRT) {
+      this.cueEnvRT.dispose();
+      this.cueEnvRT = null;
     }
 
     if (this.hdriTexture) {

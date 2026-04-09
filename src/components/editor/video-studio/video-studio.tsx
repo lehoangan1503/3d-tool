@@ -1125,7 +1125,7 @@ export function VideoStudio({
                                     }}
                                     className="h-3 w-3"
                                   />
-                                  <Sun className="h-3 w-3 text-yellow-400" />
+                                  <Sun className="h-3 w-3 text-green-400" />
                                   <span className="text-[10px] font-medium flex-1">Studio Light {idx + 1}</span>
                                   {config.hdriConfig.layers.length > 1 && (
                                     <Button
@@ -1141,50 +1141,32 @@ export function VideoStudio({
                                     </Button>
                                   )}
                                 </div>
-                                {/* HDRI File */}
+                                {/* Studio lights are always Studio White — no HDRI dropdown */}
                                 <div className="space-y-0.5">
                                   <Label className="text-[10px] text-muted-foreground">Environment</Label>
-                                  <Select
-                                    value={layer.hdriType}
-                                    onValueChange={(v) => {
-                                      const layers = [...config.hdriConfig.layers];
-                                      layers[idx] = { ...layers[idx], hdriType: v };
-                                      setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
-                                    }}
-                                  >
-                                    <SelectTrigger className="h-6 text-[10px]">
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {HDRI_OPTIONS_FALLBACK.map((h) => (
-                                        <SelectItem key={h.id} value={h.id}>
-                                          {h.label}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-                                {/* Light Color — only for Studio White */}
-                                {layer.hdriType === STUDIO_WHITE_HDRI && (
-                                  <div className="space-y-0.5">
-                                    <Label className="text-[10px] text-muted-foreground">Light Color</Label>
-                                    <div className="flex items-center gap-1.5">
-                                      <input
-                                        type="color"
-                                        value={layer.lightColor ?? "#ffffff"}
-                                        onChange={(e) => {
-                                          const layers = [...config.hdriConfig.layers];
-                                          layers[idx] = { ...layers[idx], lightColor: e.target.value };
-                                          setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
-                                        }}
-                                        className="w-6 h-6 rounded cursor-pointer border border-border/50 p-0"
-                                      />
-                                      <span className="text-[10px] text-muted-foreground font-mono">
-                                        {(layer.lightColor ?? "#ffffff").toUpperCase()}
-                                      </span>
-                                    </div>
+                                  <div className="h-6 px-2 flex items-center rounded-md border border-border/40 bg-muted/30 text-[10px] text-muted-foreground">
+                                    Studio White
                                   </div>
-                                )}
+                                </div>
+                                {/* Light Color */}
+                                <div className="space-y-0.5">
+                                  <Label className="text-[10px] text-muted-foreground">Light Color</Label>
+                                  <div className="flex items-center gap-1.5">
+                                    <input
+                                      type="color"
+                                      value={layer.lightColor ?? "#ffffff"}
+                                      onChange={(e) => {
+                                        const layers = [...config.hdriConfig.layers];
+                                        layers[idx] = { ...layers[idx], lightColor: e.target.value };
+                                        setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                      }}
+                                      className="w-6 h-6 rounded cursor-pointer border border-border/50 p-0"
+                                    />
+                                    <span className="text-[10px] text-muted-foreground font-mono">
+                                      {(layer.lightColor ?? "#ffffff").toUpperCase()}
+                                    </span>
+                                  </div>
+                                </div>
                                 {/* Intensity */}
                                 <div className="space-y-0.5">
                                   <Label className="text-[10px] text-muted-foreground">
@@ -1200,41 +1182,6 @@ export function VideoStudio({
                                     min={0} max={3} step={0.05}
                                   />
                                 </div>
-                                {/* Direction & Elevation — only for real HDRI files */}
-                                {layer.hdriType !== STUDIO_WHITE_HDRI && (
-                                  <>
-                                    {/* Rotation Y (Direction) */}
-                                    <div className="space-y-0.5">
-                                      <Label className="text-[10px] text-muted-foreground">
-                                        Direction — {layer.rotationY.toFixed(0)}°
-                                      </Label>
-                                      <Slider
-                                        value={[layer.rotationY]}
-                                        onValueChange={([v]) => {
-                                          const layers = [...config.hdriConfig.layers];
-                                          layers[idx] = { ...layers[idx], rotationY: v };
-                                          setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
-                                        }}
-                                        min={0} max={360} step={1}
-                                      />
-                                    </div>
-                                    {/* Rotation X (Elevation) */}
-                                    <div className="space-y-0.5">
-                                      <Label className="text-[10px] text-muted-foreground">
-                                        Elevation — {layer.rotationX.toFixed(0)}°
-                                      </Label>
-                                      <Slider
-                                        value={[layer.rotationX]}
-                                        onValueChange={([v]) => {
-                                          const layers = [...config.hdriConfig.layers];
-                                          layers[idx] = { ...layers[idx], rotationX: v };
-                                          setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
-                                        }}
-                                        min={-90} max={90} step={1}
-                                      />
-                                    </div>
-                                  </>
-                                )}
                               </div>
                             ))}
                           </div>

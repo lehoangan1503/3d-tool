@@ -74,6 +74,7 @@ export class ExtractorSceneManager {
   private envRenderTarget: THREE.WebGLRenderTarget | null = null;
   /** Solid white env map for wall/table surfaces — prevents HDRI reflections */
   private surfaceEnvRT: THREE.WebGLRenderTarget | null = null;
+  private _surfaceEnvColor: string = '#ffffff';
   /** Cue-only HDRI env map (separate from studio surfaces) */
   private cueEnvRT: THREE.WebGLRenderTarget | null = null;
   private lastCueHdriKey: string = '';
@@ -365,7 +366,8 @@ export class ExtractorSceneManager {
       const pos = this.hdriRotationToPosition(layer.rotationX, layer.rotationY);
 
       const baseIntensity = (layer.intensity ?? 1) * 1.2;
-      const light = new THREE.DirectionalLight(0xffffff, baseIntensity);
+      const lightColor = new THREE.Color(layer.lightColor ?? '#ffffff');
+      const light = new THREE.DirectionalLight(lightColor, baseIntensity);
       light.userData = { baseIntensity };
       light.position.copy(pos);
       light.target.position.set(0, 0, 0);
@@ -406,6 +408,7 @@ export class ExtractorSceneManager {
       entry.light.position.copy(pos);
       const baseIntensity = (layer.intensity ?? 1) * 1.2;
       entry.light.intensity = baseIntensity;
+      entry.light.color.set(layer.lightColor ?? '#ffffff');
       entry.light.userData = { baseIntensity };
       entry.light.castShadow = shadow.enabled;
       entry.light.shadow.radius = shadow.blur ?? 3;
@@ -484,10 +487,10 @@ export class ExtractorSceneManager {
     const group = new THREE.Group();
     group.userData = { type: 'hdriLight', layerId: layer.id, layerIndex: index };
 
-    // Sun sphere — bright yellow/white, size ∝ intensity
+    // Sun sphere — green for high contrast on white studio surfaces
     const baseScale = 0.3 + (layer.intensity ?? 1) * 0.2;
     const sphereGeo = new THREE.SphereGeometry(baseScale, 16, 16);
-    const sunColor = new THREE.Color(0xffee88);
+    const sunColor = new THREE.Color(0x22cc66);
     const sphereMat = new THREE.MeshBasicMaterial({
       color: sunColor,
       transparent: true,
@@ -499,7 +502,7 @@ export class ExtractorSceneManager {
     // Glow ring
     const ringGeo = new THREE.RingGeometry(baseScale * 1.3, baseScale * 1.6, 24);
     const ringMat = new THREE.MeshBasicMaterial({
-      color: 0xffdd44,
+      color: 0x22cc66,
       transparent: true,
       opacity: layer.enabled !== false ? 0.35 : 0.1,
       side: THREE.DoubleSide,
@@ -516,7 +519,7 @@ export class ExtractorSceneManager {
     ctx.fillStyle = layer.enabled !== false ? '#ffffff' : '#666666';
     ctx.font = 'bold 20px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`HDRI ${index + 1}`, 96, 28);
+    ctx.fillText(`Light ${index + 1}`, 96, 28);
     const tex = new THREE.CanvasTexture(canvas);
     const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.8 });
     const sprite = new THREE.Sprite(spriteMat);
@@ -526,7 +529,7 @@ export class ExtractorSceneManager {
 
     // Direction line to origin
     const lineMat = new THREE.LineBasicMaterial({
-      color: 0xffdd44,
+      color: 0x22cc66,
       transparent: true,
       opacity: layer.enabled !== false ? 0.25 : 0.08,
     });
@@ -797,15 +800,24 @@ export class ExtractorSceneManager {
     return tex;
   }
 
-  /** Get (or lazily create) a solid-white PMREM env map for surface materials.
+  /** Get (or lazily create) a solid-color PMREM env map for surface materials.
    *  Surfaces use this instead of scene.environment so they receive uniform
-   *  ambient light without reflecting the 3D HDRI scene. */
-  private getSurfaceEnvMap(): THREE.Texture {
-    if (!this.surfaceEnvRT) {
-      const whiteTex = this.generateSolidColorHdri('#ffffff', 1.0);
-      this.surfaceEnvRT = this.pmremGenerator.fromEquirectangular(whiteTex);
-      whiteTex.dispose();
+   *  ambient light without reflecting the 3D HDRI scene.
+   *  @param color - hex color string (default '#ffffff') */
+  private getSurfaceEnvMap(color: string = '#ffffff'): THREE.Texture {
+    // Recreate if color changed
+    const key = color.toLowerCase();
+    if (this.surfaceEnvRT && this._surfaceEnvColor === key) {
+      return this.surfaceEnvRT.texture;
     }
+    if (this.surfaceEnvRT) {
+      this.surfaceEnvRT.dispose();
+      this.surfaceEnvRT = null;
+    }
+    const tex = this.generateSolidColorHdri(color, 1.0);
+    this.surfaceEnvRT = this.pmremGenerator.fromEquirectangular(tex);
+    tex.dispose();
+    this._surfaceEnvColor = key;
     return this.surfaceEnvRT.texture;
   }
 
@@ -1661,9 +1673,11 @@ export class ExtractorSceneManager {
         map: wallTex, roughness: 0.95, metalness: 0, side: THREE.FrontSide,
       });
     }
-    // Surfaces use a solid-white env map instead of scene.environment.
-    // This provides uniform ambient lighting without reflecting the 3D HDRI scene.
-    const surfaceEnv = this.getSurfaceEnvMap();
+    // Surfaces use a solid-color env map (tinted by studio light color) instead of
+    // scene.environment, providing uniform ambient lighting without HDRI reflections.
+    const firstEnabledLayer = (config.hdriConfig?.layers ?? []).find(l => l.enabled !== false);
+    const surfaceColor = firstEnabledLayer?.lightColor ?? '#ffffff';
+    const surfaceEnv = this.getSurfaceEnvMap(surfaceColor);
     wallMaterial.envMap = surfaceEnv;
     wallMaterial.envMapIntensity = 0.6;
     if (config.wallSurface.roughness != null) {
@@ -1995,19 +2009,23 @@ export class ExtractorSceneManager {
     }
   }
 
-  /** Apply per-surface roughness from config (envMap kept at 0 — no HDRI reflections) */
+  /** Apply per-surface roughness from config and tint surface envMap with studio light color */
   private updateSurfaceHdri(config: VideoStudioConfig): void {
     const targets: Array<{ mesh: THREE.Mesh | null; roughness?: number }> = [
       { mesh: this.backdrop, roughness: config.wallSurface.roughness },
       { mesh: this.tableSurface, roughness: config.tableSurface.roughness },
     ];
 
-    const surfaceEnv = this.getSurfaceEnvMap();
+    // Use the first enabled studio light's color for surface tint
+    const firstEnabledLayer = (config.hdriConfig?.layers ?? []).find(l => l.enabled !== false);
+    const surfaceColor = firstEnabledLayer?.lightColor ?? '#ffffff';
+    const surfaceEnv = this.getSurfaceEnvMap(surfaceColor);
     for (const { mesh, roughness } of targets) {
       if (!mesh) continue;
       const mat = mesh.material as THREE.MeshStandardMaterial;
       mat.envMap = surfaceEnv;
       mat.envMapIntensity = 0.6;
+      mat.needsUpdate = true;
       if (roughness != null) {
         mat.roughness = roughness;
       }

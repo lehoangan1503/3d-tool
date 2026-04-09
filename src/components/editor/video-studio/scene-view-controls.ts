@@ -23,7 +23,7 @@ export interface SelectionInfo {
 }
 
 const CLICK_THRESHOLD_PX = 5;
-const HIGHLIGHT_COLOR = 0xffff00;
+const HIGHLIGHT_COLOR = 0x22cc66;
 
 /** All selectable types support TransformControls (uniform x-y-z + free drag) */
 const TRANSFORMABLE_TYPES = new Set([

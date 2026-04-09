@@ -1989,6 +1989,9 @@ export class ExtractorSceneManager {
 
     // Update HDRI light helpers
     this.updateHdriLightHelpers(config);
+
+    // Sync camera position from config (handles template load + slider edits)
+    this.setCameraFromKeyframe(config.cameraStart);
   }
 
   /** Apply shadow config via HDRI-driven shadow lights */

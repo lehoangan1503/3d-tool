@@ -7,6 +7,9 @@ export interface CameraKeyframe {
   x: number;  // Camera world X position
   y: number;  // Camera world Y position
   z: number;  // Camera world Z position
+  rotationX?: number; // Euler X (radians)
+  rotationY?: number; // Euler Y (radians)
+  rotationZ?: number; // Euler Z (radians)
 }
 
 export const DEFAULT_CAMERA_START: CameraKeyframe = {
@@ -302,6 +305,9 @@ export function applyDirection(
     x: moveX ? end.x : start.x,
     y: moveY ? end.y : start.y,
     z: moveZ ? end.z : start.z,
+    rotationX: end.rotationX,
+    rotationY: end.rotationY,
+    rotationZ: end.rotationZ,
   };
 }
 

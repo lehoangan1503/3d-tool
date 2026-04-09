@@ -16,8 +16,7 @@ interface UiGradient {
   colors: string[];
 }
 
-const GRADIENTS_URL =
-  "https://raw.githubusercontent.com/ghosh/uiGradients/master/gradients.json";
+const GRADIENTS_URL = "/gradient/gradients.json";
 
 let cachedGradients: UiGradient[] | null = null;
 
@@ -82,7 +81,7 @@ export function GradientPickerDialog({
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto grid grid-cols-3 gap-2 py-2">
+          <div className="overflow-y-auto max-h-[55vh] grid grid-cols-3 gap-2 py-2">
             {filtered.map((g) => (
               <button
                 key={g.name}

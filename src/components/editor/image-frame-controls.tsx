@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Images, Trash2, Link2, Link2Off, Check, Palette, Blend } from "lucide-react";
 import type { ImageFrame, ObjectFit, ImageGradient } from "@/types/extractor";
-import { imageGradientToCss } from "@/types/extractor";
+import { imageGradientToCss, DEFAULT_GRADIENT } from "@/types/extractor";
 import { ImagePickerDialog } from "./image-picker-dialog";
 import { GradientPickerDialog } from "./gradient-picker-dialog";
 import { resolveStorageUrl } from "@/lib/resolve-storage-url";
@@ -191,7 +191,10 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
                     ? "bg-primary text-primary-foreground"
                     : "hover:bg-muted"
                 }`}
-                onClick={() => updateImageSettings({ backgroundType: "gradient" })}
+                onClick={() => updateImageSettings({
+                  backgroundType: "gradient",
+                  ...(!imageSettings.backgroundGradient ? { backgroundGradient: DEFAULT_GRADIENT } : {}),
+                })}
               >
                 <Blend className="w-3 h-3" /> Gradient
               </button>

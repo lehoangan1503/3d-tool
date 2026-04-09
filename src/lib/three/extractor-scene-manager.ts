@@ -2155,10 +2155,13 @@ export class ExtractorSceneManager {
       const t = easingFn(progress);
 
       // Interpolate camera keyframe
-      const interpolatedKeyframe = {
+      const interpolatedKeyframe: CameraKeyframe = {
         x: start.x + (end.x - start.x) * t,
         y: start.y + (end.y - start.y) * t,
         z: start.z + (end.z - start.z) * t,
+        rotationX: (start.rotationX ?? 0) + ((end.rotationX ?? 0) - (start.rotationX ?? 0)) * t,
+        rotationY: (start.rotationY ?? 0) + ((end.rotationY ?? 0) - (start.rotationY ?? 0)) * t,
+        rotationZ: (start.rotationZ ?? 0) + ((end.rotationZ ?? 0) - (start.rotationZ ?? 0)) * t,
       };
       this.setCameraFromKeyframe(interpolatedKeyframe);
 
@@ -2622,6 +2625,9 @@ export class ExtractorSceneManager {
   /** Position studio camera from a CameraKeyframe — uses absolute world coordinates, preserves rotation */
   setCameraFromKeyframe(keyframe: CameraKeyframe): void {
     this.camera.position.set(keyframe.x, keyframe.y, keyframe.z);
+    if (keyframe.rotationX !== undefined && keyframe.rotationY !== undefined && keyframe.rotationZ !== undefined) {
+      this.camera.rotation.set(keyframe.rotationX, keyframe.rotationY, keyframe.rotationZ);
+    }
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld(true);
 
@@ -2671,10 +2677,14 @@ export class ExtractorSceneManager {
   /** Convert current camera position to a CameraKeyframe (for "Set Start/End" buttons) */
   getCameraKeyframeFromPosition(): CameraKeyframe {
     const pos = this.camera.position;
+    const rot = this.camera.rotation;
     return {
       x: pos.x,
       y: pos.y,
       z: pos.z,
+      rotationX: rot.x,
+      rotationY: rot.y,
+      rotationZ: rot.z,
     };
   }
 

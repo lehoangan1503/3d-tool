@@ -354,6 +354,13 @@ export const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
   blendMode: "normal",
 };
 
+/** Default gradient used when switching to gradient mode */
+export const DEFAULT_GRADIENT: ImageGradient = {
+  name: "Purple Love",
+  colors: ["#cc2b5e", "#753a88"],
+  angle: 90,
+};
+
 /** Build a CSS linear-gradient string from an ImageGradient */
 export function imageGradientToCss(g: ImageGradient): string {
   return `linear-gradient(${g.angle}deg, ${g.colors.join(", ")})`;

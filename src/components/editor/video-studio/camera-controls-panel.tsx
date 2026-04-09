@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Video, Gauge, Lock, Unlock, Crosshair } from "lucide-react";
+import { Video, Gauge, Crosshair } from "lucide-react";
 import type {
   CameraKeyframe,
   CameraDirection,
@@ -28,13 +28,11 @@ interface CameraControlsPanelProps {
   cameraStart: CameraKeyframe;
   cameraEnd: CameraKeyframe;
   cameraSpeed: number;
-  lockDistance: boolean;
   easing: EasingConfig;
   onDirectionChange: (d: CameraDirection) => void;
   onStartChange: (k: CameraKeyframe) => void;
   onEndChange: (k: CameraKeyframe) => void;
   onSpeedChange: (s: number) => void;
-  onLockDistanceChange: (locked: boolean) => void;
   onEasingChange: (e: EasingConfig) => void;
   onSetStart: () => void;
   onSetEnd: () => void;
@@ -81,22 +79,15 @@ function KeyframeSection({
   keyframe,
   onChange,
   onSet,
-  lockDistance,
-  onSiblingDistanceSync,
 }: {
   title: string;
   keyframe: CameraKeyframe;
   onChange: (k: CameraKeyframe) => void;
   onSet: () => void;
-  lockDistance: boolean;
-  onSiblingDistanceSync?: (dist: number) => void;
 }) {
   const update = (key: keyof CameraKeyframe, value: number) => {
     const updated = { ...keyframe, [key]: value };
     onChange(updated);
-    if (key === "distanceFromCue" && lockDistance && onSiblingDistanceSync) {
-      onSiblingDistanceSync(value);
-    }
   };
 
   return (
@@ -113,28 +104,27 @@ function KeyframeSection({
         </Button>
       </div>
       <PositionSlider
-        label="Cue %"
-        value={keyframe.cuePercent}
-        onChange={(v) => update("cuePercent", v)}
-        min={0}
-        max={100}
-        step={1}
-        decimals={0}
-      />
-      <PositionSlider
-        label="Distance"
-        value={keyframe.distanceFromCue}
-        onChange={(v) => update("distanceFromCue", v)}
-        min={0.5}
-        max={5}
+        label="X"
+        value={keyframe.x}
+        onChange={(v) => update("x", v)}
+        min={-15}
+        max={15}
         step={0.1}
       />
       <PositionSlider
-        label="Offset X"
-        value={keyframe.offsetX}
-        onChange={(v) => update("offsetX", v)}
-        min={-2}
-        max={2}
+        label="Y"
+        value={keyframe.y}
+        onChange={(v) => update("y", v)}
+        min={-5}
+        max={15}
+        step={0.1}
+      />
+      <PositionSlider
+        label="Z"
+        value={keyframe.z}
+        onChange={(v) => update("z", v)}
+        min={-5}
+        max={15}
         step={0.1}
       />
     </div>
@@ -146,13 +136,11 @@ export function CameraControlsPanel({
   cameraStart,
   cameraEnd,
   cameraSpeed,
-  lockDistance,
   easing,
   onDirectionChange,
   onStartChange,
   onEndChange,
   onSpeedChange,
-  onLockDistanceChange,
   onEasingChange,
   onSetStart,
   onSetEnd,
@@ -194,10 +182,6 @@ export function CameraControlsPanel({
         keyframe={cameraStart}
         onChange={onStartChange}
         onSet={onSetStart}
-        lockDistance={lockDistance}
-        onSiblingDistanceSync={(dist) =>
-          onEndChange({ ...cameraEnd, distanceFromCue: dist })
-        }
       />
 
       {/* End Position */}
@@ -206,26 +190,7 @@ export function CameraControlsPanel({
         keyframe={cameraEnd}
         onChange={onEndChange}
         onSet={onSetEnd}
-        lockDistance={lockDistance}
-        onSiblingDistanceSync={(dist) =>
-          onStartChange({ ...cameraStart, distanceFromCue: dist })
-        }
       />
-
-      {/* Lock Distance */}
-      <Button
-        variant={lockDistance ? "secondary" : "outline"}
-        size="sm"
-        className="h-7 text-xs w-full"
-        onClick={() => onLockDistanceChange(!lockDistance)}
-      >
-        {lockDistance ? (
-          <Lock className="h-3 w-3 mr-1" />
-        ) : (
-          <Unlock className="h-3 w-3 mr-1" />
-        )}
-        {lockDistance ? "Distance Locked" : "Lock Distance"}
-      </Button>
 
       {/* Camera Speed */}
       <PositionSlider
@@ -264,7 +229,7 @@ export function CameraControlsPanel({
       <div className="flex items-center justify-between rounded-md bg-muted px-3 py-2">
         <Label className="text-xs text-muted-foreground">Duration</Label>
         <span className="text-sm font-medium tabular-nums">
-          {computeVideoDuration(cameraStart, cameraEnd, cameraSpeed).toFixed(1)}
+          {computeVideoDuration(cameraStart, cameraEnd, cameraSpeed, cameraDirection).toFixed(1)}
           s
         </span>
       </div>

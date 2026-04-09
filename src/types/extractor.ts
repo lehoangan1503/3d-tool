@@ -251,19 +251,28 @@ export interface FrameTransform {
   rotation: number; // Rotation (degrees)
 }
 
+/** Special HDRI type for a flat studio light (not an .hdr file) */
+export const STUDIO_WHITE_HDRI = "__studio_white__";
+
 /** HDRI layer for multi-HDRI lighting */
 export interface HdriLayer {
   id: string; // Unique ID for this layer
-  hdriType: string; // HDRI filename
+  hdriType: string; // HDRI filename or STUDIO_WHITE_HDRI
   rotationX: number; // X-axis rotation (degrees, 0-360) - vertical shift
   rotationY: number; // Y-axis rotation (degrees, 0-360) - horizontal shift
+  intensity: number; // Per-layer intensity (0–3, default 1.0)
+  enabled: boolean;  // Whether this layer contributes to the blend
+  lightColor?: string; // Hex color for studio white light (e.g. "#ffffff")
 }
 
-/** Default HDRI layer */
+/** Default HDRI layer — studio white */
 export const DEFAULT_HDRI_LAYER: Omit<HdriLayer, "id"> = {
-  hdriType: "bloem_train_track_clear_2k.hdr",
+  hdriType: STUDIO_WHITE_HDRI,
   rotationX: 0,
-  rotationY: 300, // Rotate 300° to center light in front of cue
+  rotationY: 300,
+  intensity: 1.0,
+  enabled: true,
+  lightColor: "#ffffff",
 };
 
 /** Create a new HDRI layer with defaults */
@@ -273,6 +282,9 @@ export function createDefaultHdriLayer(hdriType?: string): HdriLayer {
     hdriType: hdriType || DEFAULT_HDRI_LAYER.hdriType,
     rotationX: DEFAULT_HDRI_LAYER.rotationX,
     rotationY: DEFAULT_HDRI_LAYER.rotationY,
+    intensity: DEFAULT_HDRI_LAYER.intensity,
+    enabled: DEFAULT_HDRI_LAYER.enabled,
+    lightColor: DEFAULT_HDRI_LAYER.lightColor,
   };
 }
 
@@ -435,9 +447,14 @@ export function createDefaultImageFrame(id?: string, order: number = 0): ImageFr
 
 /** Migrate old CueSettings format to new format with hdriLayers */
 export function migrateCueSettings(cue: CueSettings): CueSettings {
-  // Already has hdriLayers - no migration needed
+  // Already has hdriLayers - ensure new fields present
   if (cue.hdriLayers && cue.hdriLayers.length > 0) {
-    return cue;
+    const migrated = cue.hdriLayers.map(l => ({
+      ...l,
+      intensity: l.intensity ?? 1.0,
+      enabled: l.enabled ?? true,
+    }));
+    return { ...cue, hdriLayers: migrated };
   }
 
   // Migrate from old format
@@ -446,6 +463,8 @@ export function migrateCueSettings(cue: CueSettings): CueSettings {
     hdriType: cue.hdriType || DEFAULT_HDRI_LAYER.hdriType,
     rotationX: 0,
     rotationY: cue.lightAngle || 0,
+    intensity: 1.0,
+    enabled: true,
   };
 
   return {

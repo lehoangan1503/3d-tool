@@ -102,9 +102,16 @@ export class SceneViewControls {
           if (event.value) {
             // Pause spin during gizmo drag to prevent fighting
             this.esm.pauseSpin();
+            // If dragging an HDRI helper, suppress config-driven position updates
+            if (this.currentSelection.type === "hdriLight") {
+              this.esm.setHelperDragging(true);
+            }
             this.onDragStart?.();
           } else {
             this.esm.resumeSpin();
+            if (this.currentSelection.type === "hdriLight") {
+              this.esm.setHelperDragging(false);
+            }
             this.onDragEnd?.();
           }
         }
@@ -117,6 +124,19 @@ export class SceneViewControls {
           this.onObjectTransform
         ) {
           const obj = this.currentSelection.object;
+
+          // Prevent HDRI light helpers from being dragged too close to origin
+          // (causes erratic angle calculation and "flash to random coordinate")
+          if (this.currentSelection.type === "hdriLight") {
+            const MIN_DRAG_RADIUS = 2.0;
+            const r = obj.position.length();
+            if (r < MIN_DRAG_RADIUS && r > 0.001) {
+              // Project back out to dome radius in the current direction
+              const domeR = 10; // HDRI_DOME_RADIUS
+              obj.position.normalize().multiplyScalar(domeR);
+            }
+          }
+
           this.onObjectTransform(
             { ...this.currentSelection },
             obj.position.clone(),

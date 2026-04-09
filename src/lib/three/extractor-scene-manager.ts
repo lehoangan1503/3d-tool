@@ -7,6 +7,7 @@ import type {
   HdriLayer,
   VideoBackgroundLayer,
 } from '@/types/extractor';
+import { STUDIO_WHITE_HDRI } from '@/types/extractor';
 import {
   createVelvetTableTexture,
   createCementWallTexture,
@@ -26,6 +27,7 @@ import { compositeSurfaceFrames, preloadFrameImages } from './background-composi
 
 // Available HDRI options (same as editor-client)
 export const HDRI_OPTIONS_FALLBACK = [
+  { id: "__studio_white__", label: "Studio White" },
   { id: "bloem_train_track_clear_2k.hdr", label: "Bloem Train Track Clear 2k" },
   { id: "church_museum_2k.hdr", label: "Church Museum 2k" },
   { id: "church_stairway_2k.hdr", label: "Church Stairway 2k" },
@@ -70,6 +72,8 @@ export class ExtractorSceneManager {
   private clonedModel: THREE.Group | null = null;
   private pmremGenerator: THREE.PMREMGenerator;
   private envRenderTarget: THREE.WebGLRenderTarget | null = null;
+  /** Solid white env map for wall/table surfaces — prevents HDRI reflections */
+  private surfaceEnvRT: THREE.WebGLRenderTarget | null = null;
   private isDisposed = false;
 
   // HDRI state - supports multi-HDRI
@@ -82,6 +86,7 @@ export class ExtractorSceneManager {
   private currentHdriLayers: HdriLayer[] = [];
   private lastHdriLayersKey: string = ''; // Track last applied layers to skip redundant updates
   private pendingHdriUpdate: boolean = false;
+  private queuedHdriLayers: HdriLayer[] | null = null; // Queue latest request while pending
   private _lastHdriRotKey: string = '';
 
   // Studio elements (for video)
@@ -154,6 +159,7 @@ export class ExtractorSceneManager {
   private mediaRecorder: MediaRecorder | null = null;
   private recordedChunks: Blob[] = [];
   private _spinPaused = false;
+  private _isHelperDragging = false;
 
   constructor(
     private width: number = 2048,
@@ -288,6 +294,8 @@ export class ExtractorSceneManager {
     this.clearFramePlanes();
     this.clearHdriShadowLights();
     this.clearHdriLightHelpers();
+    // Reset HDRI layers dedup key so next setup always applies
+    this.lastHdriLayersKey = '';
     if (this.backdrop) {
       this.scene.remove(this.backdrop);
       const material = this.backdrop.material as THREE.MeshStandardMaterial;
@@ -341,25 +349,24 @@ export class ExtractorSceneManager {
     this.hdriShadowLights = [];
   }
 
-  /** Create a DirectionalLight for each enabled HDRI layer, positioned by its rotation */
+  /** Create a DirectionalLight for each enabled HDRI layer, positioned by its rotation.
+   *  These provide directional illumination (the HDRI is ambient-only now). */
   private setupHdriShadowLights(config: VideoStudioConfig): void {
     this.clearHdriShadowLights();
 
     const shadow = config.shadow;
-    if (!shadow.enabled) return;
-
     const layers = config.hdriConfig?.layers ?? [];
     for (const layer of layers) {
       if (layer.enabled === false) continue;
 
       const pos = this.hdriRotationToPosition(layer.rotationX, layer.rotationY);
 
-      const baseIntensity = (layer.intensity ?? 1) * 0.8;
+      const baseIntensity = (layer.intensity ?? 1) * 1.2;
       const light = new THREE.DirectionalLight(0xffffff, baseIntensity);
       light.userData = { baseIntensity };
       light.position.copy(pos);
       light.target.position.set(0, 0, 0);
-      light.castShadow = true;
+      light.castShadow = shadow.enabled;
       light.shadow.mapSize.set(4096, 4096);
       light.shadow.camera.near = 0.1;
       light.shadow.camera.far = 50;
@@ -394,7 +401,7 @@ export class ExtractorSceneManager {
 
       const pos = this.hdriRotationToPosition(layer.rotationX, layer.rotationY);
       entry.light.position.copy(pos);
-      const baseIntensity = (layer.intensity ?? 1) * 0.8;
+      const baseIntensity = (layer.intensity ?? 1) * 1.2;
       entry.light.intensity = baseIntensity;
       entry.light.userData = { baseIntensity };
       entry.light.castShadow = shadow.enabled;
@@ -459,7 +466,6 @@ export class ExtractorSceneManager {
   /** Convert 3D position → HDRI rotationX/rotationY (degrees) */
   positionToHdriRotation(pos: THREE.Vector3): { rotationX: number; rotationY: number } {
     const r = pos.length();
-    // Normalize to unit vector; use direction even at very short distances
     const n = r > 0.001 ? pos.clone().divideScalar(r) : new THREE.Vector3(0, 1, 0);
     const phi = Math.acos(THREE.MathUtils.clamp(n.y, -1, 1));
     const theta = Math.atan2(n.x, n.z);
@@ -561,8 +567,11 @@ export class ExtractorSceneManager {
       const entry = this.hdriLightHelpers[i];
       if (!entry || entry.layerId !== layer.id) continue;
 
-      const pos = this.hdriRotationToPosition(layer.rotationX, layer.rotationY);
-      entry.helper.position.copy(pos);
+      // Skip position update while the user is actively dragging a helper
+      if (!this._isHelperDragging) {
+        const pos = this.hdriRotationToPosition(layer.rotationX, layer.rotationY);
+        entry.helper.position.copy(pos);
+      }
 
       // Update sun size based on intensity
       const baseScale = 0.3 + (layer.intensity ?? 1) * 0.2;
@@ -573,8 +582,12 @@ export class ExtractorSceneManager {
         if (child instanceof THREE.Line && child.userData.isDirectionLine) {
           const geo = child.geometry as THREE.BufferGeometry;
           const positions = geo.attributes.position as THREE.BufferAttribute;
-          positions.setXYZ(1, -pos.x, -pos.y, -pos.z);
-          positions.needsUpdate = true;
+          // Only update direction line target if not dragging
+          if (!this._isHelperDragging) {
+            const pos = this.hdriRotationToPosition(layer.rotationX, layer.rotationY);
+            positions.setXYZ(1, -pos.x, -pos.y, -pos.z);
+            positions.needsUpdate = true;
+          }
         }
       });
 
@@ -759,6 +772,40 @@ export class ExtractorSceneManager {
    * Load an HDRI texture and cache it
    * Returns a deep copy of the texture data to allow independent manipulation
    */
+  /**
+   * Generate a flat solid-color equirectangular HDRI DataTexture.
+   * Used for "Studio White" and custom-color studio lights.
+   */
+  private generateSolidColorHdri(hexColor: string, intensity: number = 1.0): THREE.DataTexture {
+    const color = new THREE.Color(hexColor);
+    const width = 64;
+    const height = 32;
+    const data = new Float32Array(width * height * 4);
+    for (let i = 0; i < width * height; i++) {
+      data[i * 4 + 0] = color.r * intensity;
+      data[i * 4 + 1] = color.g * intensity;
+      data[i * 4 + 2] = color.b * intensity;
+      data[i * 4 + 3] = 1.0;
+    }
+    const tex = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.colorSpace = THREE.LinearSRGBColorSpace;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  /** Get (or lazily create) a solid-white PMREM env map for surface materials.
+   *  Surfaces use this instead of scene.environment so they receive uniform
+   *  ambient light without reflecting the 3D HDRI scene. */
+  private getSurfaceEnvMap(): THREE.Texture {
+    if (!this.surfaceEnvRT) {
+      const whiteTex = this.generateSolidColorHdri('#ffffff', 1.0);
+      this.surfaceEnvRT = this.pmremGenerator.fromEquirectangular(whiteTex);
+      whiteTex.dispose();
+    }
+    return this.surfaceEnvRT.texture;
+  }
+
   private async loadAndCacheHdri(hdriType: string): Promise<THREE.DataTexture> {
     const url = `/hdri/${encodeURIComponent(hdriType)}`;
     
@@ -820,24 +867,44 @@ export class ExtractorSceneManager {
   }
 
   /**
-   * Apply multiple HDRI layers with X and Y rotation (additive blending)
+   * Apply multiple HDRI layers (additive blending).
+   * HDRI provides ambient lighting + reflections — NOT rotated per layer.
+   * Per-layer rotation only affects DirectionalLight position (shadow lights).
+   * When all layers are disabled, clears the environment to go dark.
+   * Queues the latest request if an update is already in progress.
    */
   async setHdriLayers(layers: HdriLayer[]): Promise<void> {
     // Filter to enabled layers only
     const activeLayers = layers.filter(l => l.enabled !== false);
+
+    // If no active layers, clear environment so scene goes dark
     if (activeLayers.length === 0) {
-      console.warn('[ExtractorSceneManager] No HDRI layers provided');
+      if (this.envRenderTarget) {
+        this.envRenderTarget.dispose();
+        this.envRenderTarget = null;
+      }
+      this.scene.environment = null;
+      this.lastHdriLayersKey = '';
+      this.currentHdriLayers = layers;
       return;
     }
     
+    // Dedup key: hdriType, intensity AND rotation affect the environment map.
+    // Rotation changes the IBL direction on the cue model.
+    const layersKey = JSON.stringify(activeLayers.map(l => ({
+      t: l.hdriType, i: l.intensity,
+      rx: Math.round(l.rotationX), ry: Math.round(l.rotationY),
+      c: l.lightColor,
+    })));
+
     // Skip if same as last applied (avoid redundant expensive operations)
-    const layersKey = JSON.stringify(activeLayers);
     if (layersKey === this.lastHdriLayersKey) {
       return;
     }
     
-    // Prevent concurrent updates
+    // If an update is already in progress, queue this one (latest wins)
     if (this.pendingHdriUpdate) {
+      this.queuedHdriLayers = layers;
       return;
     }
     this.pendingHdriUpdate = true;
@@ -845,14 +912,20 @@ export class ExtractorSceneManager {
     this.currentHdriLayers = layers;
     
     try {
-      // Load all needed HDRIs
+      // Load all needed HDRIs (or generate solid-color for studio lights)
       const textures: THREE.DataTexture[] = [];
       const intensities: number[] = [];
       for (const layer of activeLayers) {
         try {
-          const tex = await this.loadAndCacheHdri(layer.hdriType);
+          let tex: THREE.DataTexture;
+          if (layer.hdriType === STUDIO_WHITE_HDRI) {
+            tex = this.generateSolidColorHdri(layer.lightColor ?? "#ffffff", layer.intensity ?? 1);
+            intensities.push(1); // intensity already baked into the texture
+          } else {
+            tex = await this.loadAndCacheHdri(layer.hdriType);
+            intensities.push(layer.intensity ?? 1);
+          }
           textures.push(tex);
-          intensities.push(layer.intensity ?? 1);
         } catch (loadError) {
           console.error('[ExtractorSceneManager] Failed to load HDRI:', layer.hdriType, loadError);
         }
@@ -861,49 +934,41 @@ export class ExtractorSceneManager {
       if (textures.length === 0) {
         console.error('[ExtractorSceneManager] No HDRIs could be loaded');
         this.pendingHdriUpdate = false;
+        this.processQueuedHdriLayers();
         return;
       }
       
-      // Create rotated versions of each texture
+      // Rotate HDRI textures by their layer rotationY so IBL on the cue
+      // reflects the light direction, not just the shadow direction.
       const rotatedTextures: THREE.DataTexture[] = [];
       for (let i = 0; i < textures.length; i++) {
-        const layer = activeLayers[i];
-        const rotated = this.createRotatedHdriTextureXY(textures[i], layer.rotationX, layer.rotationY);
-        if (rotated) {
-          rotatedTextures.push(rotated);
-          console.log('[ExtractorSceneManager] Rotated texture', i, 'created, rotX:', layer.rotationX, 'rotY:', layer.rotationY);
+        const rotDeg = activeLayers[i].rotationY ?? 0;
+        if (rotDeg !== 0) {
+          const rotRad = (rotDeg * Math.PI) / 180;
+          const rotated = this.createRotatedHdriTexture(textures[i], rotRad);
+          rotatedTextures.push(rotated ?? textures[i]);
         } else {
-          console.warn('[ExtractorSceneManager] Failed to rotate texture', i);
+          rotatedTextures.push(textures[i]);
         }
       }
-      
-      if (rotatedTextures.length === 0) {
-        console.warn('[ExtractorSceneManager] No valid rotated textures created, falling back to first HDRI');
-        // Fallback: use first texture without rotation
-        if (textures.length > 0) {
-          const rt = this.pmremGenerator.fromEquirectangular(textures[0]);
-          if (this.envRenderTarget) {
-            this.envRenderTarget.dispose();
-          }
-          this.envRenderTarget = rt;
-          this.scene.environment = rt.texture;
-        }
-        return;
-      }
-      
-      // Combine textures if multiple, otherwise use single (apply intensity weight)
+
       let finalTexture: THREE.DataTexture;
       if (rotatedTextures.length === 1) {
         if (intensities[0] !== 1) {
-          // Apply single weight via blendHdriTextures
           finalTexture = this.blendHdriTextures(rotatedTextures, intensities);
         } else {
-          finalTexture = rotatedTextures[0];
+          // Clone so we don't dispose the cache entry
+          finalTexture = rotatedTextures[0].clone();
         }
       } else {
         finalTexture = this.blendHdriTextures(rotatedTextures, intensities);
-        // Dispose individual rotated textures after blending
-        rotatedTextures.forEach(t => t.dispose());
+      }
+
+      // Dispose intermediate rotated textures (not the original cached ones)
+      for (let i = 0; i < rotatedTextures.length; i++) {
+        if (rotatedTextures[i] !== textures[i]) {
+          rotatedTextures[i].dispose();
+        }
       }
       
       finalTexture.mapping = THREE.EquirectangularReflectionMapping;
@@ -921,7 +986,6 @@ export class ExtractorSceneManager {
       this.lastHdriLayersKey = layersKey;
     } catch (error) {
       console.error('[ExtractorSceneManager] Error applying HDRI layers:', error);
-      // Try to recover by loading default HDRI
       try {
         const fallbackUrl = `/hdri/bloem_train_track_clear_2k.hdr`;
         await this.loadHDRI(fallbackUrl);
@@ -930,6 +994,19 @@ export class ExtractorSceneManager {
       }
     } finally {
       this.pendingHdriUpdate = false;
+      // Process queued update if any (latest request wins)
+      this.processQueuedHdriLayers();
+    }
+  }
+
+  /** Process queued HDRI layer update (called after current update completes) */
+  private processQueuedHdriLayers(): void {
+    if (this.queuedHdriLayers) {
+      const queued = this.queuedHdriLayers;
+      this.queuedHdriLayers = null;
+      this.setHdriLayers(queued).catch(err =>
+        console.warn('[ESM] Queued HDRI update failed:', err)
+      );
     }
   }
 
@@ -1280,6 +1357,9 @@ export class ExtractorSceneManager {
   /** Resume continuous spin animation */
   resumeSpin(): void { this._spinPaused = false; }
 
+  /** Mark that user is actively dragging an HDRI helper — skip position updates from config */
+  setHelperDragging(dragging: boolean): void { this._isHelperDragging = dragging; }
+
   /**
    * Set camera vertical orbit (phi angle)
    * Like main preview: vertical drag moves camera up/down around cue
@@ -1465,19 +1545,11 @@ export class ExtractorSceneManager {
   async setupStudioFromStudioConfig(config: VideoStudioConfig): Promise<void> {
     this.clearStudioElements();
 
-    // Load HDRI
-    if (config.hdriFile) {
-      try {
-        await this.loadHDRI(`/hdri/${config.hdriFile}`);
-        this.lastLoadedHdriFile = config.hdriFile;
-      } catch (err) { console.warn('[ESM] Failed to load HDRI:', err); }
-    }
-
-    // Apply HDRI rotation from first layer
-    const hdriRotY = config.hdriConfig.layers[0]?.rotationY ?? 0;
-    if (config.hdriConfig.layers.length > 0 && hdriRotY !== 0) {
-      this.setHdriRotation(hdriRotY);
-    }
+    // Apply multi-layer HDRI environment (loads, rotates, blends all layers — or clears if none active)
+    const layers = config.hdriConfig?.layers ?? [];
+    try {
+      await this.setHdriLayers(layers);
+    } catch (err) { console.warn('[ESM] Failed to apply HDRI layers:', err); }
 
     // Apply HDRI intensity (unified — affects cue + everything)
     this.updateHdriIntensity(config);
@@ -1503,15 +1575,21 @@ export class ExtractorSceneManager {
       wallTex.wrapT = THREE.ClampToEdgeWrapping;
       wallTex.repeat.set(1, 1);
       wallMaterial = new THREE.MeshStandardMaterial({
-        map: wallTex, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
+        map: wallTex, roughness: 0.95, metalness: 0, side: THREE.FrontSide,
       });
     }
-    wallMaterial.envMapIntensity = config.wallSurface.envMapIntensity ?? 0.6;
+    // Surfaces use a solid-white env map instead of scene.environment.
+    // This provides uniform ambient lighting without reflecting the 3D HDRI scene.
+    const surfaceEnv = this.getSurfaceEnvMap();
+    wallMaterial.envMap = surfaceEnv;
+    wallMaterial.envMapIntensity = 0.6;
+    if (config.wallSurface.roughness != null) {
+      wallMaterial.roughness = config.wallSurface.roughness;
+    }
 
     // Subdivided wall geometry for better displacement mapping
     const wallGeo = new THREE.PlaneGeometry(34, 24, 64, 64);
     this.backdrop = new THREE.Mesh(wallGeo, wallMaterial);
-    this.backdrop.receiveShadow = true;
     this.backdrop.position.set(0, 4.5, -5.5);
     this.scene.add(this.backdrop);
     this.backdrop.userData = { type: 'wall' };
@@ -1530,17 +1608,20 @@ export class ExtractorSceneManager {
       tableTex.wrapT = THREE.ClampToEdgeWrapping;
       tableTex.repeat.set(1, 1);
       tableMaterial = new THREE.MeshStandardMaterial({
-        map: tableTex, roughness: 0.35, metalness: 0, side: THREE.DoubleSide,
+        map: tableTex, roughness: 0.35, metalness: 0, side: THREE.FrontSide,
       });
     }
-    tableMaterial.envMapIntensity = config.tableSurface.envMapIntensity ?? 0.4;
+    tableMaterial.envMap = surfaceEnv;
+    tableMaterial.envMapIntensity = 0.6;
+    if (config.tableSurface.roughness != null) {
+      tableMaterial.roughness = config.tableSurface.roughness;
+    }
 
     // Subdivided table geometry for displacement
     const tableGeo = new THREE.PlaneGeometry(34, tableDepth, 64, 64);
     this.tableSurface = new THREE.Mesh(tableGeo, tableMaterial);
     this.tableSurface.rotation.x = -Math.PI / 2;
     this.tableSurface.position.y = tableY;
-    this.tableSurface.receiveShadow = true;
     this.tableSurface.position.z = -5.5 + tableDepth / 2;
     this.scene.add(this.tableSurface);
     this.tableSurface.userData = { type: 'table' };
@@ -1781,13 +1862,11 @@ export class ExtractorSceneManager {
     this.studioConfigRef = config;
     if (!this.model) return;
 
-    // Reload HDRI if file selection changed
-    if (config.hdriFile && config.hdriFile !== this.lastLoadedHdriFile) {
-      this.lastLoadedHdriFile = config.hdriFile;
-      this.loadHDRI(`/hdri/${config.hdriFile}`).catch(err =>
-        console.warn('[ESM] Failed to reload HDRI:', err)
-      );
-    }
+    // Apply multi-layer HDRI environment (live update — deduplicates internally, queues if busy)
+    const layers = config.hdriConfig?.layers ?? [];
+    this.setHdriLayers(layers).catch(err =>
+      console.warn('[ESM] Failed to update HDRI layers:', err)
+    );
 
     // Update cue instances
     this.updateCueInstances(config.cueConfig);
@@ -1797,26 +1876,6 @@ export class ExtractorSceneManager {
 
     // Apply shadow settings
     this.updateShadowFromConfig(config);
-
-    // Apply HDRI rotation from first layer (live update — only when changed)
-    if (config.hdriConfig.layers.length > 0 && this.hdriTexture) {
-      const layer = config.hdriConfig.layers[0];
-      const rotX = layer.rotationX ?? 0;
-      const rotY = layer.rotationY ?? 0;
-      const rotKey = `${rotX},${rotY}`;
-      if (rotKey !== this._lastHdriRotKey) {
-        this._lastHdriRotKey = rotKey;
-        const rotated = this.createRotatedHdriTextureXY(this.hdriTexture, rotX, rotY);
-        if (rotated) {
-          rotated.mapping = THREE.EquirectangularReflectionMapping;
-          const rt = this.pmremGenerator.fromEquirectangular(rotated);
-          rotated.dispose();
-          if (this.envRenderTarget) this.envRenderTarget.dispose();
-          this.envRenderTarget = rt;
-          this.scene.environment = rt.texture;
-        }
-      }
-    }
 
     // Apply HDRI intensity
     this.updateHdriIntensity(config);
@@ -1847,18 +1906,22 @@ export class ExtractorSceneManager {
     }
   }
 
-  /** Apply per-surface envMapIntensity from config (unified HDRI approach) */
+  /** Apply per-surface roughness from config (envMap kept at 0 — no HDRI reflections) */
   private updateSurfaceHdri(config: VideoStudioConfig): void {
-    const targets: Array<{ mesh: THREE.Mesh | null; intensity: number }> = [
-      { mesh: this.backdrop, intensity: config.wallSurface.envMapIntensity ?? 0.6 },
-      { mesh: this.tableSurface, intensity: config.tableSurface.envMapIntensity ?? 0.4 },
+    const targets: Array<{ mesh: THREE.Mesh | null; roughness?: number }> = [
+      { mesh: this.backdrop, roughness: config.wallSurface.roughness },
+      { mesh: this.tableSurface, roughness: config.tableSurface.roughness },
     ];
 
-    for (const { mesh, intensity } of targets) {
+    const surfaceEnv = this.getSurfaceEnvMap();
+    for (const { mesh, roughness } of targets) {
       if (!mesh) continue;
       const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.envMapIntensity = intensity;
-      mat.needsUpdate = true;
+      mat.envMap = surfaceEnv;
+      mat.envMapIntensity = 0.6;
+      if (roughness != null) {
+        mat.roughness = roughness;
+      }
     }
   }
 
@@ -1869,16 +1932,24 @@ export class ExtractorSceneManager {
   ): Promise<Blob> {
     if (!this.model) throw new Error('No model loaded');
 
-    const qp = VIDEO_QUALITY_PRESETS[config.quality];
+    const qp = VIDEO_QUALITY_PRESETS[config.quality] ?? VIDEO_QUALITY_PRESETS["2k"];
 
     return new Promise((resolve, reject) => {
-      // Use pixelRatio 1 during recording for consistent output
-      this.renderer.setPixelRatio(1);
+      // Use device pixel ratio during recording for sharp output (matching preview quality)
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       this.renderer.setSize(qp.width, qp.height);
       this.camera.aspect = qp.width / qp.height;
       this.camera.updateProjectionMatrix();
 
       this.setupStudioFromStudioConfig(config).then(() => {
+        // Render warm-up frames to force GPU texture uploads and mipmap generation.
+        // This prevents blurry textures in the first 0-1s of recorded video.
+        this.setCameraFromKeyframe(config.cameraStart);
+        this.camera.fov = 50;
+        this.camera.updateProjectionMatrix();
+        this.renderer.render(this.scene, this.camera);
+        this.renderer.render(this.scene, this.camera);
+
         this._startStudioRecordingLoop(config, qp, onProgress, resolve, reject);
       }).catch(reject);
     });
@@ -2724,6 +2795,11 @@ export class ExtractorSceneManager {
 
     if (this.envRenderTarget) {
       this.envRenderTarget.dispose();
+    }
+
+    if (this.surfaceEnvRT) {
+      this.surfaceEnvRT.dispose();
+      this.surfaceEnvRT = null;
     }
 
     if (this.hdriTexture) {

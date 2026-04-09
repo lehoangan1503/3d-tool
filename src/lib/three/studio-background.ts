@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js';
 
 // ─── Texture Pack Manifest Types ───
 
@@ -11,6 +12,12 @@ export interface TexturePackInfo {
   roughnessValue: number;
   metalnessValue: number;
   displacementScale: number;
+  /** File extension for standard map files (default: "jpg") */
+  fileExt?: string;
+  /** Optional high-quality overrides (EXR / PNG) */
+  hqOverrides?: Record<string, string>;
+  /** Solid color hex (e.g. "#ffffff") — used when maps is empty */
+  solidColor?: string;
 }
 
 export interface TextureManifest {
@@ -39,6 +46,7 @@ export function findTexturePack(
 // ─── PBR Texture Loader ───
 
 const textureLoader = new THREE.TextureLoader();
+const exrLoader = new EXRLoader();
 
 function loadTex(url: string, tiling: [number, number]): Promise<THREE.Texture> {
   return new Promise((resolve, reject) => {
@@ -49,6 +57,9 @@ function loadTex(url: string, tiling: [number, number]): Promise<THREE.Texture> 
         tex.wrapT = THREE.RepeatWrapping;
         tex.repeat.set(tiling[0], tiling[1]);
         tex.colorSpace = THREE.SRGBColorSpace;
+        tex.generateMipmaps = true;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.magFilter = THREE.LinearFilter;
         resolve(tex);
       },
       undefined,
@@ -66,12 +77,43 @@ function loadTexLinear(url: string, tiling: [number, number]): Promise<THREE.Tex
         tex.wrapT = THREE.RepeatWrapping;
         tex.repeat.set(tiling[0], tiling[1]);
         tex.colorSpace = THREE.LinearSRGBColorSpace;
+        tex.generateMipmaps = true;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.magFilter = THREE.LinearFilter;
         resolve(tex);
       },
       undefined,
       reject
     );
   });
+}
+
+/** Load an EXR file as a linear-space texture (float precision) */
+function loadExrTex(url: string, tiling: [number, number]): Promise<THREE.Texture> {
+  return new Promise((resolve, reject) => {
+    exrLoader.load(
+      url,
+      (tex) => {
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.repeat.set(tiling[0], tiling[1]);
+        tex.colorSpace = THREE.LinearSRGBColorSpace;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.generateMipmaps = true;
+        resolve(tex);
+      },
+      undefined,
+      reject
+    );
+  });
+}
+
+/** Choose the best loader for a texture URL based on extension */
+function loadHQTexLinear(url: string, tiling: [number, number]): Promise<THREE.Texture> {
+  if (url.endsWith('.exr')) return loadExrTex(url, tiling);
+  if (url.endsWith('.png') || url.endsWith('.jpg') || url.endsWith('.jpeg')) return loadTexLinear(url, tiling);
+  return loadTexLinear(url, tiling);
 }
 
 /**
@@ -81,25 +123,42 @@ function loadTexLinear(url: string, tiling: [number, number]): Promise<THREE.Tex
 export async function loadPBRTexturePack(
   pack: TexturePackInfo
 ): Promise<THREE.MeshStandardMaterial> {
+  // Solid-color material (no texture files)
+  if (pack.maps.length === 0) {
+    return new THREE.MeshStandardMaterial({
+      color: new THREE.Color(pack.solidColor ?? '#ffffff'),
+      roughness: pack.roughnessValue,
+      metalness: pack.metalnessValue,
+      side: THREE.FrontSide,
+    });
+  }
+
   const basePath = `/textures/studio/${pack.folder}`;
   const tiling = pack.tiling;
+  const hq = pack.hqOverrides ?? {};
+  const ext = pack.fileExt ?? 'jpg';
 
   const promises: Record<string, Promise<THREE.Texture>> = {};
 
   if (pack.maps.includes('diff')) {
-    promises.map = loadTex(`${basePath}/diff.jpg`, tiling);
+    const url = hq.diff ?? `${basePath}/diff.${ext}`;
+    promises.map = loadTex(url, tiling);
   }
   if (pack.maps.includes('normal')) {
-    promises.normalMap = loadTexLinear(`${basePath}/normal.jpg`, tiling);
+    const url = hq.normal ?? `${basePath}/normal.${ext}`;
+    promises.normalMap = loadHQTexLinear(url, tiling);
   }
   if (pack.maps.includes('roughness')) {
-    promises.roughnessMap = loadTexLinear(`${basePath}/roughness.jpg`, tiling);
+    const url = hq.roughness ?? `${basePath}/roughness.${ext}`;
+    promises.roughnessMap = loadHQTexLinear(url, tiling);
   }
   if (pack.maps.includes('ao')) {
-    promises.aoMap = loadTexLinear(`${basePath}/ao.jpg`, tiling);
+    const url = hq.ao ?? `${basePath}/ao.${ext}`;
+    promises.aoMap = loadHQTexLinear(url, tiling);
   }
   if (pack.maps.includes('displacement')) {
-    promises.displacementMap = loadTexLinear(`${basePath}/displacement.jpg`, tiling);
+    const url = hq.displacement ?? `${basePath}/displacement.${ext}`;
+    promises.displacementMap = loadHQTexLinear(url, tiling);
   }
 
   const keys = Object.keys(promises);
@@ -110,7 +169,7 @@ export async function loadPBRTexturePack(
   const matParams: THREE.MeshStandardMaterialParameters = {
     roughness: pack.roughnessValue,
     metalness: pack.metalnessValue,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
   };
 
   if (texMap.map) matParams.map = texMap.map;
@@ -319,7 +378,7 @@ export function createWallBackdrop(
         map: textureOrMaterial,
         roughness: 0.95,
         metalness: 0,
-        side: THREE.DoubleSide,
+        side: THREE.FrontSide,
       });
 
   const mesh = new THREE.Mesh(geometry, material);
@@ -331,7 +390,7 @@ export function createWallBackdrop(
 
 export function createShadowFloor(width: number = 20, depth: number = 10): THREE.Mesh {
   const geometry = new THREE.PlaneGeometry(width, depth);
-  const material = new THREE.ShadowMaterial({ opacity: 0.5 });
+  const material = new THREE.ShadowMaterial({ opacity: 0.25 });
   const floor = new THREE.Mesh(geometry, material);
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
@@ -341,7 +400,7 @@ export function createShadowFloor(width: number = 20, depth: number = 10): THREE
 /** Shadow-receiving plane for wall backdrop (vertical orientation). */
 export function createWallShadowPlane(width: number = 30, height: number = 14): THREE.Mesh {
   const geometry = new THREE.PlaneGeometry(width, height);
-  const material = new THREE.ShadowMaterial({ opacity: 0.35 });
+  const material = new THREE.ShadowMaterial({ opacity: 0.15 });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.receiveShadow = true;
   return mesh;
@@ -364,7 +423,7 @@ export function createTableSurface(
         map: textureOrMaterial,
         roughness: 0.35,
         metalness: 0.0,
-        side: THREE.DoubleSide,
+        side: THREE.FrontSide,
       });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.rotation.x = -Math.PI / 2;
@@ -399,7 +458,7 @@ export function createStudioBackdrop(
     map: texture,
     roughness: 0.9,
     metalness: 0,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
   });
 
   const mesh = new THREE.Mesh(geometry, material);

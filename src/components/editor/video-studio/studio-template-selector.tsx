@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useImperativeHandle, forwardRef } from "react";
+import type { Ref } from "react";
 import {
   Select,
   SelectContent,
@@ -26,21 +27,29 @@ import type {
 
 const NEW_TEMPLATE_VALUE = "__new__";
 
+export interface StudioTemplateSelectorHandle {
+  triggerSave: () => void;
+}
+
 interface StudioTemplateSelectorProps {
   productId: string;
   currentConfig: VideoStudioConfig;
   onLoadConfig: (config: VideoStudioConfig) => void;
 }
 
-export function StudioTemplateSelector({
-  productId,
-  currentConfig,
-  onLoadConfig,
-}: StudioTemplateSelectorProps) {
+export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector(
+  {
+    productId,
+    currentConfig,
+    onLoadConfig,
+  }: StudioTemplateSelectorProps,
+  ref: Ref<StudioTemplateSelectorHandle>
+) {
   const [templates, setTemplates] = useState<VideoStudioTemplate[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [showSaveChoiceDialog, setShowSaveChoiceDialog] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
@@ -77,13 +86,20 @@ export function StudioTemplateSelector({
     if (template) onLoadConfig(template.config);
   };
 
-  const handleSave = useCallback(async () => {
-    if (!selectedId) {
+  /** Open save — if a template is selected, show choice dialog; otherwise go straight to "save new" */
+  const handleSaveClick = useCallback(() => {
+    if (selectedId) {
+      setShowSaveChoiceDialog(true);
+    } else {
       setSaveName("");
       setShowSaveDialog(true);
-      return;
     }
+  }, [selectedId]);
 
+  useImperativeHandle(ref, () => ({ triggerSave: handleSaveClick }), [handleSaveClick]);
+
+  const handleUpdateCurrent = useCallback(async () => {
+    if (!selectedId) return;
     setIsSaving(true);
     try {
       const res = await fetch(`/api/video-studio-templates/${selectedId}`, {
@@ -97,8 +113,15 @@ export function StudioTemplateSelector({
       console.error("StudioTemplateSelector save error:", err);
     } finally {
       setIsSaving(false);
+      setShowSaveChoiceDialog(false);
     }
   }, [selectedId, currentConfig, fetchTemplates]);
+
+  const handleSaveAsNew = useCallback(() => {
+    setShowSaveChoiceDialog(false);
+    setSaveName("");
+    setShowSaveDialog(true);
+  }, []);
 
   const handleSaveNew = useCallback(async () => {
     if (!saveName.trim()) return;
@@ -152,6 +175,10 @@ export function StudioTemplateSelector({
     }
   }, [selectedId, templates, fetchTemplates]);
 
+  const selectedTemplateName = selectedId
+    ? templates.find((t) => t.id === selectedId)?.name
+    : null;
+
   return (
     <div className="space-y-2">
       <Label className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
@@ -187,8 +214,8 @@ export function StudioTemplateSelector({
           size="icon"
           className="h-8 w-8"
           disabled={isLoading || isSaving}
-          onClick={handleSave}
-          title={selectedId ? "Save to template" : "Save as new template"}
+          onClick={handleSaveClick}
+          title={selectedId ? "Save template" : "Save as new template"}
         >
           <Save className="h-4 w-4" />
         </Button>
@@ -205,6 +232,36 @@ export function StudioTemplateSelector({
         </Button>
       </div>
 
+      {/* Save choice dialog — Update Current or Save as New */}
+      <Dialog open={showSaveChoiceDialog} onOpenChange={setShowSaveChoiceDialog}>
+        <DialogContent className="sm:max-w-xs">
+          <DialogHeader>
+            <DialogTitle>Save Template</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Button
+              className="w-full justify-start"
+              variant="outline"
+              onClick={handleUpdateCurrent}
+              disabled={isSaving}
+            >
+              <Save className="h-4 w-4 mr-2" />
+              {isSaving ? "Saving…" : `Update "${selectedTemplateName}"`}
+            </Button>
+            <Button
+              className="w-full justify-start"
+              variant="outline"
+              onClick={handleSaveAsNew}
+              disabled={isSaving}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Save as New Template
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Save new template dialog */}
       <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
@@ -245,4 +302,4 @@ export function StudioTemplateSelector({
       </Dialog>
     </div>
   );
-}
+});

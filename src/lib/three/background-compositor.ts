@@ -17,9 +17,13 @@ export function compositeSurfaceFrames(
   canvas.height = height;
   const ctx = canvas.getContext("2d")!;
 
-  // Fill with base color
-  ctx.fillStyle = surface.baseColor;
-  ctx.fillRect(0, 0, width, height);
+  // Fill with base color (legacy) or transparent (PBR mode uses texture pack as base)
+  if (surface.baseColor) {
+    ctx.fillStyle = surface.baseColor;
+    ctx.fillRect(0, 0, width, height);
+  } else {
+    ctx.clearRect(0, 0, width, height);
+  }
 
   // Render frames bottom-to-top (array order = z-order)
   const enabledFrames = surface.frames.filter(f => f.enabled);

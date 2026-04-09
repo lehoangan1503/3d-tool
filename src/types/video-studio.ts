@@ -131,21 +131,22 @@ export interface BackgroundFrame {
 }
 
 export interface SurfaceConfig {
-  texturePreset: string;          // Texture pack ID (e.g. "plastered_wall_05")
+  texturePreset: string;          // Texture pack ID (e.g. "white_plastic")
   envMapIntensity: number;        // 0–1, how much HDRI light the surface receives
+  roughness?: number;             // 0–1, override material roughness (undefined = use texture default)
   frames: BackgroundFrame[];      // Max 4, ordered bottom-to-top
   /** @deprecated Use texturePreset instead. Kept for migration. */
   baseColor?: string;
 }
 
 export const DEFAULT_WALL_SURFACE: SurfaceConfig = {
-  texturePreset: "plastered_wall_05",
+  texturePreset: "white_studio",
   envMapIntensity: 0.6,
   frames: [],
 };
 
 export const DEFAULT_TABLE_SURFACE: SurfaceConfig = {
-  texturePreset: "denim_fabric_06",
+  texturePreset: "white_studio",
   envMapIntensity: 0.4,
   frames: [],
 };
@@ -229,7 +230,7 @@ export interface VideoStudioConfig {
   tableSurface: SurfaceConfig;
   hdriConfig: { layers: HdriLayer[] };
   hdriIntensity: number;               // Environment intensity (0–3, default 1.0)
-  quality: "hd" | "2k";
+  quality: "2k" | "2k120";
   shadow: { enabled: boolean; intensity: number; blur: number; softness: number; offsetX: number; offsetY: number };
   hdriFile: string;
   /** @deprecated Unified HDRI now used. Wall/table use envMapIntensity on SurfaceConfig. */
@@ -248,8 +249,8 @@ export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
   tableSurface: { ...DEFAULT_TABLE_SURFACE },
   hdriConfig: { layers: [createDefaultHdriLayer()] },
   hdriIntensity: 1.0,
-  quality: "hd",
-  shadow: { enabled: true, intensity: 0.6, blur: 3, softness: 0.45, offsetX: 0, offsetY: 0 },
+  quality: "2k",
+  shadow: { enabled: true, intensity: 0.35, blur: 4, softness: 0.5, offsetX: 0, offsetY: 0 },
   hdriFile: "ferndale_studio_07_2k.hdr",
 };
 
@@ -266,8 +267,8 @@ export interface VideoStudioTemplate {
 // ── Quality Presets ──
 
 export const VIDEO_QUALITY_PRESETS = {
-  hd:   { width: 1920, height: 1080, bitrate: 8_000_000, fps: 30 },
-  "2k": { width: 2560, height: 1440, bitrate: 16_000_000, fps: 30 },
+  "2k":    { width: 2560, height: 1440, bitrate: 20_000_000, fps: 60 },
+  "2k120": { width: 2560, height: 1440, bitrate: 30_000_000, fps: 120 },
 } as const;
 
 // ── Utility: Compute video duration from camera path ──

@@ -56,7 +56,7 @@ import {
   DEFAULT_STUDIO_CONFIG,
   computeVideoDuration,
 } from "@/types/video-studio";
-import { createDefaultHdriLayer } from "@/types/extractor";
+import { createDefaultHdriLayer, STUDIO_WHITE_HDRI } from "@/types/extractor";
 import { CameraControlsPanel } from "./camera-controls-panel";
 import { CueSetupPanel } from "./cue-setup-panel";
 import { BackgroundPanel } from "./background-panel";
@@ -116,6 +116,7 @@ export function VideoStudio({
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isRebuilding, setIsRebuilding] = useState(false);
+  const [sceneReady, setSceneReady] = useState(false);
   const [viewMode, setViewMode] = useState<"scene" | "camera">("camera");
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo>({ type: null });
@@ -128,8 +129,8 @@ export function VideoStudio({
   // Track which section was auto-opened by selection (so we can close it on deselect)
   const autoExpandedSectionRef = useRef<string | null>(null);
 
-  // Undo/redo history
-  const configHistoryRef = useRef<VideoStudioConfig[]>([]);
+  // Undo/redo history — seed with initial config so first undo always has a target
+  const configHistoryRef = useRef<VideoStudioConfig[]>([structuredClone(config)]);
   const configFutureRef = useRef<VideoStudioConfig[]>([]);
   const isUndoRedoRef = useRef(false);
   const isDraggingRef = useRef(false);
@@ -149,10 +150,13 @@ export function VideoStudio({
   const configRef = useRef(config);
   useEffect(() => {
     configRef.current = config;
+    // Always cancel pending debounce first — prevents stale timer from
+    // clearing the redo stack after undo/redo fires
+    if (historyDebounceRef.current) clearTimeout(historyDebounceRef.current);
     // Debounced history push: batch rapid changes (sliders) into one entry
     if (!isUndoRedoRef.current && !isDraggingRef.current) {
-      if (historyDebounceRef.current) clearTimeout(historyDebounceRef.current);
       historyDebounceRef.current = setTimeout(() => {
+        historyDebounceRef.current = null;
         configHistoryRef.current = [...configHistoryRef.current.slice(-4), configRef.current];
         configFutureRef.current = [];
       }, 600);
@@ -436,6 +440,7 @@ export function VideoStudio({
 
       await extractor.setupStudioFromStudioConfig(config);
       extractor.startStudioVideoPreview(config);
+      setSceneReady(true);
 
       // Animation loop for scene view controls damping
       const sceneViewAnimate = () => {
@@ -449,6 +454,7 @@ export function VideoStudio({
     setup();
 
     return () => {
+      setSceneReady(false);
       if (sceneViewAnimId) cancelAnimationFrame(sceneViewAnimId);
       sceneViewControlsRef.current?.dispose();
       sceneViewControlsRef.current = null;
@@ -517,7 +523,8 @@ export function VideoStudio({
     JSON.stringify(config.wallSurface.frames),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     JSON.stringify(config.tableSurface.frames),
-    config.hdriFile,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    JSON.stringify(config.hdriConfig.layers.map(l => l.hdriType)),
     config.shadow.enabled,
     config.cueConfig.instances.length,
     config.hdriConfig.layers.length,
@@ -674,13 +681,13 @@ export function VideoStudio({
               className="flex-1 bg-black rounded-lg overflow-hidden relative"
             >
               <div
-                className={`absolute inset-0 flex items-center justify-center bg-black z-10 transition-opacity duration-500 pointer-events-none ${
-                  isRebuilding ? "opacity-80" : "opacity-0"
+                className={`absolute inset-0 flex items-center justify-center bg-black/40 z-10 transition-opacity duration-500 pointer-events-none ${
+                  !sceneReady || isRebuilding ? "opacity-100" : "opacity-0"
                 }`}
               >
                 <div className="flex flex-col items-center gap-2">
                   <Loader2 className="h-8 w-8 animate-spin text-white/70" />
-                  <span className="text-xs text-white/50">Loading…</span>
+                  <span className="text-xs text-white/50">{!sceneReady ? "Setting up scene…" : "Updating…"}</span>
                 </div>
               </div>
             </div>
@@ -757,7 +764,11 @@ export function VideoStudio({
               ref={templateSelectorRef}
               productId={productId}
               currentConfig={config}
-              onLoadConfig={(c) => setConfig(c)}
+              onLoadConfig={(c) => {
+                // Migrate old "hd" quality to "2k"
+                if ((c.quality as string) === "hd") c = { ...c, quality: "2k" };
+                setConfig(c);
+              }}
             />
 
             {/* Quality & Duration — always visible */}
@@ -772,8 +783,8 @@ export function VideoStudio({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="hd">HD 1080p</SelectItem>
-                  <SelectItem value="2k">2K 1440p</SelectItem>
+                  <SelectItem value="2k">2K 60fps</SelectItem>
+                  <SelectItem value="2k120">2K 120fps</SelectItem>
                 </SelectContent>
               </Select>
               <span className="text-muted-foreground">·</span>
@@ -859,7 +870,7 @@ export function VideoStudio({
             {/* ---- Dynamic section cards ---- */}
             {(() => {
               // The active (auto-expanded by selection) section renders first, rest in default order
-              const defaultOrder = ["cue", "camera", "lights", "hdri", "background", "shadow"] as const;
+              const defaultOrder = ["cue", "camera", "lights", "background", "shadow"] as const;
               const active = autoExpandedSectionRef.current;
               const ordered = active
                 ? [active, ...defaultOrder.filter((s) => s !== active)]
@@ -919,83 +930,6 @@ export function VideoStudio({
                               onSetStart={handleSetStart}
                               onSetEnd={handleSetEnd}
                             />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  case "hdri":
-                    return (
-                      <div key="hdri" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
-                        <button
-                          type="button"
-                          className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
-                          onClick={() => toggleSection("hdri")}
-                        >
-                          <Sun className="h-3.5 w-3.5 text-muted-foreground" />
-                          <span>HDRI Lighting</span>
-                          <span className="flex-1" />
-                          {expandedSections.has("hdri") ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
-                        </button>
-                        {expandedSections.has("hdri") && (
-                          <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
-                            <div className="space-y-1.5">
-                              <Label className="text-xs text-muted-foreground">
-                                Environment
-                              </Label>
-                              <Select
-                                value={config.hdriFile}
-                                onValueChange={(v) => updateConfig("hdriFile", v)}
-                              >
-                                <SelectTrigger className="h-8">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {HDRI_OPTIONS_FALLBACK.map((h) => (
-                                    <SelectItem key={h.id} value={h.id}>
-                                      {h.label}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            <div className="space-y-1.5">
-                              <Label className="text-xs text-muted-foreground">
-                                Rotation X — {config.hdriConfig.layers[0]?.rotationX ?? 0}°
-                              </Label>
-                              <Slider
-                                value={[config.hdriConfig.layers[0]?.rotationX ?? 0]}
-                                onValueChange={([v]) => {
-                                  const layers = [...config.hdriConfig.layers];
-                                  if (layers[0]) layers[0] = { ...layers[0], rotationX: v };
-                                  updateConfig("hdriConfig", { layers });
-                                }}
-                                min={0} max={360} step={1}
-                              />
-                            </div>
-                            <div className="space-y-1.5">
-                              <Label className="text-xs text-muted-foreground">
-                                Rotation Y — {config.hdriConfig.layers[0]?.rotationY ?? 0}°
-                              </Label>
-                              <Slider
-                                value={[config.hdriConfig.layers[0]?.rotationY ?? 0]}
-                                onValueChange={([v]) => {
-                                  const layers = [...config.hdriConfig.layers];
-                                  if (layers[0]) layers[0] = { ...layers[0], rotationY: v };
-                                  updateConfig("hdriConfig", { layers });
-                                }}
-                                min={0} max={360} step={1}
-                              />
-                            </div>
-                            <div className="space-y-1.5">
-                              <Label className="text-xs text-muted-foreground">
-                                Intensity — {((config.hdriIntensity ?? 1.0) * 100).toFixed(0)}%
-                              </Label>
-                              <Slider
-                                value={[config.hdriIntensity ?? 1.0]}
-                                onValueChange={([v]) => updateConfig("hdriIntensity", v)}
-                                min={0} max={3} step={0.05}
-                              />
-                            </div>
                           </div>
                         )}
                       </div>
@@ -1126,6 +1060,27 @@ export function VideoStudio({
                                     </SelectContent>
                                   </Select>
                                 </div>
+                                {/* Light Color — only for Studio White */}
+                                {layer.hdriType === STUDIO_WHITE_HDRI && (
+                                  <div className="space-y-0.5">
+                                    <Label className="text-[10px] text-muted-foreground">Light Color</Label>
+                                    <div className="flex items-center gap-1.5">
+                                      <input
+                                        type="color"
+                                        value={layer.lightColor ?? "#ffffff"}
+                                        onChange={(e) => {
+                                          const layers = [...config.hdriConfig.layers];
+                                          layers[idx] = { ...layers[idx], lightColor: e.target.value };
+                                          setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                        }}
+                                        className="w-6 h-6 rounded cursor-pointer border border-border/50 p-0"
+                                      />
+                                      <span className="text-[10px] text-muted-foreground font-mono">
+                                        {(layer.lightColor ?? "#ffffff").toUpperCase()}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )}
                                 {/* Intensity */}
                                 <div className="space-y-0.5">
                                   <Label className="text-[10px] text-muted-foreground">
@@ -1141,36 +1096,41 @@ export function VideoStudio({
                                     min={0} max={3} step={0.05}
                                   />
                                 </div>
-                                {/* Rotation Y (Direction) */}
-                                <div className="space-y-0.5">
-                                  <Label className="text-[10px] text-muted-foreground">
-                                    Direction — {layer.rotationY.toFixed(0)}°
-                                  </Label>
-                                  <Slider
-                                    value={[layer.rotationY]}
-                                    onValueChange={([v]) => {
-                                      const layers = [...config.hdriConfig.layers];
-                                      layers[idx] = { ...layers[idx], rotationY: v };
-                                      setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
-                                    }}
-                                    min={0} max={360} step={1}
-                                  />
-                                </div>
-                                {/* Rotation X (Elevation) */}
-                                <div className="space-y-0.5">
-                                  <Label className="text-[10px] text-muted-foreground">
-                                    Elevation — {layer.rotationX.toFixed(0)}°
-                                  </Label>
-                                  <Slider
-                                    value={[layer.rotationX]}
-                                    onValueChange={([v]) => {
-                                      const layers = [...config.hdriConfig.layers];
-                                      layers[idx] = { ...layers[idx], rotationX: v };
-                                      setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
-                                    }}
-                                    min={-90} max={90} step={1}
-                                  />
-                                </div>
+                                {/* Direction & Elevation — only for real HDRI files */}
+                                {layer.hdriType !== STUDIO_WHITE_HDRI && (
+                                  <>
+                                    {/* Rotation Y (Direction) */}
+                                    <div className="space-y-0.5">
+                                      <Label className="text-[10px] text-muted-foreground">
+                                        Direction — {layer.rotationY.toFixed(0)}°
+                                      </Label>
+                                      <Slider
+                                        value={[layer.rotationY]}
+                                        onValueChange={([v]) => {
+                                          const layers = [...config.hdriConfig.layers];
+                                          layers[idx] = { ...layers[idx], rotationY: v };
+                                          setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                        }}
+                                        min={0} max={360} step={1}
+                                      />
+                                    </div>
+                                    {/* Rotation X (Elevation) */}
+                                    <div className="space-y-0.5">
+                                      <Label className="text-[10px] text-muted-foreground">
+                                        Elevation — {layer.rotationX.toFixed(0)}°
+                                      </Label>
+                                      <Slider
+                                        value={[layer.rotationX]}
+                                        onValueChange={([v]) => {
+                                          const layers = [...config.hdriConfig.layers];
+                                          layers[idx] = { ...layers[idx], rotationX: v };
+                                          setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                        }}
+                                        min={-90} max={90} step={1}
+                                      />
+                                    </div>
+                                  </>
+                                )}
                               </div>
                             ))}
                           </div>

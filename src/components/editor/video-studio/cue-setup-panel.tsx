@@ -296,8 +296,8 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
         );
       })}
 
-      {/* ── Add button ── */}
-      <Button
+      {/* ── Add button (temporarily disabled) ── */}
+      {/* <Button
         variant="outline"
         size="sm"
         className="w-full h-7 text-xs"
@@ -305,7 +305,7 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
         onClick={addInstance}
       >
         <Plus className="size-3 mr-1" /> Add Cue Copy
-      </Button>
+      </Button> */}
     </div>
   );
 }

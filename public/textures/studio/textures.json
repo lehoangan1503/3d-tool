@@ -1,6 +1,39 @@
 {
   "wall": [
     {
+      "id": "white_studio",
+      "name": "White Studio",
+      "folder": "__solid__",
+      "maps": [],
+      "tiling": [1, 1],
+      "roughnessValue": 1.0,
+      "metalnessValue": 0,
+      "displacementScale": 0,
+      "solidColor": "#ffffff"
+    },
+    {
+      "id": "white_plastic",
+      "name": "White Plastic",
+      "folder": "wall/white_plastic",
+      "maps": ["diff"],
+      "fileExt": "png",
+      "tiling": [1, 1],
+      "roughnessValue": 0.4,
+      "metalnessValue": 0,
+      "displacementScale": 0
+    },
+    {
+      "id": "gray_cement",
+      "name": "Gray Cement",
+      "folder": "wall/gray_cement",
+      "maps": ["diff", "roughness"],
+      "fileExt": "png",
+      "tiling": [2, 2],
+      "roughnessValue": 0.8,
+      "metalnessValue": 0,
+      "displacementScale": 0
+    },
+    {
       "id": "plastered_wall_05",
       "name": "Plastered Wall",
       "folder": "wall/plastered_wall_05",
@@ -8,10 +41,50 @@
       "tiling": [3, 3],
       "roughnessValue": 0.95,
       "metalnessValue": 0,
-      "displacementScale": 0.05
+      "displacementScale": 0.05,
+      "hqOverrides": {
+        "diff": "/textures/studio/wall/plastered_wall_05/diff_2k.jpg",
+        "normal": "/textures/studio/wall/plastered_wall_05/nor_gl_2k.exr",
+        "roughness": "/textures/studio/wall/plastered_wall_05/rough_2k.exr",
+        "ao": "/textures/studio/wall/plastered_wall_05/ao_2k.jpg",
+        "displacement": "/textures/studio/wall/plastered_wall_05/disp_2k.png"
+      }
     }
   ],
   "table": [
+    {
+      "id": "white_studio",
+      "name": "White Studio",
+      "folder": "__solid__",
+      "maps": [],
+      "tiling": [1, 1],
+      "roughnessValue": 1.0,
+      "metalnessValue": 0,
+      "displacementScale": 0,
+      "solidColor": "#ffffff"
+    },
+    {
+      "id": "white_plastic",
+      "name": "White Plastic",
+      "folder": "table/white_plastic",
+      "maps": ["diff"],
+      "fileExt": "png",
+      "tiling": [1, 1],
+      "roughnessValue": 0.4,
+      "metalnessValue": 0,
+      "displacementScale": 0
+    },
+    {
+      "id": "gray_cement",
+      "name": "Gray Cement",
+      "folder": "table/gray_cement",
+      "maps": ["diff", "roughness"],
+      "fileExt": "png",
+      "tiling": [2, 2],
+      "roughnessValue": 0.8,
+      "metalnessValue": 0,
+      "displacementScale": 0
+    },
     {
       "id": "denim_fabric_06",
       "name": "Denim Fabric",
@@ -20,7 +93,13 @@
       "tiling": [4, 4],
       "roughnessValue": 0.95,
       "metalnessValue": 0,
-      "displacementScale": 0.02
+      "displacementScale": 0.02,
+      "hqOverrides": {
+        "diff": "/textures/studio/table/denim_fabric_06/diff_2k.jpg",
+        "normal": "/textures/studio/table/denim_fabric_06/nor_gl_2k.exr",
+        "roughness": "/textures/studio/table/denim_fabric_06/rough_2k.exr",
+        "displacement": "/textures/studio/table/denim_fabric_06/disp_2k.png"
+      }
     }
   ]
 }

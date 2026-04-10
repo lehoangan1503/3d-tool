@@ -92,6 +92,7 @@ export class ExtractorSceneManager {
   private lastHdriLayersKey: string = ''; // Track last applied layers to skip redundant updates
   private pendingHdriUpdate: boolean = false;
   private queuedHdriLayers: HdriLayer[] | null = null; // Queue latest request while pending
+  private hdriLayersActive: boolean = false; // true when setHdriLayers manages cue env
   private _lastHdriRotKey: string = '';
 
   // Studio elements (for video)
@@ -831,6 +832,10 @@ export class ExtractorSceneManager {
    *  Loads the HDRI, applies rotation, processes through PMREM, and sets
    *  material.envMap on all cue model meshes. */
   async setCueHdri(config: CueHdriConfig): Promise<void> {
+    // When setHdriLayers() is actively managing cue env, skip standalone setCueHdri
+    // to avoid overwriting the blended multi-layer result.
+    if (this.hdriLayersActive) return;
+
     const key = JSON.stringify({
       t: config.hdriType,
       rx: Math.round(config.rotationX),
@@ -842,10 +847,9 @@ export class ExtractorSceneManager {
     try {
       let tex = await this.loadAndCacheHdri(config.hdriType);
 
-      // Apply rotation Y (horizontal)
-      if (config.rotationY !== 0) {
-        const rotRad = (config.rotationY * Math.PI) / 180;
-        const rotated = this.createRotatedHdriTexture(tex, rotRad);
+      // Apply both X and Y rotation
+      if (config.rotationX !== 0 || config.rotationY !== 0) {
+        const rotated = this.createRotatedHdriTextureXY(tex, config.rotationX, config.rotationY);
         if (rotated) {
           tex.dispose();
           tex = rotated;
@@ -967,6 +971,9 @@ export class ExtractorSceneManager {
     // Filter to enabled layers only
     const activeLayers = layers.filter(l => l.enabled !== false);
 
+    // Track whether layers are managing cue env (set immediately to prevent race with setCueHdri)
+    this.hdriLayersActive = activeLayers.length > 0;
+
     // If no active layers, clear environment so scene goes dark
     if (activeLayers.length === 0) {
       if (this.envRenderTarget) {
@@ -1028,14 +1035,14 @@ export class ExtractorSceneManager {
         return;
       }
       
-      // Rotate HDRI textures by their layer rotationY so IBL on the cue
+      // Rotate HDRI textures by their layer rotationX and rotationY so IBL on the cue
       // reflects the light direction, not just the shadow direction.
       const rotatedTextures: THREE.DataTexture[] = [];
       for (let i = 0; i < textures.length; i++) {
-        const rotDeg = activeLayers[i].rotationY ?? 0;
-        if (rotDeg !== 0) {
-          const rotRad = (rotDeg * Math.PI) / 180;
-          const rotated = this.createRotatedHdriTexture(textures[i], rotRad);
+        const rotXDeg = activeLayers[i].rotationX ?? 0;
+        const rotYDeg = activeLayers[i].rotationY ?? 0;
+        if (rotXDeg !== 0 || rotYDeg !== 0) {
+          const rotated = this.createRotatedHdriTextureXY(textures[i], rotXDeg, rotYDeg);
           rotatedTextures.push(rotated ?? textures[i]);
         } else {
           rotatedTextures.push(textures[i]);
@@ -1071,8 +1078,13 @@ export class ExtractorSceneManager {
       }
       this.envRenderTarget = rt;
       // Clear scene.environment since the old render target (set by loadHDRI) was just disposed.
-      // Cue materials use their own envMap via setCueHdri(); surfaces use getSurfaceEnvMap().
       this.scene.environment = null;
+
+      // Apply blended PMREM directly to cue materials so multi-layer mixing
+      // and per-layer rotation are reflected on the cue model.
+      this.applyCueEnvMap(rt.texture, 1.0);
+      // Invalidate setCueHdri cache so it re-applies if layers are later cleared
+      this.lastCueHdriKey = '';
       
       // Mark as successfully applied
       this.lastHdriLayersKey = layersKey;

@@ -28,7 +28,7 @@ import {
   Loader2,
 } from "lucide-react";
 import type { ExtractorFrame, ExtractorReference, HdriLayer, CueFrame, CueSettings, ImageFrame } from "@/types/extractor";
-import { createDefaultHdriLayer, isCueFrame, isImageFrame } from "@/types/extractor";
+import { createDefaultHdriLayer, isCueFrame, isImageFrame, STUDIO_WHITE_HDRI } from "@/types/extractor";
 import { cn } from "@/lib/utils";
 import { ImageFrameControls } from "./image-frame-controls";
 import { FramesList } from "./frames-list";
@@ -325,6 +325,7 @@ export function FrameControlsPanel({
   };
 
   const getHdriLabel = (hdriType: string) => {
+    if (hdriType === STUDIO_WHITE_HDRI) return "Studio White";
     const option = hdriOptions.find((o) => o.id === hdriType);
     // Return short name (first 2 words)
     if (option) {

@@ -11,10 +11,29 @@ import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import { FrameCanvas, CANVAS_SIZE } from "./frame-canvas";
 import { FrameControlsPanel } from "./frame-controls-panel";
 import { DownloadMultipleDialog } from "./download-multiple-dialog";
-import type { ExtractorFrame, ExtractorReference, TemplateKey, CueFrame, ImageFrame, ImageGradient } from "@/types/extractor";
-import { createDefaultFrame, createDefaultImageFrame, FRAME_TEMPLATES, isCueFrame, isImageFrame } from "@/types/extractor";
+import type { ExtractorFrame, ExtractorReference, TemplateKey, CueFrame, ImageFrame, ImageGradient, HdriLayer } from "@/types/extractor";
+import { createDefaultFrame, createDefaultImageFrame, FRAME_TEMPLATES, isCueFrame, isImageFrame, STUDIO_WHITE_HDRI } from "@/types/extractor";
+import type { CueHdriConfig } from "@/types/video-studio";
+import { DEFAULT_CUE_HDRI } from "@/types/video-studio";
 import { resolveStorageUrl } from "@/lib/resolve-storage-url";
 import { useUndoable } from "@/hooks/use-undoable";
+
+/** Convert an HdriLayer[] (used by Image Extractor frames) into a CueHdriConfig
+ *  so that `setCueHdri()` can apply the HDRI environment map directly to cue
+ *  materials.  Uses the first enabled non-studio-white layer, falling back to
+ *  DEFAULT_CUE_HDRI. */
+function hdriLayersToCueHdri(layers: HdriLayer[]): CueHdriConfig {
+  const primary = layers.find(l => l.enabled && l.hdriType !== STUDIO_WHITE_HDRI);
+  if (primary) {
+    return {
+      hdriType: primary.hdriType,
+      rotationX: primary.rotationX,
+      rotationY: primary.rotationY,
+      intensity: primary.intensity,
+    };
+  }
+  return { ...DEFAULT_CUE_HDRI };
+}
 
 /**
  * Draws an image onto a 2D canvas context respecting object-fit behaviour,
@@ -176,7 +195,9 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
     const hdriFilename = hdriUrl.split("/").pop() || "bloem_train_track_clear_2k.hdr";
     setCurrentHdriType(hdriFilename);
 
-    extractor.loadHDRI(hdriUrl).then(() => {
+    extractor.loadHDRI(hdriUrl).then(async () => {
+      // Apply cue HDRI env map so materials get proper reflections
+      await extractor.setCueHdri({ ...DEFAULT_CUE_HDRI, hdriType: hdriFilename });
       extractor.setTransparentBackground(true);
       // Start continuous animation loop for live preview
       extractor.startLivePreview();
@@ -206,6 +227,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
     if (extractorRef.current) {
       const hdriUrl = `/hdri/${encodeURIComponent(hdriType)}`;
       await extractorRef.current.loadHDRI(hdriUrl);
+      await extractorRef.current.setCueHdri({ ...DEFAULT_CUE_HDRI, hdriType });
     }
   }, []);
 
@@ -528,6 +550,8 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           // Apply HDRI layers (new multi-HDRI system)
           if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
             await exportExtractor.setHdriLayers(frame.cue.hdriLayers);
+            // Apply cue-only HDRI env map (setHdriLayers only creates shadow lights)
+            await exportExtractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
           } else if (frame.cue.lightAngle !== undefined) {
             // Legacy fallback
             exportExtractor.setHdriRotation(frame.cue.lightAngle);
@@ -656,6 +680,8 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           // Apply HDRI layers
           if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
             await exportExtractor.setHdriLayers(frame.cue.hdriLayers);
+            // Apply cue-only HDRI env map (setHdriLayers only creates shadow lights)
+            await exportExtractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
           } else if (frame.cue.lightAngle !== undefined) {
             exportExtractor.setHdriRotation(frame.cue.lightAngle);
           }

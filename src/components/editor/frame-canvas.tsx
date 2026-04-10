@@ -4,10 +4,26 @@ import { useRef, useCallback, useEffect, useState, useMemo } from "react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import type { ExtractorFrame, HdriLayer, CueFrame } from "@/types/extractor";
-import { isCueFrame, isImageFrame } from "@/types/extractor";
+import { isCueFrame, isImageFrame, STUDIO_WHITE_HDRI } from "@/types/extractor";
+import type { CueHdriConfig } from "@/types/video-studio";
+import { DEFAULT_CUE_HDRI } from "@/types/video-studio";
 import { StaticFrame } from "./static-frame";
 import { cn } from "@/lib/utils";
 import { RotateCw } from "lucide-react";
+
+/** Convert HdriLayer[] to CueHdriConfig for setCueHdri() */
+function hdriLayersToCueHdri(layers: HdriLayer[]): CueHdriConfig {
+  const primary = layers.find(l => l.enabled && l.hdriType !== STUDIO_WHITE_HDRI);
+  if (primary) {
+    return {
+      hdriType: primary.hdriType,
+      rotationX: primary.rotationX,
+      rotationY: primary.rotationY,
+      intensity: primary.intensity,
+    };
+  }
+  return { ...DEFAULT_CUE_HDRI };
+}
 
 interface FrameCanvasProps {
   frames: ExtractorFrame[];
@@ -247,6 +263,7 @@ export function FrameCanvas({
       // Use new multi-HDRI layers system
       if (selectedFrame.cue.hdriLayers && selectedFrame.cue.hdriLayers.length > 0) {
         extractor.setHdriLayers(selectedFrame.cue.hdriLayers);
+        extractor.setCueHdri(hdriLayersToCueHdri(selectedFrame.cue.hdriLayers));
       } else if (selectedFrame.cue.lightAngle !== undefined) {
         // Legacy fallback
         extractor.setHdriRotation(selectedFrame.cue.lightAngle);
@@ -298,6 +315,7 @@ export function FrameCanvas({
     const timeoutId = setTimeout(() => {
       if (selectedFrame.cue.hdriLayers && selectedFrame.cue.hdriLayers.length > 0) {
         extractorRef.current?.setHdriLayers(selectedFrame.cue.hdriLayers);
+        extractorRef.current?.setCueHdri(hdriLayersToCueHdri(selectedFrame.cue.hdriLayers));
       } else if (selectedFrame.cue.lightAngle !== undefined) {
         // Legacy fallback
         extractorRef.current?.setHdriRotation(selectedFrame.cue.lightAngle);

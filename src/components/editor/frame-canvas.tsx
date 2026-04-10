@@ -262,7 +262,7 @@ export function FrameCanvas({
       extractor.setModelOffset(selectedFrame.cue.offsetX, selectedFrame.cue.offsetY);
       // Use new multi-HDRI layers system
       if (selectedFrame.cue.hdriLayers && selectedFrame.cue.hdriLayers.length > 0) {
-        extractor.setHdriLayers(selectedFrame.cue.hdriLayers);
+        extractor.setHdriLayers(selectedFrame.cue.hdriLayers, { applyCueEnv: true });
         extractor.setCueHdri(hdriLayersToCueHdri(selectedFrame.cue.hdriLayers));
       } else if (selectedFrame.cue.lightAngle !== undefined) {
         // Legacy fallback
@@ -314,7 +314,7 @@ export function FrameCanvas({
     // Debounce HDRI updates to avoid lag during slider drag
     const timeoutId = setTimeout(() => {
       if (selectedFrame.cue.hdriLayers && selectedFrame.cue.hdriLayers.length > 0) {
-        extractorRef.current?.setHdriLayers(selectedFrame.cue.hdriLayers);
+        extractorRef.current?.setHdriLayers(selectedFrame.cue.hdriLayers, { applyCueEnv: true });
         extractorRef.current?.setCueHdri(hdriLayersToCueHdri(selectedFrame.cue.hdriLayers));
       } else if (selectedFrame.cue.lightAngle !== undefined) {
         // Legacy fallback

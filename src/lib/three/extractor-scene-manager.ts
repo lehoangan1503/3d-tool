@@ -92,6 +92,7 @@ export class ExtractorSceneManager {
   private lastHdriLayersKey: string = ''; // Track last applied layers to skip redundant updates
   private pendingHdriUpdate: boolean = false;
   private queuedHdriLayers: HdriLayer[] | null = null; // Queue latest request while pending
+  private queuedHdriApplyCue: boolean = false; // Propagate applyCueEnv option through queue
   private hdriLayersActive: boolean = false; // true when setHdriLayers manages cue env
   private _lastHdriRotKey: string = '';
 
@@ -967,12 +968,14 @@ export class ExtractorSceneManager {
    * When all layers are disabled, clears the environment to go dark.
    * Queues the latest request if an update is already in progress.
    */
-  async setHdriLayers(layers: HdriLayer[]): Promise<void> {
+  async setHdriLayers(layers: HdriLayer[], options?: { applyCueEnv?: boolean }): Promise<void> {
+    const applyCueEnv = options?.applyCueEnv ?? false;
     // Filter to enabled layers only
     const activeLayers = layers.filter(l => l.enabled !== false);
 
-    // Track whether layers are managing cue env (set immediately to prevent race with setCueHdri)
-    this.hdriLayersActive = activeLayers.length > 0;
+    // Only manage cue env when explicitly requested (Image Extractor mixing).
+    // Video Studio calls this for wall/surface lighting only — cue is handled by setCueHdri().
+    this.hdriLayersActive = applyCueEnv && activeLayers.length > 0;
 
     // If no active layers, clear environment so scene goes dark
     if (activeLayers.length === 0) {
@@ -1002,6 +1005,7 @@ export class ExtractorSceneManager {
     // If an update is already in progress, queue this one (latest wins)
     if (this.pendingHdriUpdate) {
       this.queuedHdriLayers = layers;
+      this.queuedHdriApplyCue = applyCueEnv;
       return;
     }
     this.pendingHdriUpdate = true;
@@ -1080,11 +1084,14 @@ export class ExtractorSceneManager {
       // Clear scene.environment since the old render target (set by loadHDRI) was just disposed.
       this.scene.environment = null;
 
-      // Apply blended PMREM directly to cue materials so multi-layer mixing
-      // and per-layer rotation are reflected on the cue model.
-      this.applyCueEnvMap(rt.texture, 1.0);
-      // Invalidate setCueHdri cache so it re-applies if layers are later cleared
-      this.lastCueHdriKey = '';
+      // Apply blended PMREM directly to cue materials when explicitly requested
+      // (Image Extractor multi-layer mixing). Video Studio skips this — cue gets
+      // its own env from setCueHdri().
+      if (applyCueEnv) {
+        this.applyCueEnvMap(rt.texture, 1.0);
+        // Invalidate setCueHdri cache so it re-applies if layers are later cleared
+        this.lastCueHdriKey = '';
+      }
       
       // Mark as successfully applied
       this.lastHdriLayersKey = layersKey;
@@ -1107,8 +1114,10 @@ export class ExtractorSceneManager {
   private processQueuedHdriLayers(): void {
     if (this.queuedHdriLayers) {
       const queued = this.queuedHdriLayers;
+      const applyCue = this.queuedHdriApplyCue;
       this.queuedHdriLayers = null;
-      this.setHdriLayers(queued).catch(err =>
+      this.queuedHdriApplyCue = false;
+      this.setHdriLayers(queued, { applyCueEnv: applyCue }).catch(err =>
         console.warn('[ESM] Queued HDRI update failed:', err)
       );
     }

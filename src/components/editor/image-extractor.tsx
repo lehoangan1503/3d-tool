@@ -549,8 +549,8 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
 
           // Apply HDRI layers (new multi-HDRI system)
           if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
-            await exportExtractor.setHdriLayers(frame.cue.hdriLayers);
-            // Apply cue-only HDRI env map (setHdriLayers only creates shadow lights)
+            await exportExtractor.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
+            // setCueHdri is skipped when applyCueEnv is true (setHdriLayers handles cue)
             await exportExtractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
           } else if (frame.cue.lightAngle !== undefined) {
             // Legacy fallback
@@ -679,8 +679,8 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
 
           // Apply HDRI layers
           if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
-            await exportExtractor.setHdriLayers(frame.cue.hdriLayers);
-            // Apply cue-only HDRI env map (setHdriLayers only creates shadow lights)
+            await exportExtractor.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
+            // setCueHdri is skipped when applyCueEnv is true (setHdriLayers handles cue)
             await exportExtractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
           } else if (frame.cue.lightAngle !== undefined) {
             exportExtractor.setHdriRotation(frame.cue.lightAngle);

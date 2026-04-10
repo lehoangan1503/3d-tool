@@ -1,5 +1,5 @@
 import type { HdriLayer } from "./extractor";
-import { createDefaultHdriLayer } from "./extractor";
+import { createDefaultHdriLayer, STUDIO_WHITE_HDRI } from "./extractor";
 
 // ── Camera Keyframes (start and end) ──
 
@@ -265,7 +265,7 @@ export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
   easing: { ...DEFAULT_EASING },
   wallSurface: { ...DEFAULT_WALL_SURFACE },
   tableSurface: { ...DEFAULT_TABLE_SURFACE },
-  hdriConfig: { layers: [createDefaultHdriLayer()] },
+  hdriConfig: { layers: [createDefaultHdriLayer(STUDIO_WHITE_HDRI)] },
   hdriIntensity: 1.0,
   cueHdri: { ...DEFAULT_CUE_HDRI },
   quality: "2k",

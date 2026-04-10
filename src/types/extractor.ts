@@ -265,14 +265,14 @@ export interface HdriLayer {
   lightColor?: string; // Hex color for studio white light (e.g. "#ffffff")
 }
 
-/** Default HDRI layer — studio white */
+/** Default HDRI layer — bloem train (same as DEFAULT_CUE_HDRI).
+ *  Studio white is only used for the video studio environment. */
 export const DEFAULT_HDRI_LAYER: Omit<HdriLayer, "id"> = {
-  hdriType: STUDIO_WHITE_HDRI,
+  hdriType: "bloem_train_track_clear_2k.hdr",
   rotationX: 0,
   rotationY: 300,
   intensity: 1.0,
   enabled: true,
-  lightColor: "#ffffff",
 };
 
 /** Create a new HDRI layer with defaults */

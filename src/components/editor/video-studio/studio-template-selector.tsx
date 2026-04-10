@@ -59,7 +59,6 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
     setIsLoading(true);
     try {
       const params = new URLSearchParams({
-        product_id: productId,
         limit: "50",
       });
       const res = await fetch(`/api/video-studio-templates?${params}`);

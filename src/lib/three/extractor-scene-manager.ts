@@ -181,8 +181,11 @@ export class ExtractorSceneManager {
       typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2
     ));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // ACESFilmic tone mapping with moderate exposure boost compensates for
+    // the front-view camera angle producing dimmer specular reflections
+    // compared to the main scene's angled view.
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.2;
+    this.renderer.toneMappingExposure = 1.5;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -191,6 +194,11 @@ export class ExtractorSceneManager {
 
     this.camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 100);
     this.camera.position.set(2, 0, 2);
+
+    // Subtle fill light matching main scene's PointLight
+    const fillLight = new THREE.PointLight(0xffffff, 0.5, 10);
+    fillLight.position.set(0, -3, 1);
+    this.scene.add(fillLight);
 
     this.pmremGenerator = new THREE.PMREMGenerator(this.renderer);
     this.pmremGenerator.compileEquirectangularShader();
@@ -1062,9 +1070,9 @@ export class ExtractorSceneManager {
         this.envRenderTarget.dispose();
       }
       this.envRenderTarget = rt;
-      // Do NOT set scene.environment — cue uses its own envMap via setCueHdri(),
-      // and surfaces use their own solid-white envMap via getSurfaceEnvMap().
-      // scene.environment is kept null so nothing gets unintended HDRI reflections.
+      // Clear scene.environment since the old render target (set by loadHDRI) was just disposed.
+      // Cue materials use their own envMap via setCueHdri(); surfaces use getSurfaceEnvMap().
+      this.scene.environment = null;
       
       // Mark as successfully applied
       this.lastHdriLayersKey = layersKey;
@@ -1369,6 +1377,21 @@ export class ExtractorSceneManager {
     }
 
     this.clonedModel = sourceModel.clone(true);
+
+    // Deep-clone geometry and materials so the extractor is fully isolated
+    // from the main scene. Without this, clone(true) shares geometry/material
+    // instances — mutating envMap or disposing here would corrupt the main scene.
+    this.clonedModel.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry = child.geometry.clone();
+        if (Array.isArray(child.material)) {
+          child.material = child.material.map((m: THREE.Material) => m.clone());
+        } else {
+          child.material = child.material.clone();
+        }
+      }
+    });
+
     console.log('[ExtractorSceneManager] Cloned model, children:', this.clonedModel.children.length);
 
     let meshCount = 0;

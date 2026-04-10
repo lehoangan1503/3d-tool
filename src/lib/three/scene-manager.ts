@@ -1068,6 +1068,8 @@ export class SceneManager {
    */
   resumeAnimation(): void {
     if (!this.isDisposed && this.animationId === null) {
+      // Restore material state in case an extractor mutated shared materials
+      this.forceSceneEnvironmentOnMaterials();
       this.animate();
     }
   }

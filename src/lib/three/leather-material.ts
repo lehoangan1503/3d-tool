@@ -825,7 +825,37 @@ export function applyLogoToExistingMaterial(mat: THREE.Material, type: "rubber" 
   const originalMap = physMat.map;
 
   if (!originalMap) {
-    console.warn(`[applyLogo] No map texture found on material "${mat.name}", skipping logo`);
+    // No texture map (e.g. solid-color "Plastic Black" material) — create one with logo
+    console.log(`[applyLogo] No map texture on "${mat.name}", creating solid color canvas with logo`);
+    const width = 2048;
+    const height = 2048;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d")!;
+
+    const bgColor = type === "rubber"
+      ? "#0a0a0a"
+      : (physMat.color ? `#${physMat.color.getHexString()}` : "#1a1a1a");
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, 0, width, height);
+
+    if (type === "rubber") {
+      drawRubberLogoOnCanvas(ctx, width, height);
+    } else if (type === "topCapFace") {
+      drawTopCapFaceLogoOnCanvas(ctx, width, height);
+    }
+
+    const newTexture = new THREE.CanvasTexture(canvas);
+    newTexture.colorSpace = THREE.SRGBColorSpace;
+    newTexture.flipY = true;
+    newTexture.wrapS = THREE.RepeatWrapping;
+    newTexture.wrapT = THREE.RepeatWrapping;
+    newTexture.needsUpdate = true;
+
+    physMat.map = newTexture;
+    physMat.needsUpdate = true;
+    console.log(`[applyLogo] Applied ${type} logo on solid background for "${mat.name}" (${width}x${height})`);
     return;
   }
 
@@ -884,7 +914,8 @@ export function applyLogoToExistingMaterial(mat: THREE.Material, type: "rubber" 
     }
 
     // Fallback: just draw logo on a solid background
-    logoCtx.fillStyle = physMat.color ? `#${physMat.color.getHexString()}` : "#1a1a1a";
+    const fallbackColor = type === "rubber" ? "#0a0a0a" : (physMat.color ? `#${physMat.color.getHexString()}` : "#1a1a1a");
+    logoCtx.fillStyle = fallbackColor;
     logoCtx.fillRect(0, 0, width, height);
 
     if (type === "rubber") {
@@ -944,6 +975,140 @@ export function applyLogoToExistingMaterial(mat: THREE.Material, type: "rubber" 
   physMat.map = newTexture;
   physMat.needsUpdate = true;
   console.log(`[applyLogo] Applied ${type} logo overlay to material "${mat.name}" (${width}x${height})`);
+}
+
+// =====================================================
+// RUBBER LOGO VIA EMISSIVE MAP
+// =====================================================
+
+/**
+ * Apply shader mask to bumper material so emissive only shows on downward-facing
+ * surfaces (bottom face), preventing logo from appearing on the cylinder side.
+ * Exported so the extractor can re-apply after cloning (clone() drops onBeforeCompile).
+ */
+export function applyBumperEmissiveShaderMask(physMat: THREE.MeshPhysicalMaterial): void {
+  physMat.onBeforeCompile = (shader: { vertexShader: string; fragmentShader: string }) => {
+    shader.vertexShader = shader.vertexShader.replace(
+      "void main() {",
+      "varying vec3 vBumperWorldNormal;\nvoid main() {"
+    );
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <begin_vertex>",
+      "#include <begin_vertex>\nvBumperWorldNormal = normalize((modelMatrix * vec4(objectNormal, 0.0)).xyz);"
+    );
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "void main() {",
+      "varying vec3 vBumperWorldNormal;\nvoid main() {"
+    );
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <emissivemap_fragment>",
+      `#include <emissivemap_fragment>
+      float bumperMask = smoothstep(-0.85, -0.95, vBumperWorldNormal.y);
+      totalEmissiveRadiance *= bumperMask;`
+    );
+  };
+  physMat.customProgramCacheKey = () => "bumperEmissiveMask";
+  physMat.needsUpdate = true;
+}
+
+/**
+ * Apply rubber logo as an emissive map so it's visible even with material.color = #000000.
+ * material.color multiplies the diffuse map, but emissive is additive.
+ * Uses the original map's dimensions and UV transforms to ensure correct alignment.
+ */
+export function applyRubberLogoEmissive(mat: THREE.Material): void {
+  if (!bumperLogoImage || !RUBBER_CONFIG.logo.enabled) {
+    console.warn(`[applyRubberLogoEmissive] Logo not loaded or disabled, skipping`);
+    return;
+  }
+
+  const physMat = mat as THREE.MeshPhysicalMaterial;
+  const originalMap = physMat.map;
+
+  // Match original texture dimensions, or use default
+  let width = 1024;
+  let height = 1024;
+  if (originalMap) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const isCompressed = (originalMap as any).isCompressedTexture;
+    if (isCompressed) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mipmaps = (originalMap as any).mipmaps;
+      width = mipmaps?.[0]?.width || 1024;
+      height = mipmaps?.[0]?.height || 1024;
+    } else if (originalMap.image) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      width = (originalMap.image as any).width || 1024;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      height = (originalMap.image as any).height || 1024;
+    }
+  }
+
+  console.log(`[applyRubberLogoEmissive] Creating emissive map ${width}x${height} for "${mat.name}"`);
+
+  // Create emissive map canvas: black background (no emission) + white logo (full emission)
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d")!;
+
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, width, height);
+
+  // Draw logo in white — emissive color will tint it
+  const logoScale = RUBBER_CONFIG.logo.scale;
+  const logoW = width * logoScale;
+  const logoH = (bumperLogoImage.height / bumperLogoImage.width) * logoW;
+  // Center logo on canvas — matches bottom face center in TEXCOORD_1
+  const logoX = (width - logoW) / 2;
+  const logoY = (height - logoH) / 2;
+
+  const whiteCanvas = document.createElement("canvas");
+  whiteCanvas.width = bumperLogoImage.width;
+  whiteCanvas.height = bumperLogoImage.height;
+  const whiteCtx = whiteCanvas.getContext("2d")!;
+  whiteCtx.drawImage(bumperLogoImage, 0, 0);
+  whiteCtx.globalCompositeOperation = "source-in";
+  whiteCtx.fillStyle = "#ffffff";
+  whiteCtx.fillRect(0, 0, whiteCanvas.width, whiteCanvas.height);
+
+  ctx.save();
+  ctx.globalAlpha = RUBBER_CONFIG.logo.opacity || 1.0;
+  if (RUBBER_CONFIG.logo.flipX || RUBBER_CONFIG.logo.flipY) {
+    ctx.translate(logoX + logoW / 2, logoY + logoH / 2);
+    ctx.scale(RUBBER_CONFIG.logo.flipX ? -1 : 1, RUBBER_CONFIG.logo.flipY ? -1 : 1);
+    ctx.drawImage(whiteCanvas, -logoW / 2, -logoH / 2, logoW, logoH);
+  } else {
+    ctx.drawImage(whiteCanvas, logoX, logoY, logoW, logoH);
+  }
+  ctx.restore();
+
+  const emissiveTexture = new THREE.CanvasTexture(canvas);
+  emissiveTexture.colorSpace = THREE.SRGBColorSpace;
+  emissiveTexture.needsUpdate = true;
+
+  // Use TEXCOORD_1 (channel 1) matching the diffuse map — logo centers naturally
+  if (originalMap) {
+    emissiveTexture.flipY = originalMap.flipY;
+    emissiveTexture.wrapS = originalMap.wrapS;
+    emissiveTexture.wrapT = originalMap.wrapT;
+    emissiveTexture.channel = originalMap.channel;
+  } else {
+    emissiveTexture.flipY = false;
+    emissiveTexture.wrapS = THREE.RepeatWrapping;
+    emissiveTexture.wrapT = THREE.RepeatWrapping;
+    emissiveTexture.channel = 1;
+  }
+
+  // Apply emissive map — use bright white emissive with intensity to control logo brightness
+  physMat.emissiveMap = emissiveTexture;
+  physMat.emissive = new THREE.Color("#ffffff");
+  physMat.emissiveIntensity = 0.15;
+  physMat.needsUpdate = true;
+
+  applyBumperEmissiveShaderMask(physMat);
+
+  console.log(`[applyRubberLogoEmissive] Applied emissive logo to "${mat.name}" with normal-based mask (${width}x${height})`);
 }
 
 // =====================================================

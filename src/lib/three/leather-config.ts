@@ -397,23 +397,23 @@ export function getSurfacePath(surfaceKey: string): string {
 export const RUBBER_CONFIG: RubberConfigType = {
   enabled: true,
   materialNames: ["bumper_mat", "bumper", "rubber", "bottom", "butt_cap", "end_cap", "pad", "foot", "base", "Mat_Bumper"],
-  backgroundColor: "#2a2a2a",
+  backgroundColor: "#0a0a0a",
   roughness: 0.94,
   clearcoat: 0.01,
-  metalness: 0,
+  metalness: 1,
   reflectivity: 0.025,
   normalScaleX: 0.78,
   normalScaleY: 0.78,
   logo: {
     enabled: true,
     path: "/logo.png",
-    scale: 0.42,
+    scale: 0.6,
     opacity: 1.0,
-    offsetX: 0.25,
-    offsetY: 0.25,
+    offsetX: 0,
+    offsetY: 0,
     flipX: false,
     flipY: true,
-    color: "#4a4a4a", // Slightly brighter than background for visibility
+    color: "#4a4a4a",
     emboss: false,
     embossDepth: 0,
   },
@@ -425,7 +425,7 @@ export const RUBBER_CONFIG: RubberConfigType = {
 
 export const TOP_CAP_CONFIG: TopCapConfigType = {
   enabled: true,
-  materialNames: ["joint_mat", "joint", "jointcover", "joint_cover", "thread", "screw", "thread_cap", "top_cap", "ferrule", "connector", "adapter", "Mat_JointCover", "JointCover"],
+  materialNames: ["joint_mat", "joint", "jointcover", "joint_cover", "thread", "screw", "thread_cap", "top_cap", "ferrule", "connector", "adapter", "Mat_JointCover", "JointCover", "powder coated metal"],
   roughness: 255,
   clearcoat: 0,
   metalness: 1,

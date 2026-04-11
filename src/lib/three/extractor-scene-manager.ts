@@ -25,6 +25,8 @@ import {
 import type { VideoStudioConfig, CameraKeyframe, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig, CueHdriConfig } from '@/types/video-studio';
 import { computeVideoDuration, createEasingFunction, applyDirection, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI } from '@/types/video-studio';
 import { compositeSurfaceFrames, preloadFrameImages } from './background-compositor';
+import { applyBumperEmissiveShaderMask } from './leather-material';
+import { isRubberMaterial } from './leather-config';
 
 // Available HDRI options (same as editor-client)
 export const HDRI_OPTIONS_FALLBACK = [
@@ -1409,6 +1411,11 @@ export class ExtractorSceneManager {
           child.material = child.material.map((m: THREE.Material) => m.clone());
         } else {
           child.material = child.material.clone();
+        }
+        // Re-apply bumper shader mask — material.clone() drops onBeforeCompile
+        const mat = child.material as THREE.MeshPhysicalMaterial;
+        if (mat.emissiveMap && isRubberMaterial(mat.name, child.name)) {
+          applyBumperEmissiveShaderMask(mat);
         }
       }
     });

@@ -14,6 +14,7 @@ import {
   createStandardMaterial,
   loadAllLogos,
   applyLogoToExistingMaterial,
+  applyRubberLogoEmissive,
   type LeatherTextureMaps,
 } from "./leather-material";
 import { createLeatherRoughnessMap } from "./leather-overlay";
@@ -152,6 +153,11 @@ export class SceneManager {
     roughness: TOP_CAP_CONFIG.roughness,
     clearcoat: TOP_CAP_CONFIG.clearcoat,
     metalness: TOP_CAP_CONFIG.metalness,
+  };
+  private currentBumperConfig = {
+    roughness: 50,
+    metalness: 0.4,
+    color: "#000000",
   };
   private bodyRoughness = 0; // For smooth cue body (default: 0)
   private textureScale = 1; // Texture tiling scale (1 = no tiling)
@@ -715,7 +721,7 @@ export class SceneManager {
    * Update materials on the model with current config
    * Cylinder leather: cylinderConfig controls roughness/clearcoat/metalness/color
    * Joint/Top cap: jointConfig controls roughness/clearcoat/metalness
-   * Rubber: keeps original GLB material
+   * Rubber: hardcoded bumperConfig + logo
    * Other meshes: bodyRoughness + clearcoat from leatherConfig
    */
   private forceSceneEnvironmentOnMaterials() {
@@ -777,7 +783,12 @@ export class SceneManager {
           physMat.needsUpdate = true;
           updatedCount++;
         } else if (isRubber) {
-          // Rubber: keep original GLB material
+          const physMat = ensurePhysicalMaterial(child, mat, matIdx);
+          physMat.roughness = this.currentBumperConfig.roughness / 255;
+          physMat.metalness = this.currentBumperConfig.metalness;
+          physMat.color.set(this.currentBumperConfig.color);
+          physMat.needsUpdate = true;
+          updatedCount++;
         } else {
           const physMat = ensurePhysicalMaterial(child, mat, matIdx);
           physMat.roughness = this.bodyRoughness / 255;
@@ -1295,19 +1306,25 @@ export class SceneManager {
           console.log("[SceneManager] ✅ Applied TOP CAP FACE logo + joint config to:", matName);
           return;
         } else if (isTopCapMaterial(matName, meshName)) {
+          applyLogoToExistingMaterial(mat, "topCapFace");
           const physMat = ensurePhysicalMaterial(child, mat, idx);
           physMat.roughness = this.currentJointConfig.roughness / 255;
           physMat.clearcoat = this.currentJointConfig.clearcoat / 100;
           physMat.metalness = this.currentJointConfig.metalness;
           physMat.needsUpdate = true;
-          console.log("[SceneManager] ✅ Applied joint config to TOP CAP BODY:", matName || meshName);
+          console.log("[SceneManager] ✅ Applied TOP CAP logo + joint config to:", matName || meshName);
           return;
         } else if (isCylinderLeatherMaterial(matName, meshName)) {
           console.log("[SceneManager] ⏭️ Skipping cylinder (using original GLB material):", matName || meshName);
           return;
         } else if (isRubberMaterial(matName, meshName)) {
-          applyLogoToExistingMaterial(mat, "rubber");
-          console.log("[SceneManager] ✅ Applied RUBBER logo to:", matName || meshName);
+          const physMat = ensurePhysicalMaterial(child, mat, idx);
+          physMat.roughness = this.currentBumperConfig.roughness / 255;
+          physMat.metalness = this.currentBumperConfig.metalness;
+          physMat.color.set(this.currentBumperConfig.color);
+          applyRubberLogoEmissive(physMat);
+          physMat.needsUpdate = true;
+          console.log("[SceneManager] ✅ Applied RUBBER emissive logo + bumper config to:", matName || meshName);
           return;
         } else {
           const physMat = ensurePhysicalMaterial(child, mat, idx);
@@ -1457,6 +1474,7 @@ export class SceneManager {
       leatherConfig: { ...this.currentLeatherConfig },
       cylinderConfig: { ...this.currentCylinderConfig },
       jointConfig: { ...this.currentJointConfig },
+      bumperConfig: { ...this.currentBumperConfig },
       bodyRoughness: this.bodyRoughness,
       textureScale: this.textureScale,
       isLeatherProduct: this.isLeatherProduct,

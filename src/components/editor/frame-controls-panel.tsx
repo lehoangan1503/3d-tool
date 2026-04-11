@@ -206,41 +206,42 @@ export function FrameControlsPanel({
   } = useReferenceList({ enabled: refPopoverOpen });
 
   // Render thumbnails for newly-arrived refs — serial (concurrency=1) to protect GPU
-  useEffect(() => {
-    if (!onRenderReference || popoverRefs.length === 0) return;
-    if (renderPoolRunning.current) return; // a pool is already running; it will re-check on finish
-    const unrendered = popoverRefs.filter((r) => !refThumbnailUrls.current.has(r.id));
-    if (!unrendered.length) return;
-
-    renderPoolRunning.current = true;
-    renderPool(
-      unrendered,
-      onRenderReference,
-      (idx, url) => {
-        refThumbnailUrls.current.set(unrendered[idx].id, url);
-        setRefThumbVersion((v) => v + 1);
-      },
-      1
-    ).finally(() => {
-      renderPoolRunning.current = false;
-      // Re-check: new refs may have arrived (scroll load-more) while pool was running
-      const stillUnrendered = popoverRefs.filter((r) => !refThumbnailUrls.current.has(r.id));
-      if (stillUnrendered.length && onRenderReference) {
-        renderPoolRunning.current = true;
-        renderPool(
-          stillUnrendered,
-          onRenderReference,
-          (idx, url) => {
-            refThumbnailUrls.current.set(stillUnrendered[idx].id, url);
-            setRefThumbVersion((v) => v + 1);
-          },
-          1
-        ).finally(() => {
-          renderPoolRunning.current = false;
-        });
-      }
-    });
-  }, [popoverRefs, onRenderReference]);
+  // DISABLED: 3D thumbnail rendering costs too much memory; use LayoutPreviewSvg instead
+  // useEffect(() => {
+  //   if (!onRenderReference || popoverRefs.length === 0) return;
+  //   if (renderPoolRunning.current) return; // a pool is already running; it will re-check on finish
+  //   const unrendered = popoverRefs.filter((r) => !refThumbnailUrls.current.has(r.id));
+  //   if (!unrendered.length) return;
+  //
+  //   renderPoolRunning.current = true;
+  //   renderPool(
+  //     unrendered,
+  //     onRenderReference,
+  //     (idx, url) => {
+  //       refThumbnailUrls.current.set(unrendered[idx].id, url);
+  //       setRefThumbVersion((v) => v + 1);
+  //     },
+  //     1
+  //   ).finally(() => {
+  //     renderPoolRunning.current = false;
+  //     // Re-check: new refs may have arrived (scroll load-more) while pool was running
+  //     const stillUnrendered = popoverRefs.filter((r) => !refThumbnailUrls.current.has(r.id));
+  //     if (stillUnrendered.length && onRenderReference) {
+  //       renderPoolRunning.current = true;
+  //       renderPool(
+  //         stillUnrendered,
+  //         onRenderReference,
+  //         (idx, url) => {
+  //           refThumbnailUrls.current.set(stillUnrendered[idx].id, url);
+  //           setRefThumbVersion((v) => v + 1);
+  //         },
+  //         1
+  //       ).finally(() => {
+  //         renderPoolRunning.current = false;
+  //       });
+  //     }
+  //   });
+  // }, [popoverRefs, onRenderReference]);
 
   // Revoke blob URLs only on component unmount — cache persists across open/close
   // so reopening the popover shows cached thumbnails instantly with zero GPU work
@@ -422,7 +423,7 @@ export function FrameControlsPanel({
                             }}
                           >
                             <div className="flex-shrink-0 w-12 h-12 rounded overflow-hidden bg-[#111827]">
-                              {thumbUrl ? <img src={thumbUrl} alt={ref.name} className="w-full h-full object-contain" /> : <LayoutPreviewSvg frames={ref.frames} size={48} />}
+                              <LayoutPreviewSvg frames={ref.frames} size={48} />
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="text-sm font-medium truncate">{ref.name}</div>

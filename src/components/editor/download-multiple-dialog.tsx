@@ -138,24 +138,25 @@ export function DownloadMultipleDialog({
   }, [allRefs]);
 
   // ── Render thumbnails (serial to protect GPU) ────────────────────────────
-  const renderThumbnails = useCallback(
-    (batch: ExtractorReference[]) => {
-      if (batch.length === 0 || renderPoolRunning.current) return;
-      const unrendered = batch.filter((r) => !thumbnailUrls.current.has(r.id));
-      if (!unrendered.length) return;
-      renderPoolRunning.current = true;
-      renderPool(unrendered, onRenderReference, (idx, url) => {
-        thumbnailUrls.current.set(unrendered[idx].id, url);
-        setThumbnailVersion((v) => v + 1);
-      }, 1).finally(() => {
-        renderPoolRunning.current = false;
-      });
-    },
-    [onRenderReference]
-  );
+  // DISABLED: 3D thumbnail rendering costs too much memory; use LayoutPreviewSvg instead
+  // const renderThumbnails = useCallback(
+  //   (batch: ExtractorReference[]) => {
+  //     if (batch.length === 0 || renderPoolRunning.current) return;
+  //     const unrendered = batch.filter((r) => !thumbnailUrls.current.has(r.id));
+  //     if (!unrendered.length) return;
+  //     renderPoolRunning.current = true;
+  //     renderPool(unrendered, onRenderReference, (idx, url) => {
+  //       thumbnailUrls.current.set(unrendered[idx].id, url);
+  //       setThumbnailVersion((v) => v + 1);
+  //     }, 1).finally(() => {
+  //       renderPoolRunning.current = false;
+  //     });
+  //   },
+  //   [onRenderReference]
+  // );
 
-  useEffect(() => { renderThumbnails(references); }, [allRefs, renderThumbnails]);
-  useEffect(() => { renderThumbnails(pickerRefs); }, [pickerRefs, renderThumbnails]);
+  // useEffect(() => { renderThumbnails(references); }, [allRefs, renderThumbnails]);
+  // useEffect(() => { renderThumbnails(pickerRefs); }, [pickerRefs, renderThumbnails]);
 
   // ── Load groups ───────────────────────────────────────────────────────────
   const loadGroups = useCallback(async () => {
@@ -404,13 +405,12 @@ export function DownloadMultipleDialog({
     size?: number;
   }) => {
     const thumbUrl = thumbnailUrls.current.get(r.id);
+    void thumbUrl; // DISABLED: 3D thumbnails cost too much memory
     return (
       <div className="group/row flex items-center gap-3 p-2 rounded-lg hover:bg-muted/50">
         <Checkbox checked={checked} onCheckedChange={onToggle} disabled={isExporting} />
         <div className="flex-shrink-0 w-20 h-20 rounded overflow-hidden bg-[#111827]">
-          {thumbUrl
-            ? <img src={thumbUrl} alt={r.name} className="w-full h-full object-contain" />
-            : <LayoutPreviewSvg frames={r.frames} size={80} />}
+          <LayoutPreviewSvg frames={r.frames} size={80} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="font-medium text-sm">{r.name}</div>
@@ -440,13 +440,12 @@ export function DownloadMultipleDialog({
     onToggle: () => void;
   }) => {
     const thumbUrl = thumbnailUrls.current.get(r.id);
+    void thumbUrl; // DISABLED: 3D thumbnails cost too much memory
     return (
       <label className="flex items-center gap-2 p-1.5 rounded cursor-pointer hover:bg-muted/50">
         <Checkbox checked={checked} onCheckedChange={onToggle} />
         <div className="flex-shrink-0 w-10 h-10 rounded overflow-hidden bg-[#111827]">
-          {thumbUrl
-            ? <img src={thumbUrl} alt={r.name} className="w-full h-full object-contain" />
-            : <LayoutPreviewSvg frames={r.frames} size={40} />}
+          <LayoutPreviewSvg frames={r.frames} size={40} />
         </div>
         <span className="text-sm truncate flex-1">{r.name}</span>
       </label>

@@ -411,6 +411,7 @@ export interface ExtractorReference {
   id: string;
   name: string;
   frames: ExtractorFrame[];
+  thumbUrl?: string;
   createdAt?: string;
   updatedAt?: string;
 }

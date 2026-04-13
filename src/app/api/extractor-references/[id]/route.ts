@@ -21,7 +21,7 @@ export async function GET(request: Request, { params }: RouteParams) {
     const { data: reference, error } = await supabase
       .from("extractor_references")
       .select(`
-        id, name, created_at, updated_at,
+        id, name, thumb_url, created_at, updated_at,
         extractor_frames (*, frame_name)
       `)
       .eq("id", id)
@@ -36,6 +36,7 @@ export async function GET(request: Request, { params }: RouteParams) {
     const result = {
       id: reference.id,
       name: reference.name,
+      thumbUrl: (reference as any).thumb_url ?? undefined,
       createdAt: reference.created_at,
       updatedAt: reference.updated_at,
       frames: (reference.extractor_frames || [])

@@ -216,10 +216,44 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       }
       setExtractorReady(false);
       setFrameScreenshots({});
+      setSelectedFrameId(null);
       // Resume main scene now that the extractor is fully gone
       sceneManager?.resumeAnimation();
     };
   }, [open, sceneManager]);
+
+  // Re-render all cue frame screenshots when extractor becomes ready
+  // (handles dialog reopen — extractor is re-created but screenshots were cleared)
+  useEffect(() => {
+    if (!extractorReady || frames.length === 0) return;
+    const extractor = extractorRef.current;
+    if (!extractor) return;
+
+    const cueFrames = frames.filter(isCueFrame);
+    if (cueFrames.length === 0) return;
+
+    (async () => {
+      extractor.stopLivePreview();
+      const screenshots: Record<string, string> = {};
+      for (const frame of cueFrames) {
+        extractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
+        extractor.setModelRotation(frame.cue.spinY);
+        extractor.setCameraPhi(frame.cue.phi, 2);
+        extractor.setCameraZoom(frame.cue.zoom);
+        extractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
+        if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
+          await extractor.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
+          await extractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
+        } else if (frame.cue.lightAngle !== undefined) {
+          extractor.setHdriRotation(frame.cue.lightAngle);
+        }
+        screenshots[frame.id] = extractor.captureFrame('png');
+      }
+      setFrameScreenshots(screenshots);
+      extractor.startLivePreview();
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extractorReady]);
 
   // Handle HDRI type change
   const handleHdriTypeChange = useCallback(async (hdriType: string) => {
@@ -258,6 +292,30 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
         resetFrames(data.frames); // load → clear history
         setSelectedReferenceId(id);
         setSelectedFrameId(null);
+
+        // Render all cue frames immediately so every frame shows real content
+        const extractor = extractorRef.current;
+        if (extractor && extractorReady) {
+          extractor.stopLivePreview();
+          const screenshots: Record<string, string> = {};
+          for (const frame of data.frames) {
+            if (!isCueFrame(frame)) continue;
+            extractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
+            extractor.setModelRotation(frame.cue.spinY);
+            extractor.setCameraPhi(frame.cue.phi, 2);
+            extractor.setCameraZoom(frame.cue.zoom);
+            extractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
+            if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
+              await extractor.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
+              await extractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
+            } else if (frame.cue.lightAngle !== undefined) {
+              extractor.setHdriRotation(frame.cue.lightAngle);
+            }
+            screenshots[frame.id] = extractor.captureFrame('png');
+          }
+          setFrameScreenshots(screenshots);
+          extractor.startLivePreview();
+        }
       }
     } catch (err) {
       setError("Failed to load reference");
@@ -415,6 +473,29 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           return frame;
         })
       );
+
+      // Render current canvas state at 2048 then downscale to 496×496 for thumbnail
+      let thumbBlob: Blob | null = null;
+      try {
+        const refData: ExtractorReference = { id: '', name: '', frames: readyFrames };
+        const fullBlob = await handleRenderReference(refData);
+        const fullImg = new Image();
+        fullImg.src = URL.createObjectURL(fullBlob);
+        await new Promise((r) => { fullImg.onload = r; });
+        const tc = document.createElement('canvas');
+        tc.width = 496;
+        tc.height = 496;
+        tc.getContext('2d')!.drawImage(fullImg, 0, 0, 496, 496);
+        URL.revokeObjectURL(fullImg.src);
+        thumbBlob = await new Promise<Blob>((resolve, reject) => {
+          tc.toBlob((b) => b ? resolve(b) : reject(new Error('Thumb blob failed')), 'image/png');
+        });
+      } catch (err) {
+        console.error('Thumbnail capture failed:', err);
+      }
+
+      let savedRefId: string;
+
       if (mode === 'update' && selectedReferenceId) {
         const currentRef = references.find(r => r.id === selectedReferenceId);
         const res = await fetch(`/api/extractor-references/${selectedReferenceId}`, {
@@ -423,16 +504,9 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           body: JSON.stringify({ name: currentRef?.name || saveName.trim(), frames: readyFrames }),
         });
 
-        if (res.ok) {
-          // Update frame state so blob: URLs are replaced with storage URLs
-          setFrames(readyFrames);
-          setShowSaveDialog(false);
-          setSaveName("");
-          setSaveMode('new');
-          loadReferences();
-        } else {
-          throw new Error("Update failed");
-        }
+        if (!res.ok) throw new Error("Update failed");
+        setFrames(readyFrames);
+        savedRefId = selectedReferenceId;
       } else {
         const res = await fetch("/api/extractor-references", {
           method: "POST",
@@ -440,19 +514,28 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           body: JSON.stringify({ name: saveName.trim(), frames: readyFrames }),
         });
 
-        if (res.ok) {
-          const data = await res.json();
-          // Update frame state so blob: URLs are replaced with storage URLs
-          setFrames(readyFrames);
-          setSelectedReferenceId(data.id);
-          setShowSaveDialog(false);
-          setSaveName("");
-          setSaveMode('new');
-          loadReferences();
-        } else {
-          throw new Error("Save failed");
+        if (!res.ok) throw new Error("Save failed");
+        const data = await res.json();
+        setFrames(readyFrames);
+        setSelectedReferenceId(data.id);
+        savedRefId = data.id;
+      }
+
+      // Upload thumbnail
+      if (thumbBlob) {
+        try {
+          const fd = new FormData();
+          fd.append('file', thumbBlob, 'thumbnail.png');
+          await fetch(`/api/extractor-references/${savedRefId}/thumbnail`, { method: 'POST', body: fd });
+        } catch (err) {
+          console.error('Thumbnail upload failed:', err);
         }
       }
+
+      setShowSaveDialog(false);
+      setSaveName("");
+      setSaveMode('new');
+      loadReferences();
     } catch (err) {
       setError(mode === 'update' ? "Failed to update reference" : "Failed to save reference");
       console.error(err);

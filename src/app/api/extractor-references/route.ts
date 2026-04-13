@@ -25,6 +25,7 @@ export async function GET(request: Request) {
       .select(`
         id,
         name,
+        thumb_url,
         created_at,
         updated_at,
         extractor_frames (
@@ -63,9 +64,10 @@ export async function GET(request: Request) {
     }
 
     // Transform to match our types - handle both cue and image frame types
-    const result: ExtractorReference[] = (references || []).map((ref) => ({
+    const result: ExtractorReference[] = (references || []).map((ref: any) => ({
       id: ref.id,
       name: ref.name,
+      thumbUrl: ref.thumb_url ?? undefined,
       createdAt: ref.created_at,
       updatedAt: ref.updated_at,
       frames: (ref.extractor_frames || [])

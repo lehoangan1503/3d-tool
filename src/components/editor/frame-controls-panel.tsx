@@ -33,7 +33,6 @@ import { cn } from "@/lib/utils";
 import { ImageFrameControls } from "./image-frame-controls";
 import { FramesList } from "./frames-list";
 import { useReferenceList } from "@/hooks/use-reference-list";
-import { renderPool } from "@/lib/render-pool";
 
 interface HdriOption {
   id: string;
@@ -190,10 +189,6 @@ export function FrameControlsPanel({
 
   // Reference popover state
   const [refPopoverOpen, setRefPopoverOpen] = useState(false);
-  const refThumbnailUrls = useRef<Map<string, string>>(new Map());
-  const [refThumbVersion, setRefThumbVersion] = useState(0);
-  // Prevent concurrent renderPool calls — only 1 WebGL render at a time
-  const renderPoolRunning = useRef(false);
 
   const {
     references: popoverRefs,
@@ -204,56 +199,6 @@ export function FrameControlsPanel({
     setSearch: setPopoverSearch,
     loadMore: popoverLoadMore,
   } = useReferenceList({ enabled: refPopoverOpen });
-
-  // Render thumbnails for newly-arrived refs — serial (concurrency=1) to protect GPU
-  // DISABLED: 3D thumbnail rendering costs too much memory; use LayoutPreviewSvg instead
-  // useEffect(() => {
-  //   if (!onRenderReference || popoverRefs.length === 0) return;
-  //   if (renderPoolRunning.current) return; // a pool is already running; it will re-check on finish
-  //   const unrendered = popoverRefs.filter((r) => !refThumbnailUrls.current.has(r.id));
-  //   if (!unrendered.length) return;
-  //
-  //   renderPoolRunning.current = true;
-  //   renderPool(
-  //     unrendered,
-  //     onRenderReference,
-  //     (idx, url) => {
-  //       refThumbnailUrls.current.set(unrendered[idx].id, url);
-  //       setRefThumbVersion((v) => v + 1);
-  //     },
-  //     1
-  //   ).finally(() => {
-  //     renderPoolRunning.current = false;
-  //     // Re-check: new refs may have arrived (scroll load-more) while pool was running
-  //     const stillUnrendered = popoverRefs.filter((r) => !refThumbnailUrls.current.has(r.id));
-  //     if (stillUnrendered.length && onRenderReference) {
-  //       renderPoolRunning.current = true;
-  //       renderPool(
-  //         stillUnrendered,
-  //         onRenderReference,
-  //         (idx, url) => {
-  //           refThumbnailUrls.current.set(stillUnrendered[idx].id, url);
-  //           setRefThumbVersion((v) => v + 1);
-  //         },
-  //         1
-  //       ).finally(() => {
-  //         renderPoolRunning.current = false;
-  //       });
-  //     }
-  //   });
-  // }, [popoverRefs, onRenderReference]);
-
-  // Revoke blob URLs only on component unmount — cache persists across open/close
-  // so reopening the popover shows cached thumbnails instantly with zero GPU work
-  useEffect(() => {
-    return () => {
-      refThumbnailUrls.current.forEach((u) => URL.revokeObjectURL(u));
-      refThumbnailUrls.current.clear();
-    };
-  }, []);
-
-  // refThumbVersion read to subscribe to updates
-  void refThumbVersion;
 
   // Allow native scroll on the popover list — react-remove-scroll (used by Radix Dialog)
   // blocks wheel events at the document level (bubble phase). A native listener on the list
@@ -410,7 +355,6 @@ export function FrameControlsPanel({
                       <p className="text-xs text-muted-foreground text-center py-4">No references found</p>
                     ) : (
                       popoverRefs.map((ref) => {
-                        const thumbUrl = refThumbnailUrls.current.get(ref.id);
                         return (
                           <button
                             key={ref.id}
@@ -423,7 +367,7 @@ export function FrameControlsPanel({
                             }}
                           >
                             <div className="flex-shrink-0 w-12 h-12 rounded overflow-hidden bg-[#111827]">
-                              <LayoutPreviewSvg frames={ref.frames} size={48} />
+                              <img src={ref.thumbUrl} alt={ref.name} className="w-full h-full object-cover" draggable={false} />
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="text-sm font-medium truncate">{ref.name}</div>

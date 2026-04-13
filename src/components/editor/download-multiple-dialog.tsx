@@ -21,7 +21,6 @@ import {
 import type { ExtractorReference, ExtractorFrame, ExtractorReferenceGroup } from "@/types/extractor";
 import { isCueFrame, isImageFrame } from "@/types/extractor";
 import { useReferenceList } from "@/hooks/use-reference-list";
-import { renderPool } from "@/lib/render-pool";
 
 const PREVIEW_CANVAS = 2048;
 
@@ -109,11 +108,6 @@ export function DownloadMultipleDialog({
   const [detailSearch, setDetailSearch]   = useState("");
   const [savingDetail, setSavingDetail]   = useState(false);
 
-  // ── Thumbnails ───────────────────────────────────────────────────────────
-  const thumbnailUrls    = useRef<Map<string, string>>(new Map());
-  const [thumbnailVersion, setThumbnailVersion] = useState(0);
-  const renderPoolRunning = useRef(false);
-
   // ── Reference list hooks ─────────────────────────────────────────────────
   const { references: allRefs, total, isLoading, isFetchingMore, hasMore,
           search, setSearch, loadMore, reload: reloadRefs } =
@@ -136,27 +130,6 @@ export function DownloadMultipleDialog({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allRefs]);
-
-  // ── Render thumbnails (serial to protect GPU) ────────────────────────────
-  // DISABLED: 3D thumbnail rendering costs too much memory; use LayoutPreviewSvg instead
-  // const renderThumbnails = useCallback(
-  //   (batch: ExtractorReference[]) => {
-  //     if (batch.length === 0 || renderPoolRunning.current) return;
-  //     const unrendered = batch.filter((r) => !thumbnailUrls.current.has(r.id));
-  //     if (!unrendered.length) return;
-  //     renderPoolRunning.current = true;
-  //     renderPool(unrendered, onRenderReference, (idx, url) => {
-  //       thumbnailUrls.current.set(unrendered[idx].id, url);
-  //       setThumbnailVersion((v) => v + 1);
-  //     }, 1).finally(() => {
-  //       renderPoolRunning.current = false;
-  //     });
-  //   },
-  //   [onRenderReference]
-  // );
-
-  // useEffect(() => { renderThumbnails(references); }, [allRefs, renderThumbnails]);
-  // useEffect(() => { renderThumbnails(pickerRefs); }, [pickerRefs, renderThumbnails]);
 
   // ── Load groups ───────────────────────────────────────────────────────────
   const loadGroups = useCallback(async () => {
@@ -194,13 +167,6 @@ export function DownloadMultipleDialog({
       setActiveTab("references");
     }
   }, [open]);
-
-  useEffect(() => {
-    return () => {
-      thumbnailUrls.current.forEach((url) => URL.revokeObjectURL(url));
-      thumbnailUrls.current.clear();
-    };
-  }, []);
 
   // ── References tab handlers ───────────────────────────────────────────────
   const handleSelectAllRefs = () => setSelectedRefIds(new Set(references.map((r) => r.id)));
@@ -388,8 +354,6 @@ export function DownloadMultipleDialog({
     isLoading ||
     (activeTab === "references" ? selectedRefIds.size === 0 : selectedGroupIds.size === 0);
 
-  void thumbnailVersion;
-
   // ── Reusable template row ─────────────────────────────────────────────────
   const TemplateRow = ({
     ref: r,
@@ -404,13 +368,11 @@ export function DownloadMultipleDialog({
     onDelete?: (e: React.MouseEvent) => void;
     size?: number;
   }) => {
-    const thumbUrl = thumbnailUrls.current.get(r.id);
-    void thumbUrl; // DISABLED: 3D thumbnails cost too much memory
     return (
       <div className="group/row flex items-center gap-3 p-2 rounded-lg hover:bg-muted/50">
         <Checkbox checked={checked} onCheckedChange={onToggle} disabled={isExporting} />
         <div className="flex-shrink-0 w-20 h-20 rounded overflow-hidden bg-[#111827]">
-          <LayoutPreviewSvg frames={r.frames} size={80} />
+          <img src={r.thumbUrl} alt={r.name} className="w-full h-full object-cover" draggable={false} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="font-medium text-sm">{r.name}</div>
@@ -439,13 +401,11 @@ export function DownloadMultipleDialog({
     checked: boolean;
     onToggle: () => void;
   }) => {
-    const thumbUrl = thumbnailUrls.current.get(r.id);
-    void thumbUrl; // DISABLED: 3D thumbnails cost too much memory
     return (
       <label className="flex items-center gap-2 p-1.5 rounded cursor-pointer hover:bg-muted/50">
         <Checkbox checked={checked} onCheckedChange={onToggle} />
         <div className="flex-shrink-0 w-10 h-10 rounded overflow-hidden bg-[#111827]">
-          <LayoutPreviewSvg frames={r.frames} size={40} />
+          <img src={r.thumbUrl} alt={r.name} className="w-full h-full object-cover" draggable={false} />
         </div>
         <span className="text-sm truncate flex-1">{r.name}</span>
       </label>

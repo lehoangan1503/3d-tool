@@ -2162,8 +2162,15 @@ export class ExtractorSceneManager {
     // Compute wall-clock duration in ms before MediaRecorder setup so the onstop closure can use it
     const durationMs = duration * 1000;
 
+    // Cap captureStream at 60 fps regardless of quality preset.
+    // Chrome has a known bug (chromium #639939) where captureStream at >60 fps on high-refresh
+    // displays (e.g. 120 Hz macOS) writes WebM frame timestamps that are 5× too large, making
+    // the video appear 5× longer than the wall-clock recording time. 60 fps produces correct
+    // timestamps on all platforms. Preview can still run at 120 fps for smooth UX.
+    const RECORD_FPS = Math.min(qp.fps, 60);
+
     // MediaRecorder setup
-    const stream = this.renderer.domElement.captureStream(qp.fps);
+    const stream = this.renderer.domElement.captureStream(RECORD_FPS);
     this.mediaRecorder = new MediaRecorder(stream, {
       mimeType: getSupportedMimeType(),
       videoBitsPerSecond: qp.bitrate,
@@ -2206,7 +2213,8 @@ export class ExtractorSceneManager {
     // every device produces a video with the same duration and the same camera speed,
     // regardless of GPU rendering throughput.
     const recordingStartTime = performance.now();
-    const frameDuration = 1000 / qp.fps;
+    // Throttle the rAF loop to match the stream's capture rate (60 fps max).
+    const frameDuration = 1000 / RECORD_FPS;
     // Spin speed is defined as "0.02 rad/frame at 60 fps" (1.2 rad/s).
     // Scale each frame's delta by the ratio of this frame's period to the 60fps period
     // so spin angular velocity is identical at 60fps and 120fps.

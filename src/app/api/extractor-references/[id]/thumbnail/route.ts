@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { resolveStorageUrl } from "@/lib/resolve-storage-url";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -60,8 +61,8 @@ export async function POST(request: Request, { params }: RouteParams) {
       .from("product-assets")
       .getPublicUrl(filePath);
 
-    // Append cache-buster so browsers pick up re-uploads
-    const thumbUrl = `${urlData.publicUrl}?v=${Date.now()}`;
+    // Rewrite internal IP to public HTTPS proxy, then append cache-buster
+    const thumbUrl = `${resolveStorageUrl(urlData.publicUrl)}?v=${Date.now()}`;
 
     // Save thumb_url on the reference record
     const { error: updateError } = await supabase

@@ -115,6 +115,10 @@ export class ExtractorSceneManager {
   // Per-frame directional light for image extractor
   private directionalLight: THREE.DirectionalLight | null = null;
 
+  // Studio shadow for CueFrame (image extractor) — independent from video-studio lights
+  private frameShadowLight: THREE.DirectionalLight | null = null;
+  private frameShadowFloor: THREE.Mesh | null = null;
+
   // Track last loaded HDRI file for change detection
   private lastLoadedHdriFile: string = '';
 
@@ -1549,6 +1553,67 @@ export class ExtractorSceneManager {
   setTransparentBackground(transparent: boolean): void {
     this.scene.background = transparent ? null : new THREE.Color(0x1a1a1a);
     console.log('[ExtractorSceneManager] Background set to:', transparent ? 'transparent' : 'dark');
+  }
+
+  /**
+   * Apply 3D studio shadow for a CueFrame in the image extractor.
+   * The DirectionalLight is positioned at (lightX, lightY, lightZ) and casts shadows
+   * onto a ShadowMaterial floor plane beneath the cue model.
+   * This light is completely separate from HDRI/cue lighting — it only affects the shadow.
+   */
+  setFrameShadow(config: { enabled: boolean; lightX: number; lightY: number; lightZ: number; intensity: number; blur: number }): void {
+    if (!config.enabled) {
+      this.clearFrameShadow();
+      return;
+    }
+
+    // Create shadow-receiving floor if missing
+    if (!this.frameShadowFloor) {
+      this.frameShadowFloor = createShadowFloor(20, 20);
+      this.frameShadowFloor.position.y = -1.18;
+      this.scene.add(this.frameShadowFloor);
+    }
+    (this.frameShadowFloor.material as THREE.ShadowMaterial).opacity = config.intensity;
+
+    // Create shadow-casting DirectionalLight if missing
+    if (!this.frameShadowLight) {
+      this.frameShadowLight = new THREE.DirectionalLight(0xffffff, 0);
+      this.frameShadowLight.castShadow = true;
+      this.frameShadowLight.shadow.mapSize.set(2048, 2048);
+      this.frameShadowLight.shadow.camera.near = 0.1;
+      this.frameShadowLight.shadow.camera.far = 50;
+      this.frameShadowLight.shadow.camera.left = -12;
+      this.frameShadowLight.shadow.camera.right = 12;
+      this.frameShadowLight.shadow.camera.top = 12;
+      this.frameShadowLight.shadow.camera.bottom = -12;
+      this.frameShadowLight.shadow.bias = 0.0001;
+      this.frameShadowLight.shadow.normalBias = 0.02;
+      this.frameShadowLight.target.position.set(0, 0, 0);
+      this.scene.add(this.frameShadowLight);
+      this.scene.add(this.frameShadowLight.target);
+    }
+
+    this.frameShadowLight.position.set(config.lightX, config.lightY, config.lightZ);
+    this.frameShadowLight.shadow.radius = config.blur;
+    // Force shadow camera to update after position change
+    this.frameShadowLight.shadow.camera.updateProjectionMatrix();
+  }
+
+  private clearFrameShadow(): void {
+    if (this.frameShadowLight) {
+      this.scene.remove(this.frameShadowLight);
+      if (this.frameShadowLight.target.parent) {
+        this.scene.remove(this.frameShadowLight.target);
+      }
+      this.frameShadowLight.dispose();
+      this.frameShadowLight = null;
+    }
+    if (this.frameShadowFloor) {
+      this.scene.remove(this.frameShadowFloor);
+      (this.frameShadowFloor.material as THREE.Material).dispose();
+      this.frameShadowFloor.geometry.dispose();
+      this.frameShadowFloor = null;
+    }
   }
 
   private async applyVideoBackgroundLayers(layers: VideoBackgroundLayer[]): Promise<void> {
@@ -3053,9 +3118,9 @@ export class ExtractorSceneManager {
       this.directionalLight = null;
     }
 
-    this.pmremGenerator.dispose();
+    this.clearFrameShadow();
 
-    // Shrink framebuffer to 1×1 before dispose to immediately free VRAM.
+    this.pmremGenerator.dispose();
     // Three.js dispose() alone only frees JS-side references; the GPU driver
     // keeps the backing store until the context is actually lost.
     this.renderer.setSize(1, 1);

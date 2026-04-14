@@ -288,6 +288,26 @@ export function createDefaultHdriLayer(hdriType?: string): HdriLayer {
   };
 }
 
+/** Studio shadow config for a CueFrame — mirrors video-studio shadow but driven by a
+ *  dedicated DirectionalLight that only affects the shadow plane, never the cue HDRI. */
+export interface CueShadowConfig {
+  enabled: boolean;
+  lightX: number;    // Light X position in scene units (-10 to 10)
+  lightY: number;    // Light Y position / elevation (1 to 20)
+  lightZ: number;    // Light Z position in scene units (-10 to 10)
+  intensity: number; // Shadow darkness (0–1)
+  blur: number;      // Shadow softness / PCF radius (0–20)
+}
+
+export const DEFAULT_CUE_SHADOW: CueShadowConfig = {
+  enabled: false,
+  lightX: 5,
+  lightY: 10,
+  lightZ: 5,
+  intensity: 0.5,
+  blur: 4,
+};
+
 /** Cue settings within a frame */
 export interface CueSettings {
   spinY: number; // Model Y-axis rotation (radians) - horizontal drag
@@ -296,6 +316,7 @@ export interface CueSettings {
   offsetX: number; // Horizontal offset
   offsetY: number; // Vertical offset
   hdriLayers: HdriLayer[]; // 1-2 HDRI layers with independent rotation
+  studioShadow?: CueShadowConfig; // 3D studio shadow driven by a directional light
   // Legacy fields (for backward compatibility during migration)
   lightAngle?: number;
   hdriType?: string;
@@ -441,6 +462,7 @@ export const DEFAULT_CUE_SETTINGS: CueSettings = {
   offsetX: 0,
   offsetY: 0,
   hdriLayers: [createDefaultHdriLayer()], // Default: 1x bloem train track
+  studioShadow: { ...DEFAULT_CUE_SHADOW },
 };
 
 /** Create a new cue frame with defaults */

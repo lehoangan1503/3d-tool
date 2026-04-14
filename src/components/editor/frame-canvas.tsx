@@ -3,8 +3,8 @@
 import { useRef, useCallback, useEffect, useState, useMemo } from "react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
-import type { ExtractorFrame, HdriLayer, CueFrame } from "@/types/extractor";
-import { isCueFrame, isImageFrame, STUDIO_WHITE_HDRI } from "@/types/extractor";
+import type { ExtractorFrame, HdriLayer, CueFrame, CueShadowConfig } from "@/types/extractor";
+import { isCueFrame, isImageFrame, STUDIO_WHITE_HDRI, DEFAULT_CUE_SHADOW } from "@/types/extractor";
 import type { CueHdriConfig } from "@/types/video-studio";
 import { DEFAULT_CUE_HDRI } from "@/types/video-studio";
 import { StaticFrame } from "./static-frame";
@@ -268,6 +268,8 @@ export function FrameCanvas({
         // Legacy fallback
         extractor.setHdriRotation(selectedFrame.cue.lightAngle);
       }
+      // Apply studio shadow config
+      extractor.setFrameShadow(selectedFrame.cue.studioShadow ?? DEFAULT_CUE_SHADOW);
     }
 
     return () => {
@@ -325,7 +327,20 @@ export function FrameCanvas({
     return () => clearTimeout(timeoutId);
   }, [hdriLayersKey, selectedFrame?.cue.lightAngle, extractorRef, extractorReady]);
 
-  // Only deselect on actual click (not after drag or pan)
+  // Studio shadow updates — apply whenever studioShadow config changes on the selected CueFrame
+  useEffect(() => {
+    if (!extractorRef.current || !selectedFrame || !extractorReady) return;
+    if (!isCueFrame(selectedFrame)) return;
+    const shadow: CueShadowConfig = selectedFrame.cue.studioShadow ?? DEFAULT_CUE_SHADOW;
+    extractorRef.current.setFrameShadow(shadow);
+  }, [
+    selectedFrame?.id,
+    // Stringify shadow config so deep equality works without a separate memo
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    JSON.stringify(selectedFrame && isCueFrame(selectedFrame) ? selectedFrame.cue.studioShadow : null),
+    extractorRef,
+    extractorReady,
+  ]);
   const handleCanvasClick = (e: React.MouseEvent) => {
     // Ignore if we just finished dragging
     if (wasDraggingRef.current) {
@@ -800,8 +815,8 @@ export function FrameCanvas({
         {frames.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center text-muted-foreground pointer-events-none z-10">
             <div className="text-center">
-              <p className="text-lg">No frames yet</p>
-              <p className="text-sm">Add a frame or select a template to start</p>
+              <p className="text-lg">Chưa có khung</p>
+              <p className="text-sm">Thêm khung hoặc chọn mẫu để bắt đầu</p>
             </div>
           </div>
         )}

@@ -122,6 +122,11 @@ export function ShadowSimulateDialog({
       const W = container.clientWidth;
       const H = container.clientHeight;
 
+      // Studio scale: cue is rendered at scale=7 to match video studio proportions.
+      // Light XYZ values in CueShadowConfig are in "natural" (÷7) space; we multiply
+      // by SCALE here and divide back when saving so the main extractor stays correct.
+      const SCALE = 7;
+
       // Renderer
       const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
       renderer.setSize(W, H);
@@ -131,94 +136,97 @@ export function ShadowSimulateDialog({
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
       renderer.toneMappingExposure = 1.3;
-      renderer.setClearColor(0xffffff);
       renderer.domElement.style.cssText =
         "display:block;position:absolute;top:0;left:0;width:100%;height:100%;";
       container.appendChild(renderer.domElement);
 
-      // Scene — white background
+      // Scene — same light-gray background as video studio god-camera view
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0xffffff);
+      scene.background = new THREE.Color(0xd4d4d4);
 
-      // Camera — slightly elevated front view
-      const camera = new THREE.PerspectiveCamera(45, W / H, 0.1, 200);
-      camera.position.set(0, 2, 9);
-      camera.lookAt(0, 0.5, 0);
+      // ── God camera — same position as video studio initSceneView() ──────────
+      const camera = new THREE.PerspectiveCamera(60, W / H, 0.1, 500);
+      camera.position.set(0, 6, 22);
+      camera.lookAt(0, 3, 0);
 
-      // OrbitControls
+      // OrbitControls — same target as studio scene view
       const orbitControls = new OrbitControls(camera, renderer.domElement);
-      orbitControls.target.set(0, 0.5, 0);
+      orbitControls.target.set(0, 3, 0);
       orbitControls.enableDamping = true;
-      orbitControls.dampingFactor = 0.12;
-      orbitControls.minDistance = 3;
-      orbitControls.maxDistance = 30;
-      orbitControls.maxPolarAngle = Math.PI * 0.82;
+      orbitControls.dampingFactor = 0.1;
+      orbitControls.minDistance = 4;
+      orbitControls.maxDistance = 80;
+      orbitControls.maxPolarAngle = Math.PI * 0.85;
 
       // ── Lighting ─────────────────────────────────────────────────────────────
-      // Hemisphere gives the cue decent ambient shading without HDRI
-      const hemi = new THREE.HemisphereLight(0xffffff, 0xcccccc, 1.8);
+      // HemisphereLight provides even ambient illumination for the cue
+      const hemi = new THREE.HemisphereLight(0xffffff, 0x888888, 2.0);
       scene.add(hemi);
 
-      // Shadow-casting directional light (no visible color contribution from it, just shadow)
+      // Shadow-casting directional light — intensity=0 (shadow only, no color tint)
       const shadowLight = new THREE.DirectionalLight(0xfffdf5, 0);
       shadowLight.castShadow = true;
       shadowLight.shadow.mapSize.set(2048, 2048);
-      shadowLight.shadow.camera.near = 0.1;
-      shadowLight.shadow.camera.far = 80;
-      shadowLight.shadow.camera.left = -16;
-      shadowLight.shadow.camera.right = 16;
-      shadowLight.shadow.camera.top = 16;
-      shadowLight.shadow.camera.bottom = -16;
+      shadowLight.shadow.camera.near = 0.5;
+      shadowLight.shadow.camera.far = 400;
+      shadowLight.shadow.camera.left = -80;
+      shadowLight.shadow.camera.right = 80;
+      shadowLight.shadow.camera.top = 80;
+      shadowLight.shadow.camera.bottom = -80;
       shadowLight.shadow.bias = 0.0001;
       shadowLight.shadow.normalBias = 0.02;
       shadowLight.target.position.set(0, 0, 0);
       scene.add(shadowLight);
       scene.add(shadowLight.target);
 
-      // ── White studio surfaces (true-white, MeshBasicMaterial) ───────────────
+      // ── True-white studio surfaces — MeshBasicMaterial, unlit ────────────────
       const cfg = shadowConfig;
       const wallColor = cfg.wallColor ?? "#ffffff";
       const wallGradientEnd = cfg.wallGradientEnd;
 
-      // Floor base — unlit white plane
+      // Table / floor — same Y as studio (tableY = -7.5)
+      const tableY = -7.5;
+      const tableDepth = 14;
+      const wallZ = -5.5;
+
       const floorBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(30, 30),
+        new THREE.PlaneGeometry(44, tableDepth + 2),
         makeStudioMat(wallColor, wallGradientEnd)
       );
       floorBase.rotation.x = -Math.PI / 2;
-      floorBase.position.y = -1.182;
+      floorBase.position.set(0, tableY - 0.002, wallZ + (tableDepth + 2) / 2);
       scene.add(floorBase);
 
-      // Shadow overlay on floor
       const floorShadow = new THREE.Mesh(
-        new THREE.PlaneGeometry(30, 30),
+        new THREE.PlaneGeometry(44, tableDepth + 2),
         new THREE.ShadowMaterial({ opacity: cfg.intensity, transparent: true, depthWrite: false })
       );
       floorShadow.rotation.x = -Math.PI / 2;
-      floorShadow.position.y = -1.18;
+      floorShadow.position.set(0, tableY, wallZ + (tableDepth + 2) / 2);
       floorShadow.receiveShadow = true;
       scene.add(floorShadow);
 
-      // Back wall base — unlit white plane
+      // Back wall — same Z / Y as studio backdrop
       const wallBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(30, 20),
+        new THREE.PlaneGeometry(44, 26),
         makeStudioMat(wallColor, wallGradientEnd)
       );
-      wallBase.position.set(0, 4.8, -3);
+      wallBase.position.set(0, 4.5, wallZ - 0.002);
       scene.add(wallBase);
 
-      // Shadow overlay on back wall
       const wallShadow = new THREE.Mesh(
-        new THREE.PlaneGeometry(30, 20),
+        new THREE.PlaneGeometry(44, 26),
         new THREE.ShadowMaterial({ opacity: cfg.intensity, transparent: true, depthWrite: false })
       );
-      wallShadow.position.set(0, 4.8, -2.99);
+      wallShadow.position.set(0, 4.5, wallZ);
       wallShadow.receiveShadow = true;
       scene.add(wallShadow);
 
-      // ── Load actual cue model ─────────────────────────────────────────────
+      // ── Cue model at studio scale ─────────────────────────────────────────────
       const modelClone = extractorRef.current?.getModelClone?.();
       if (modelClone) {
+        modelClone.scale.setScalar(SCALE);
+        modelClone.position.set(0, 0, 0);
         modelClone.traverse((child) => {
           if (child instanceof THREE.Mesh) {
             child.castShadow = true;
@@ -228,34 +236,58 @@ export function ShadowSimulateDialog({
         scene.add(modelClone);
       }
 
-      // ── Light sphere (draggable indicator) ──────────────────────────────
+      // ── Camera gizmo — orange box+cone at studio recording camera start ───────
+      // Mirrors ExtractorSceneManager.initSceneView() camera gizmo
+      const cameraGizmo = new THREE.Group();
+      const camBody = new THREE.Mesh(
+        new THREE.BoxGeometry(0.6, 0.45, 0.45),
+        new THREE.MeshBasicMaterial({ color: 0xff6600 })
+      );
+      cameraGizmo.add(camBody);
+      const camLens = new THREE.Mesh(
+        new THREE.ConeGeometry(0.3, 0.5, 4),
+        new THREE.MeshBasicMaterial({ color: 0xff9933 })
+      );
+      camLens.rotation.x = Math.PI / 2;
+      camLens.position.z = 0.45;
+      cameraGizmo.add(camLens);
+      // Place at DEFAULT_CAMERA_START equivalent: (0, 0, 3) in studio coords
+      cameraGizmo.position.set(0, 0, 3);
+      scene.add(cameraGizmo);
+
+      // CameraHelper frustum lines so user can see recording view boundaries
+      const recordingCam = new THREE.PerspectiveCamera(50, 1, 0.3, 7);
+      recordingCam.position.copy(cameraGizmo.position);
+      recordingCam.lookAt(0, 0, 0);
+      recordingCam.updateProjectionMatrix();
+      const camHelper = new THREE.CameraHelper(recordingCam);
+      scene.add(camHelper);
+
+      // ── Light sphere (draggable) ──────────────────────────────────────────────
       const sphereMat = new THREE.MeshStandardMaterial({
-        color: 0xffcc00,
-        emissive: 0xff8800,
-        emissiveIntensity: 1.2,
-        roughness: 0.2,
-        metalness: 0.1,
+        color: 0xffcc00, emissive: 0xff8800, emissiveIntensity: 1.2,
+        roughness: 0.2, metalness: 0.1,
       });
-      const lightSphere = new THREE.Mesh(new THREE.SphereGeometry(0.32, 24, 24), sphereMat);
+      const lightSphere = new THREE.Mesh(new THREE.SphereGeometry(0.55, 24, 24), sphereMat);
       lightSphere.name = "lightSphere";
       scene.add(lightSphere);
 
       // Glow halo
-      const haloMat = new THREE.MeshBasicMaterial({
-        color: 0xffcc00, transparent: true, opacity: 0.18, side: THREE.DoubleSide,
-      });
-      const halo = new THREE.Mesh(new THREE.SphereGeometry(0.52, 16, 16), haloMat);
-      lightSphere.add(halo);
+      lightSphere.add(new THREE.Mesh(
+        new THREE.SphereGeometry(0.9, 16, 16),
+        new THREE.MeshBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.18, side: THREE.DoubleSide })
+      ));
 
-      // Drop-line guide
+      // Drop-line guide from sphere to floor
       const lineGeo = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0, 0, 0),
-        new THREE.Vector3(0, -30, 0),
+        new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -300, 0),
       ]);
-      const lineMat = new THREE.LineBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.3 });
-      lightSphere.add(new THREE.Line(lineGeo, lineMat));
+      lightSphere.add(new THREE.Line(
+        lineGeo,
+        new THREE.LineBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.3 })
+      ));
 
-      // ── TransformControls ────────────────────────────────────────────────
+      // ── TransformControls on light sphere ─────────────────────────────────────
       const transformControls = new TransformControls(camera, renderer.domElement);
       transformControls.setMode("translate");
       transformControls.setSize(0.65);
@@ -268,25 +300,30 @@ export function ShadowSimulateDialog({
 
       transformControls.addEventListener("objectChange", () => {
         const { x, y, z } = lightSphere.position;
-        const cx = Math.max(-12, Math.min(12, x));
-        const cy = Math.max(0.5, Math.min(22, y));
-        const cz = Math.max(-12, Math.min(12, z));
+        // Clamp in studio-scale space
+        const cx = Math.max(-80, Math.min(80, x));
+        const cy = Math.max(1, Math.min(150, y));
+        const cz = Math.max(-80, Math.min(80, z));
         if (cx !== x || cy !== y || cz !== z) lightSphere.position.set(cx, cy, cz);
         shadowLight.position.set(cx, cy, cz);
         shadowLight.shadow.camera.updateProjectionMatrix();
+        // Convert back to natural scale (÷ SCALE) for CueShadowConfig storage
         setLocalCfg(prev => {
-          const next = { ...prev, lightX: cx, lightY: cy, lightZ: cz };
+          const next = { ...prev, lightX: cx / SCALE, lightY: cy / SCALE, lightZ: cz / SCALE };
           setTimeout(() => onConfigChangeRef.current(next), 0);
           return next;
         });
       });
 
-      // ── Initial light position ────────────────────────────────────────
-      lightSphere.position.set(cfg.lightX, cfg.lightY, cfg.lightZ);
-      shadowLight.position.set(cfg.lightX, cfg.lightY, cfg.lightZ);
+      // Initial light position: multiply stored natural-scale values × SCALE
+      const initLx = cfg.lightX * SCALE;
+      const initLy = cfg.lightY * SCALE;
+      const initLz = cfg.lightZ * SCALE;
+      lightSphere.position.set(initLx, initLy, initLz);
+      shadowLight.position.set(initLx, initLy, initLz);
       shadowLight.shadow.radius = cfg.blur;
 
-      // ── Render loop ───────────────────────────────────────────────────
+      // ── Render loop ────────────────────────────────────────────────────────────
       simObj = {
         renderer, scene, camera, orbitControls, transformControls,
         shadowLight, lightSphere, floorBase, wallBase, floorShadow, wallShadow,

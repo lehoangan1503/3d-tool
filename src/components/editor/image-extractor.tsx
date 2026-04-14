@@ -23,7 +23,7 @@ import { useUndoable } from "@/hooks/use-undoable";
  *  materials.  Uses the first enabled non-studio-white layer, falling back to
  *  DEFAULT_CUE_HDRI. */
 function hdriLayersToCueHdri(layers: HdriLayer[]): CueHdriConfig {
-  const primary = layers.find(l => l.enabled && l.hdriType !== STUDIO_WHITE_HDRI);
+  const primary = layers.find((l) => l.enabled && l.hdriType !== STUDIO_WHITE_HDRI);
   if (primary) {
     return {
       hdriType: primary.hdriType,
@@ -41,12 +41,7 @@ function hdriLayersToCueHdri(layers: HdriLayer[]): CueHdriConfig {
 /**
  * Create a CanvasGradient from an ImageGradient within a rect centred on (0,0).
  */
-function createCanvasGradient(
-  ctx: CanvasRenderingContext2D,
-  g: ImageGradient,
-  w: number,
-  h: number,
-): CanvasGradient {
+function createCanvasGradient(ctx: CanvasRenderingContext2D, g: ImageGradient, w: number, h: number): CanvasGradient {
   const rad = (g.angle * Math.PI) / 180;
   const halfDiag = Math.sqrt(w * w + h * h) / 2;
   const dx = Math.cos(rad) * halfDiag;
@@ -59,26 +54,20 @@ function createCanvasGradient(
 /**
  * The destination rect is centred on (0, 0) — caller must translate first.
  */
-function drawImageWithObjectFit(
-  ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement,
-  destW: number,
-  destH: number,
-  fit: string = 'cover',
-): void {
+function drawImageWithObjectFit(ctx: CanvasRenderingContext2D, img: HTMLImageElement, destW: number, destH: number, fit: string = "cover"): void {
   const iw = img.naturalWidth;
   const ih = img.naturalHeight;
   const x = -destW / 2;
   const y = -destH / 2;
 
-  if (fit === 'cover') {
+  if (fit === "cover") {
     const scale = Math.max(destW / iw, destH / ih);
     const sw = destW / scale;
     const sh = destH / scale;
     const sx = (iw - sw) / 2;
     const sy = (ih - sh) / 2;
     ctx.drawImage(img, sx, sy, sw, sh, x, y, destW, destH);
-  } else if (fit === 'contain') {
+  } else if (fit === "contain") {
     const scale = Math.min(destW / iw, destH / ih);
     const dw = iw * scale;
     const dh = ih * scale;
@@ -100,10 +89,10 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
   // Frames state with full undo/redo support
   const {
     value: frames,
-    set: setFrames,        // discrete ops  → creates a history entry immediately
+    set: setFrames, // discrete ops  → creates a history entry immediately
     setLive: setFramesLive, // continuous ops → no history; call commitFrames when done
-    commit: commitFrames,  // flush a live interaction to a single history entry
-    reset: resetFrames,    // load new state & wipe history (reference load / new layout)
+    commit: commitFrames, // flush a live interaction to a single history entry
+    reset: resetFrames, // load new state & wipe history (reference load / new layout)
     undo,
     redo,
     canUndo,
@@ -141,7 +130,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [showDownloadMultipleDialog, setShowDownloadMultipleDialog] = useState(false);
   const [saveName, setSaveName] = useState("");
-  const [saveMode, setSaveMode] = useState<'new' | 'update' | 'choose'>('new');
+  const [saveMode, setSaveMode] = useState<"new" | "update" | "choose">("new");
   const [error, setError] = useState<string | null>(null);
   const [hiddenFrameIds, setHiddenFrameIds] = useState<Set<string>>(new Set());
   const [previewMode, setPreviewMode] = useState(false);
@@ -247,12 +236,12 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
         } else if (frame.cue.lightAngle !== undefined) {
           extractor.setHdriRotation(frame.cue.lightAngle);
         }
-        screenshots[frame.id] = extractor.captureFrame('png');
+        screenshots[frame.id] = extractor.captureFrame("png");
       }
       setFrameScreenshots(screenshots);
       extractor.startLivePreview();
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [extractorReady]);
 
   // Handle HDRI type change
@@ -311,14 +300,14 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
             } else if (frame.cue.lightAngle !== undefined) {
               extractor.setHdriRotation(frame.cue.lightAngle);
             }
-            screenshots[frame.id] = extractor.captureFrame('png');
+            screenshots[frame.id] = extractor.captureFrame("png");
           }
           setFrameScreenshots(screenshots);
           extractor.startLivePreview();
         }
       }
     } catch (err) {
-      setError("Failed to load reference");
+      setError("Không thể tải tham chiếu");
       console.error(err);
     } finally {
       setIsLoading(false);
@@ -377,10 +366,13 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
 
   // Called on every mousemove/slider tick — live update, no immediate history entry.
   // debouncedCommit collapses rapid panel changes into one undo step after 400 ms idle.
-  const handleFrameChange = useCallback((updatedFrame: ExtractorFrame) => {
-    setFramesLive((prev) => prev.map((f) => (f.id === updatedFrame.id ? updatedFrame : f)));
-    debouncedCommit();
-  }, [setFramesLive, debouncedCommit]);
+  const handleFrameChange = useCallback(
+    (updatedFrame: ExtractorFrame) => {
+      setFramesLive((prev) => prev.map((f) => (f.id === updatedFrame.id ? updatedFrame : f)));
+      debouncedCommit();
+    },
+    [setFramesLive, debouncedCommit]
+  );
 
   const handleDeleteFrame = (id: string) => {
     setFrames((prev) => prev.filter((f) => f.id !== id)); // discrete — undoable
@@ -441,14 +433,12 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
   };
 
   const handleRenameFrame = (id: string, name: string) => {
-    setFrames((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, name: name || undefined } : f))
-    );
+    setFrames((prev) => prev.map((f) => (f.id === id ? { ...f, name: name || undefined } : f)));
   };
 
-  const handleSave = async (mode: 'new' | 'update') => {
-    if (mode === 'new' && !saveName.trim()) return;
-    if (mode === 'update' && !selectedReferenceId) return;
+  const handleSave = async (mode: "new" | "update") => {
+    if (mode === "new" && !saveName.trim()) return;
+    if (mode === "update" && !selectedReferenceId) return;
     if (frames.length === 0) return;
 
     setIsSaving(true);
@@ -456,12 +446,12 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       // Upload any locally-loaded images (data URLs) before persisting
       const readyFrames = await Promise.all(
         frames.map(async (frame) => {
-          if (isImageFrame(frame) && frame.imageSettings.imageUrl?.startsWith('data:')) {
+          if (isImageFrame(frame) && frame.imageSettings.imageUrl?.startsWith("data:")) {
             try {
               const blob = await fetch(frame.imageSettings.imageUrl).then((r) => r.blob());
               const fd = new FormData();
-              fd.append('file', blob, 'overlay.png');
-              const res = await fetch('/api/upload-overlay', { method: 'POST', body: fd });
+              fd.append("file", blob, "overlay.png");
+              const res = await fetch("/api/upload-overlay", { method: "POST", body: fd });
               if (res.ok) {
                 const { url } = await res.json();
                 return { ...frame, imageSettings: { ...frame.imageSettings, imageUrl: url } };
@@ -477,27 +467,29 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       // Render current canvas state at 2048 then downscale to 496×496 for thumbnail
       let thumbBlob: Blob | null = null;
       try {
-        const refData: ExtractorReference = { id: '', name: '', frames: readyFrames };
+        const refData: ExtractorReference = { id: "", name: "", frames: readyFrames };
         const fullBlob = await handleRenderReference(refData);
         const fullImg = new Image();
         fullImg.src = URL.createObjectURL(fullBlob);
-        await new Promise((r) => { fullImg.onload = r; });
-        const tc = document.createElement('canvas');
+        await new Promise((r) => {
+          fullImg.onload = r;
+        });
+        const tc = document.createElement("canvas");
         tc.width = 496;
         tc.height = 496;
-        tc.getContext('2d')!.drawImage(fullImg, 0, 0, 496, 496);
+        tc.getContext("2d")!.drawImage(fullImg, 0, 0, 496, 496);
         URL.revokeObjectURL(fullImg.src);
         thumbBlob = await new Promise<Blob>((resolve, reject) => {
-          tc.toBlob((b) => b ? resolve(b) : reject(new Error('Thumb blob failed')), 'image/png');
+          tc.toBlob((b) => (b ? resolve(b) : reject(new Error("Thumb blob failed"))), "image/png");
         });
       } catch (err) {
-        console.error('Thumbnail capture failed:', err);
+        console.error("Thumbnail capture failed:", err);
       }
 
       let savedRefId: string;
 
-      if (mode === 'update' && selectedReferenceId) {
-        const currentRef = references.find(r => r.id === selectedReferenceId);
+      if (mode === "update" && selectedReferenceId) {
+        const currentRef = references.find((r) => r.id === selectedReferenceId);
         const res = await fetch(`/api/extractor-references/${selectedReferenceId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -525,19 +517,19 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       if (thumbBlob) {
         try {
           const fd = new FormData();
-          fd.append('file', thumbBlob, 'thumbnail.png');
-          await fetch(`/api/extractor-references/${savedRefId}/thumbnail`, { method: 'POST', body: fd });
+          fd.append("file", thumbBlob, "thumbnail.png");
+          await fetch(`/api/extractor-references/${savedRefId}/thumbnail`, { method: "POST", body: fd });
         } catch (err) {
-          console.error('Thumbnail upload failed:', err);
+          console.error("Thumbnail upload failed:", err);
         }
       }
 
       setShowSaveDialog(false);
       setSaveName("");
-      setSaveMode('new');
+      setSaveMode("new");
       loadReferences();
     } catch (err) {
-      setError(mode === 'update' ? "Failed to update reference" : "Failed to save reference");
+      setError(mode === "update" ? "Không thể cập nhật tham chiếu" : "Không thể lưu tham chiếu");
       console.error(err);
     } finally {
       setIsSaving(false);
@@ -547,9 +539,9 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
   const openSaveDialog = () => {
     // If using a loaded reference, ask whether to update or create new
     if (selectedReferenceId) {
-      setSaveMode('choose');
+      setSaveMode("choose");
     } else {
-      setSaveMode('new');
+      setSaveMode("new");
     }
     setShowSaveDialog(true);
   };
@@ -679,15 +671,18 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           // Draw image layer
           if (frame.imageSettings.imageUrl) {
             const img = new Image();
-            img.crossOrigin = 'anonymous';
+            img.crossOrigin = "anonymous";
             img.src = resolveStorageUrl(frame.imageSettings.imageUrl)!;
-            await new Promise((r) => { img.onload = r; img.onerror = r; });
+            await new Promise((r) => {
+              img.onload = r;
+              img.onerror = r;
+            });
             ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
-            const blendMode = frame.imageSettings.blendMode === 'normal' ? 'source-over' : frame.imageSettings.blendMode;
+            const blendMode = frame.imageSettings.blendMode === "normal" ? "source-over" : frame.imageSettings.blendMode;
             ctx.globalCompositeOperation = blendMode as GlobalCompositeOperation;
-            drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? 'cover');
+            drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? "cover");
             ctx.globalAlpha = 1;
-            ctx.globalCompositeOperation = 'source-over';
+            ctx.globalCompositeOperation = "source-over";
           }
 
           ctx.restore();
@@ -700,13 +695,13 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       // Download
       const link = document.createElement("a");
       link.href = canvas.toDataURL("image/png");
-      const refName = references.find(r => r.id === selectedReferenceId)?.name;
+      const refName = references.find((r) => r.id === selectedReferenceId)?.name;
       const nameParts = [productName.replace(/\s+/g, "-"), "cue-extract"];
       if (refName) nameParts.push(refName.replace(/\s+/g, "-"));
       link.download = `${nameParts.join("-")}.png`;
       link.click();
     } catch (err) {
-      setError("Export failed");
+      setError("Xuất thất bại");
       console.error(err);
     } finally {
       setIsExporting(false);
@@ -716,131 +711,137 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
   };
 
   // Render a reference to a PNG blob (for batch export)
-  const handleRenderReference = useCallback(async (reference: ExtractorReference): Promise<Blob> => {
-    if (!sceneManager) {
-      throw new Error("Scene manager not available");
-    }
+  const handleRenderReference = useCallback(
+    async (reference: ExtractorReference): Promise<Blob> => {
+      if (!sceneManager) {
+        throw new Error("Scene manager not available");
+      }
 
-    // Create composite canvas
-    const canvas = document.createElement("canvas");
-    canvas.width = CANVAS_SIZE;
-    canvas.height = CANVAS_SIZE;
-    const ctx = canvas.getContext("2d")!;
+      // Create composite canvas
+      const canvas = document.createElement("canvas");
+      canvas.width = CANVAS_SIZE;
+      canvas.height = CANVAS_SIZE;
+      const ctx = canvas.getContext("2d")!;
 
-    // Clear with transparency
-    ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+      // Clear with transparency
+      ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
 
-    // Reuse shared bulk extractor if one was prepared (avoids re-creating WebGL context per render)
-    const ownExtractor = !bulkExportExtractorRef.current;
-    let exportExtractor: ExtractorSceneManager;
+      // Reuse shared bulk extractor if one was prepared (avoids re-creating WebGL context per render)
+      const ownExtractor = !bulkExportExtractorRef.current;
+      let exportExtractor: ExtractorSceneManager;
 
-    if (bulkExportExtractorRef.current) {
-      exportExtractor = bulkExportExtractorRef.current;
-    } else {
-      // Single render path — stop live preview so export has the GPU to itself
-      extractorRef.current?.stopLivePreview();
-      const model = sceneManager.getModelForClone();
-      exportExtractor = new ExtractorSceneManager(2048, 2048);
-      if (model) exportExtractor.setModel(model);
-      const defaultHdriUrl = `/hdri/${encodeURIComponent("bloem_train_track_clear_2k.hdr")}`;
-      await exportExtractor.loadHDRI(defaultHdriUrl);
-      exportExtractor.setTransparentBackground(true);
-    }
+      if (bulkExportExtractorRef.current) {
+        exportExtractor = bulkExportExtractorRef.current;
+      } else {
+        // Single render path — stop live preview so export has the GPU to itself
+        extractorRef.current?.stopLivePreview();
+        const model = sceneManager.getModelForClone();
+        exportExtractor = new ExtractorSceneManager(2048, 2048);
+        if (model) exportExtractor.setModel(model);
+        const defaultHdriUrl = `/hdri/${encodeURIComponent("bloem_train_track_clear_2k.hdr")}`;
+        await exportExtractor.loadHDRI(defaultHdriUrl);
+        exportExtractor.setTransparentBackground(true);
+      }
 
-    // Render all frames in order (cue frames via 3D extractor, image frames drawn directly)
-    try {
-      for (const frame of reference.frames) {
-        if (isCueFrame(frame)) {
-          // Resize extractor for this frame's dimensions
-          exportExtractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
+      // Render all frames in order (cue frames via 3D extractor, image frames drawn directly)
+      try {
+        for (const frame of reference.frames) {
+          if (isCueFrame(frame)) {
+            // Resize extractor for this frame's dimensions
+            exportExtractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
 
-          // Apply frame's cue settings
-          exportExtractor.setModelRotation(frame.cue.spinY);
-          exportExtractor.setCameraPhi(frame.cue.phi, 2);
-          exportExtractor.setCameraZoom(frame.cue.zoom);
-          exportExtractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
+            // Apply frame's cue settings
+            exportExtractor.setModelRotation(frame.cue.spinY);
+            exportExtractor.setCameraPhi(frame.cue.phi, 2);
+            exportExtractor.setCameraZoom(frame.cue.zoom);
+            exportExtractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
 
-          // Apply HDRI layers
-          if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
-            await exportExtractor.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
-            // setCueHdri is skipped when applyCueEnv is true (setHdriLayers handles cue)
-            await exportExtractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
-          } else if (frame.cue.lightAngle !== undefined) {
-            exportExtractor.setHdriRotation(frame.cue.lightAngle);
-          }
-
-          // Capture frame
-          const frameDataUrl = exportExtractor.captureFrame("png");
-          const img = new Image();
-          img.src = frameDataUrl;
-          await new Promise((r) => (img.onload = r));
-
-          // Draw with rotation
-          ctx.save();
-          const centerX = frame.transform.x + frame.transform.width / 2;
-          const centerY = frame.transform.y + frame.transform.height / 2;
-          ctx.translate(centerX, centerY);
-          ctx.rotate((frame.transform.rotation * Math.PI) / 180);
-          ctx.drawImage(img, -frame.transform.width / 2, -frame.transform.height / 2, frame.transform.width, frame.transform.height);
-          ctx.restore();
-        } else if (isImageFrame(frame)) {
-          ctx.save();
-          const centerX = frame.transform.x + frame.transform.width / 2;
-          const centerY = frame.transform.y + frame.transform.height / 2;
-          ctx.translate(centerX, centerY);
-          ctx.rotate((frame.transform.rotation * Math.PI) / 180);
-
-          const hw = frame.transform.width / 2;
-          const hh = frame.transform.height / 2;
-
-          // Draw background fill
-          if (frame.imageSettings.backgroundEnabled) {
-            ctx.globalAlpha = frame.imageSettings.backgroundOpacity ?? 1;
-            if (frame.imageSettings.backgroundType === "gradient" && frame.imageSettings.backgroundGradient) {
-              ctx.fillStyle = createCanvasGradient(ctx, frame.imageSettings.backgroundGradient, frame.transform.width, frame.transform.height);
-            } else {
-              ctx.fillStyle = frame.imageSettings.backgroundColor;
+            // Apply HDRI layers
+            if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
+              await exportExtractor.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
+              // setCueHdri is skipped when applyCueEnv is true (setHdriLayers handles cue)
+              await exportExtractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
+            } else if (frame.cue.lightAngle !== undefined) {
+              exportExtractor.setHdriRotation(frame.cue.lightAngle);
             }
-            ctx.fillRect(-hw, -hh, frame.transform.width, frame.transform.height);
-            ctx.globalAlpha = 1;
-          }
 
-          // Draw image layer
-          if (frame.imageSettings.imageUrl) {
+            // Capture frame
+            const frameDataUrl = exportExtractor.captureFrame("png");
             const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.src = resolveStorageUrl(frame.imageSettings.imageUrl)!;
-            await new Promise((r) => { img.onload = r; img.onerror = r; });
-            ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
-            const blendMode = frame.imageSettings.blendMode === 'normal' ? 'source-over' : frame.imageSettings.blendMode;
-            ctx.globalCompositeOperation = blendMode as GlobalCompositeOperation;
-            drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? 'cover');
-            ctx.globalAlpha = 1;
-            ctx.globalCompositeOperation = 'source-over';
+            img.src = frameDataUrl;
+            await new Promise((r) => (img.onload = r));
+
+            // Draw with rotation
+            ctx.save();
+            const centerX = frame.transform.x + frame.transform.width / 2;
+            const centerY = frame.transform.y + frame.transform.height / 2;
+            ctx.translate(centerX, centerY);
+            ctx.rotate((frame.transform.rotation * Math.PI) / 180);
+            ctx.drawImage(img, -frame.transform.width / 2, -frame.transform.height / 2, frame.transform.width, frame.transform.height);
+            ctx.restore();
+          } else if (isImageFrame(frame)) {
+            ctx.save();
+            const centerX = frame.transform.x + frame.transform.width / 2;
+            const centerY = frame.transform.y + frame.transform.height / 2;
+            ctx.translate(centerX, centerY);
+            ctx.rotate((frame.transform.rotation * Math.PI) / 180);
+
+            const hw = frame.transform.width / 2;
+            const hh = frame.transform.height / 2;
+
+            // Draw background fill
+            if (frame.imageSettings.backgroundEnabled) {
+              ctx.globalAlpha = frame.imageSettings.backgroundOpacity ?? 1;
+              if (frame.imageSettings.backgroundType === "gradient" && frame.imageSettings.backgroundGradient) {
+                ctx.fillStyle = createCanvasGradient(ctx, frame.imageSettings.backgroundGradient, frame.transform.width, frame.transform.height);
+              } else {
+                ctx.fillStyle = frame.imageSettings.backgroundColor;
+              }
+              ctx.fillRect(-hw, -hh, frame.transform.width, frame.transform.height);
+              ctx.globalAlpha = 1;
+            }
+
+            // Draw image layer
+            if (frame.imageSettings.imageUrl) {
+              const img = new Image();
+              img.crossOrigin = "anonymous";
+              img.src = resolveStorageUrl(frame.imageSettings.imageUrl)!;
+              await new Promise((r) => {
+                img.onload = r;
+                img.onerror = r;
+              });
+              ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
+              const blendMode = frame.imageSettings.blendMode === "normal" ? "source-over" : frame.imageSettings.blendMode;
+              ctx.globalCompositeOperation = blendMode as GlobalCompositeOperation;
+              drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? "cover");
+              ctx.globalAlpha = 1;
+              ctx.globalCompositeOperation = "source-over";
+            }
+
+            ctx.restore();
           }
-
-          ctx.restore();
+        }
+      } finally {
+        if (ownExtractor) {
+          // Dispose the single-use export extractor and restore live preview
+          exportExtractor.dispose();
+          extractorRef.current?.startLivePreview();
         }
       }
-    } finally {
-      if (ownExtractor) {
-        // Dispose the single-use export extractor and restore live preview
-        exportExtractor.dispose();
-        extractorRef.current?.startLivePreview();
-      }
-    }
 
-    // Convert canvas to blob
-    return new Promise((resolve, reject) => {
-      canvas.toBlob((blob) => {
-        if (blob) {
-          resolve(blob);
-        } else {
-          reject(new Error("Failed to create blob"));
-        }
-      }, "image/png");
-    });
-  }, [sceneManager]);
+      // Convert canvas to blob
+      return new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error("Failed to create blob"));
+          }
+        }, "image/png");
+      });
+    },
+    [sceneManager]
+  );
 
   /**
    * Called before bulk export begins.
@@ -904,29 +905,15 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
             <div className="flex items-center justify-between">
               <DialogTitle className="flex items-center gap-2">
                 <Camera className="h-5 w-5" />
-                Image Extractor
+                Trích Xuất Ảnh{" "}
               </DialogTitle>
 
               {/* Undo / Redo */}
               <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={undo}
-                  disabled={!canUndo}
-                  title="Undo (⌘Z)"
-                >
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={undo} disabled={!canUndo} title="Hoàn tác (⌘Z)">
                   <Undo2 className="h-4 w-4" />
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={redo}
-                  disabled={!canRedo}
-                  title="Redo (⇧⌘Z)"
-                >
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={redo} disabled={!canRedo} title="Làm lại (⇧⌘Z)">
                   <Redo2 className="h-4 w-4" />
                 </Button>
               </div>
@@ -935,17 +922,17 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
               <div className="relative mr-4">
                 <Button variant="ghost" size="sm" onClick={() => setShowHelp(!showHelp)} className="text-muted-foreground hover:text-foreground">
                   <HelpCircle className="h-4 w-4 mr-1" />
-                  How to use
+                  Hướng dẫn
                   <ChevronDown className={`h-3 w-3 ml-1 transition-transform ${showHelp ? "rotate-180" : ""}`} />
                 </Button>
 
                 {showHelp && (
                   <div className="absolute right-0 top-full mt-2 w-[420px] bg-popover border rounded-lg shadow-lg p-4 z-50">
                     {/* Overview */}
-                    <p className="text-sm text-muted-foreground mb-4">Create custom frame layouts and save as templates, or load from saved references.</p>
+                    <p className="text-sm text-muted-foreground mb-4">Tạo bố cục khung tùy chỉnh và lưu làm mẫu, hoặc tải từ tham chiếu đã lưu.</p>
 
                     {/* Frame Control Diagram */}
-                    <div className="text-xs font-medium mb-2">Frame Controls</div>
+                    <div className="text-xs font-medium mb-2">Điều khiển Khung</div>
                     <div className="relative bg-muted/50 rounded-lg p-3 mb-3">
                       {/* Frame diagram */}
                       <div className="relative w-full aspect-square max-w-[200px] mx-auto">
@@ -953,7 +940,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
                         <div className="absolute inset-0 border-2 border-blue-500 rounded-lg">
                           {/* Inner 3D control area */}
                           <div className="absolute inset-3 border-2 border-dashed border-green-500 rounded flex items-center justify-center">
-                            <span className="text-[10px] text-green-500">3D Control</span>
+                            <span className="text-[10px] text-green-500">Điều khiển 3D</span>
                           </div>
                         </div>
 
@@ -981,47 +968,47 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
                       <div className="mt-4 grid grid-cols-2 gap-2 text-[10px]">
                         <div className="flex items-center gap-1.5">
                           <div className="w-3 h-3 border-2 border-blue-500 rounded" />
-                          <span>Border: Move frame</span>
+                          <span>Viền: Di chuyển khung</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <div className="w-3 h-3 border-2 border-dashed border-green-500 rounded" />
-                          <span>Center: 3D control</span>
+                          <span>Trung tâm: Điều khiển 3D</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <div className="w-3 h-3 bg-purple-500 rounded-full" />
-                          <span>Circle: Rotate</span>
+                          <span>Vòng tròn: Xoay</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <div className="w-3 h-3 bg-orange-500 rounded-sm" />
-                          <span>Squares: Resize</span>
+                          <span>Hình vuông: Thay đổi kích thước</span>
                         </div>
                       </div>
                     </div>
 
                     {/* Axis constraint tip */}
                     <div className="bg-muted/50 rounded-lg p-3">
-                      <div className="text-xs font-medium mb-2">Axis-Locked Movement</div>
+                      <div className="text-xs font-medium mb-2">Di chuyển theo Trục</div>
                       <div className="flex gap-4 text-[11px] text-muted-foreground">
                         <div className="flex items-center gap-2">
                           <kbd className="px-1.5 py-0.5 bg-background border rounded text-[10px] font-mono">X</kbd>
-                          <span>+ drag</span>
+                          <span>+ kéo</span>
                           <div className="w-4 h-[2px] bg-red-500 rounded" />
-                          <span>horizontal</span>
+                          <span>ngang</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <kbd className="px-1.5 py-0.5 bg-background border rounded text-[10px] font-mono">Y</kbd>
-                          <span>+ drag</span>
+                          <span>+ kéo</span>
                           <div className="w-[2px] h-4 bg-green-500 rounded" />
-                          <span>vertical</span>
+                          <span>dọc</span>
                         </div>
                       </div>
-                      <p className="text-[10px] text-muted-foreground/70 mt-2">Follows frame&apos;s own axes (works with rotated frames)</p>
+                      <p className="text-[10px] text-muted-foreground/70 mt-2">Theo trục riêng của khung (hoạt động với khung đã xoay)</p>
                     </div>
                   </div>
                 )}
               </div>
             </div>
-            <DialogDescription className="sr-only">Create and export custom frame layouts</DialogDescription>
+            <DialogDescription className="sr-only">Tạo và xuất bố cục khung tùy chỉnh</DialogDescription>
           </DialogHeader>
 
           {isLoading || !extractorReady ? (
@@ -1072,6 +1059,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
                   onDeleteReference={handleDeleteReference}
                   onRenameFrame={handleRenameFrame}
                   onRenderReference={handleRenderReference}
+                  extractorRef={extractorRef}
                 />
               </div>
             </div>
@@ -1080,42 +1068,38 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           {error && <div className="px-6 py-2 text-sm text-destructive">{error}</div>}
 
           <DialogFooter className="px-6 py-4 border-t flex justify-between">
-            <Button
-              variant={previewMode ? "default" : "outline"}
-              onClick={() => setPreviewMode((v) => !v)}
-              disabled={frames.length === 0}
-            >
+            <Button variant={previewMode ? "default" : "outline"} onClick={() => setPreviewMode((v) => !v)} disabled={frames.length === 0}>
               {previewMode ? (
                 <>
                   <EyeOff className="h-4 w-4 mr-2" />
-                  Exit Preview
+                  Thoát Xem trước
                 </>
               ) : (
                 <>
                   <Eye className="h-4 w-4 mr-2" />
-                  Preview Final
+                  Xem trước
                 </>
               )}
             </Button>
             <div className="flex gap-2">
               <Button variant="outline" onClick={openSaveDialog} disabled={frames.length === 0}>
                 <Save className="h-4 w-4 mr-2" />
-                Save Reference
+                Lưu Tham chiếu
               </Button>
               <Button variant="outline" onClick={() => setShowDownloadMultipleDialog(true)}>
                 <FolderDown className="h-4 w-4 mr-2" />
-                Download Multiple
+                Tải xuống nhiều
               </Button>
               <Button onClick={handleExport} disabled={isExporting || frames.length === 0 || !sceneManager}>
                 {isExporting ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Exporting...
+                    Đang xuất...
                   </>
                 ) : (
                   <>
                     <Download className="h-4 w-4 mr-2" />
-                    Download PNG
+                    Tải xuống PNG
                   </>
                 )}
               </Button>
@@ -1135,80 +1119,66 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       />
 
       {/* Save Reference Dialog */}
-      <Dialog open={showSaveDialog} onOpenChange={(open) => {
-        setShowSaveDialog(open);
-        if (!open) {
-          setSaveMode('new');
-          setSaveName('');
-        }
-      }}>
+      <Dialog
+        open={showSaveDialog}
+        onOpenChange={(open) => {
+          setShowSaveDialog(open);
+          if (!open) {
+            setSaveMode("new");
+            setSaveName("");
+          }
+        }}
+      >
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>
-              {saveMode === 'choose' ? 'Save Reference' : saveMode === 'update' ? 'Update Reference' : 'Save as New Reference'}
-            </DialogTitle>
+            <DialogTitle>{saveMode === "choose" ? "Lưu Tham chiếu" : saveMode === "update" ? "Cập nhật Tham chiếu" : "Lưu dưới dạng Tham chiếu mới"}</DialogTitle>
             <DialogDescription>
-              {saveMode === 'choose' 
-                ? 'Update the existing reference or save as a new one?' 
-                : saveMode === 'update'
-                ? `Update "${references.find(r => r.id === selectedReferenceId)?.name}" with current layout`
-                : 'Give your layout a name to reuse it later'}
+              {saveMode === "choose"
+                ? "Cập nhật tham chiếu hiện có hoặc lưu dưới dạng mới?"
+                : saveMode === "update"
+                ? `Cập nhật "${references.find((r) => r.id === selectedReferenceId)?.name}" với bố cục hiện tại`
+                : "Đặt tên cho bố cục của bạn để sử dụng lại sau"}
             </DialogDescription>
           </DialogHeader>
-          
-          {saveMode === 'choose' ? (
+
+          {saveMode === "choose" ? (
             // Choice mode - update or new
             <div className="py-4 space-y-3">
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 className="w-full justify-start h-auto py-3"
                 onClick={() => {
-                  handleSave('update');
+                  handleSave("update");
                 }}
                 disabled={isSaving}
               >
                 <div className="text-left">
-                  <div className="font-medium">Update existing</div>
-                  <div className="text-xs text-muted-foreground">
-                    Save changes to &quot;{references.find(r => r.id === selectedReferenceId)?.name}&quot;
-                  </div>
+                  <div className="font-medium">Cập nhật hiện có</div>
+                  <div className="text-xs text-muted-foreground">Lưu thay đổi vào &quot;{references.find((r) => r.id === selectedReferenceId)?.name}&quot;</div>
                 </div>
               </Button>
-              <Button 
-                variant="outline" 
-                className="w-full justify-start h-auto py-3"
-                onClick={() => setSaveMode('new')}
-              >
+              <Button variant="outline" className="w-full justify-start h-auto py-3" onClick={() => setSaveMode("new")}>
                 <div className="text-left">
-                  <div className="font-medium">Save as new</div>
-                  <div className="text-xs text-muted-foreground">
-                    Create a new reference with a different name
-                  </div>
+                  <div className="font-medium">Lưu dưới dạng mới</div>
+                  <div className="text-xs text-muted-foreground">Tạo tham chiếu mới với tên khác</div>
                 </div>
               </Button>
             </div>
           ) : (
             // New reference mode - show name input
             <div className="py-4">
-              <Label htmlFor="ref-name">Reference Name</Label>
-              <Input 
-                id="ref-name" 
-                value={saveName} 
-                onChange={(e) => setSaveName(e.target.value)} 
-                placeholder="e.g., 3 Part Diagonal" 
-                className="mt-2"
-                autoFocus
-              />
+              <Label htmlFor="ref-name">Tên tham chiếu</Label>
+              <Input id="ref-name" value={saveName} onChange={(e) => setSaveName(e.target.value)} placeholder="vd: 3 Phần Chéo" className="mt-2" autoFocus />
             </div>
           )}
-          
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowSaveDialog(false)}>
-              Cancel
+              Hủy
             </Button>
-            {saveMode !== 'choose' && (
-              <Button onClick={() => handleSave('new')} disabled={!saveName.trim() || isSaving}>
-                {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+            {saveMode !== "choose" && (
+              <Button onClick={() => handleSave("new")} disabled={!saveName.trim() || isSaving}>
+                {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Lưu"}
               </Button>
             )}
           </DialogFooter>

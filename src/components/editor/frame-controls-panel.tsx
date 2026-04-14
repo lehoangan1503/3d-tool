@@ -27,6 +27,7 @@ import {
   Search,
   Loader2,
   Layers,
+  Box,
 } from "lucide-react";
 import type { ExtractorFrame, ExtractorReference, HdriLayer, CueFrame, CueSettings, ImageFrame, CueShadowConfig } from "@/types/extractor";
 import { createDefaultHdriLayer, isCueFrame, isImageFrame, STUDIO_WHITE_HDRI, DEFAULT_CUE_SHADOW } from "@/types/extractor";
@@ -35,6 +36,8 @@ import { cn } from "@/lib/utils";
 import { ImageFrameControls } from "./image-frame-controls";
 import { FramesList } from "./frames-list";
 import { useReferenceList } from "@/hooks/use-reference-list";
+import { ShadowSimulateDialog } from "./shadow-simulate-dialog";
+import type { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 
 interface HdriOption {
   id: string;
@@ -109,6 +112,9 @@ interface FrameControlsPanelProps {
 
   // Render callback for thumbnails
   onRenderReference?: (reference: ExtractorReference) => Promise<Blob>;
+
+  /** Live extractor scene manager — used by shadow simulator dialog */
+  extractorRef?: React.MutableRefObject<ExtractorSceneManager | null>;
 }
 
 // Persistent frames list pinned at the bottom of the panel
@@ -179,10 +185,14 @@ export function FrameControlsPanel({
   onDeleteReference,
   onRenameFrame,
   onRenderReference,
+  extractorRef,
 }: FrameControlsPanelProps) {
   // Track which HDRI layer is being edited (by layer id)
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const [addHdriOpen, setAddHdriOpen] = useState(false);
+
+  // Shadow simulate dialog state
+  const [shadowSimulateOpen, setShadowSimulateOpen] = useState(false);
 
   // Reference rename / delete state
   const [isRenamingRef, setIsRenamingRef] = useState(false);
@@ -217,13 +227,6 @@ export function FrameControlsPanel({
   // Local state for slider drag (for smooth UI, only commit on release)
   const [localRotationX, setLocalRotationX] = useState<number | null>(null);
   const [localRotationY, setLocalRotationY] = useState<number | null>(null);
-
-  // Local state for studio shadow sliders (smooth drag, commit on release)
-  const [localShadowLightX, setLocalShadowLightX] = useState<number | null>(null);
-  const [localShadowLightY, setLocalShadowLightY] = useState<number | null>(null);
-  const [localShadowLightZ, setLocalShadowLightZ] = useState<number | null>(null);
-  const [localShadowIntensity, setLocalShadowIntensity] = useState<number | null>(null);
-  const [localShadowBlur, setLocalShadowBlur] = useState<number | null>(null);
 
   const updateTransform = (key: keyof ExtractorFrame["transform"], value: number) => {
     if (!selectedFrame) return;
@@ -803,115 +806,42 @@ export function FrameControlsPanel({
                 <Checkbox
                   id="shadow-enabled"
                   checked={shadowCfg.enabled}
-                  onCheckedChange={(checked) => updateShadow({ enabled: !!checked })}
+                  onCheckedChange={(checked) => {
+                    const enabled = !!checked;
+                    updateShadow({ enabled });
+                    if (enabled) setShadowSimulateOpen(true);
+                  }}
                 />
-                <label htmlFor="shadow-enabled" className="text-xs text-muted-foreground cursor-pointer">
+                <label htmlFor="shadow-enabled" className="text-xs text-muted-foreground cursor-pointer select-none">
                   {shadowCfg.enabled ? "Bật" : "Tắt"}
                 </label>
               </div>
             </div>
 
             {shadowCfg.enabled && (
-              <div className="space-y-3 p-3 bg-muted/50 rounded-lg">
-                <Label className="text-xs font-medium text-muted-foreground">Vị trí đèn studio (3D)</Label>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full gap-2"
+                onClick={() => setShadowSimulateOpen(true)}
+              >
+                <Box className="w-3.5 h-3.5" />
+                Mở Studio 3D Simulator
+              </Button>
+            )}
 
-                {/* Light X */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-xs text-muted-foreground">X (Trái / Phải)</Label>
-                    <span className="text-xs text-muted-foreground w-10 text-right">
-                      {(localShadowLightX ?? shadowCfg.lightX).toFixed(1)}
-                    </span>
-                  </div>
-                  <Slider
-                    value={[localShadowLightX ?? shadowCfg.lightX]}
-                    onValueChange={([v]) => setLocalShadowLightX(v)}
-                    onValueCommit={([v]) => { updateShadow({ lightX: v }); setLocalShadowLightX(null); }}
-                    min={-10}
-                    max={10}
-                    step={0.1}
-                    className="w-full"
-                  />
-                </div>
-
-                {/* Light Y */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-xs text-muted-foreground">Y (Cao / Thấp)</Label>
-                    <span className="text-xs text-muted-foreground w-10 text-right">
-                      {(localShadowLightY ?? shadowCfg.lightY).toFixed(1)}
-                    </span>
-                  </div>
-                  <Slider
-                    value={[localShadowLightY ?? shadowCfg.lightY]}
-                    onValueChange={([v]) => setLocalShadowLightY(v)}
-                    onValueCommit={([v]) => { updateShadow({ lightY: v }); setLocalShadowLightY(null); }}
-                    min={1}
-                    max={20}
-                    step={0.1}
-                    className="w-full"
-                  />
-                </div>
-
-                {/* Light Z */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-xs text-muted-foreground">Z (Trước / Sau)</Label>
-                    <span className="text-xs text-muted-foreground w-10 text-right">
-                      {(localShadowLightZ ?? shadowCfg.lightZ).toFixed(1)}
-                    </span>
-                  </div>
-                  <Slider
-                    value={[localShadowLightZ ?? shadowCfg.lightZ]}
-                    onValueChange={([v]) => setLocalShadowLightZ(v)}
-                    onValueCommit={([v]) => { updateShadow({ lightZ: v }); setLocalShadowLightZ(null); }}
-                    min={-10}
-                    max={10}
-                    step={0.1}
-                    className="w-full"
-                  />
-                </div>
-
-                <div className="border-t pt-3 space-y-3">
-                  {/* Intensity */}
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs text-muted-foreground">Cường độ</Label>
-                      <span className="text-xs text-muted-foreground w-10 text-right">
-                        {Math.round((localShadowIntensity ?? shadowCfg.intensity) * 100)}%
-                      </span>
-                    </div>
-                    <Slider
-                      value={[localShadowIntensity ?? shadowCfg.intensity]}
-                      onValueChange={([v]) => setLocalShadowIntensity(v)}
-                      onValueCommit={([v]) => { updateShadow({ intensity: v }); setLocalShadowIntensity(null); }}
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      className="w-full"
-                    />
-                  </div>
-
-                  {/* Blur */}
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs text-muted-foreground">Làm mờ</Label>
-                      <span className="text-xs text-muted-foreground w-10 text-right">
-                        {(localShadowBlur ?? shadowCfg.blur).toFixed(0)}
-                      </span>
-                    </div>
-                    <Slider
-                      value={[localShadowBlur ?? shadowCfg.blur]}
-                      onValueChange={([v]) => setLocalShadowBlur(v)}
-                      onValueCommit={([v]) => { updateShadow({ blur: v }); setLocalShadowBlur(null); }}
-                      min={0}
-                      max={20}
-                      step={0.5}
-                      className="w-full"
-                    />
-                  </div>
-                </div>
-              </div>
+            {shadowCfg.enabled && extractorRef && (
+              <ShadowSimulateDialog
+                open={shadowSimulateOpen}
+                onOpenChange={setShadowSimulateOpen}
+                shadowConfig={shadowCfg}
+                onConfigChange={(cfg) => updateShadow(cfg)}
+                onSave={(cfg) => {
+                  updateShadow(cfg);
+                  setShadowSimulateOpen(false);
+                }}
+                extractorRef={extractorRef}
+              />
             )}
           </div>
         )}

@@ -23,6 +23,8 @@ interface SimScene {
   shadowLight: THREE.DirectionalLight;
   lightSphere: THREE.Mesh;
   cameraGizmo: THREE.Group;
+  recordingCam: THREE.PerspectiveCamera;
+  camHelper: THREE.CameraHelper;
   modelClone: THREE.Object3D | null;
   floorBase: THREE.Mesh;
   wallBase: THREE.Mesh;
@@ -117,6 +119,7 @@ export function ShadowSimulateDialog({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [showGradient, setShowGradient] = useState(false);
   const [activeSelect, setActiveSelect] = useState<"light" | "camera" | "cue" | null>(null);
+  const [activeHotkeyText, setActiveHotkeyText] = useState<string | null>(null);
 
   // Sync localCfg when dialog opens
   useEffect(() => {
@@ -124,6 +127,7 @@ export function ShadowSimulateDialog({
       setLocalCfg({ ...shadowConfig });
       setShowGradient(!!shadowConfig.wallGradientEnd);
       setActiveSelect(null);
+      setActiveHotkeyText(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -276,11 +280,22 @@ export function ShadowSimulateDialog({
       scene.add(cameraGizmo);
 
       // CameraHelper shows recording camera frustum lines
-      const recordingCam = new THREE.PerspectiveCamera(50, 1, 0.3, 7);
+      const recordingCam = new THREE.PerspectiveCamera(50, 1, 0.3, 14);
       recordingCam.position.copy(cameraGizmo.position);
       recordingCam.lookAt(0, 0, 0);
       recordingCam.updateProjectionMatrix();
-      scene.add(new THREE.CameraHelper(recordingCam));
+      recordingCam.updateMatrixWorld(true);
+      const camHelper = new THREE.CameraHelper(recordingCam);
+      scene.add(camHelper);
+
+      /** Sync recordingCam from gizmo position/rotation + update helper */
+      const syncCameraFromGizmo = () => {
+        recordingCam.position.copy(cameraGizmo.position);
+        recordingCam.quaternion.copy(cameraGizmo.quaternion);
+        recordingCam.updateProjectionMatrix();
+        recordingCam.updateMatrixWorld(true);
+        camHelper.update();
+      };
 
       // ── Light sphere ──────────────────────────────────────────────────────────
       const lightSphere = new THREE.Mesh(
@@ -316,7 +331,19 @@ export function ShadowSimulateDialog({
 
       transformControls.addEventListener("objectChange", () => {
         if (selectedType === "light") syncLightPos();
+        if (selectedType === "camera") syncCameraFromGizmo();
       });
+
+      const setAxisLock = (axis: "x" | "y" | "z") => {
+        transformControls.showX = axis === "x";
+        transformControls.showY = axis === "y";
+        transformControls.showZ = axis === "z";
+      };
+      const resetAxisLock = () => {
+        transformControls.showX = true;
+        transformControls.showY = true;
+        transformControls.showZ = true;
+      };
 
       // ── Selection + Blender-style G/R/S hotkeys ────────────────────────────────
       const selectableRoots: THREE.Object3D[] = [
@@ -360,10 +387,17 @@ export function ShadowSimulateDialog({
           transformControls.attach(obj);
           transformControls.enabled = true;
           transformControls.setMode("translate");
+          resetAxisLock();
         } else {
           transformControls.detach();
         }
         setActiveSelect(type);
+        setActiveHotkeyText(null);
+      };
+
+      const buildHotkeyText = (hk: "g" | "r" | "s", axis: "x" | "y" | "z" | null): string => {
+        const action = hk === "g" ? "Moving" : hk === "r" ? "Rotating" : "Scaling";
+        return axis ? `${action}: ${axis.toUpperCase()} axis` : `${action}: free`;
       };
 
       // Raycaster click selection
@@ -373,11 +407,14 @@ export function ShadowSimulateDialog({
       const mouseVec = new THREE.Vector2();
 
       const onMouseDown = (e: MouseEvent) => {
+        if (e.button !== 0) return;
         mouseDownX = e.clientX;
         mouseDownY = e.clientY;
       };
 
       const onMouseUp = (e: MouseEvent) => {
+        if (e.button !== 0) return;
+        if (transformControls.dragging) return;
         if (Math.abs(e.clientX - mouseDownX) > 5 || Math.abs(e.clientY - mouseDownY) > 5) return;
         if (activeHotkey) return;
         const rect = renderer.domElement.getBoundingClientRect();
@@ -396,7 +433,9 @@ export function ShadowSimulateDialog({
         const key = e.key.toLowerCase();
 
         if ((key === "x" || key === "y" || key === "z") && activeHotkey && selectedObj) {
-          hotkeyAxisLock = key;
+          hotkeyAxisLock = key as "x" | "y" | "z";
+          setAxisLock(key as "x" | "y" | "z");
+          setActiveHotkeyText(buildHotkeyText(activeHotkey, key as "x" | "y" | "z"));
           return;
         }
 
@@ -411,6 +450,8 @@ export function ShadowSimulateDialog({
           transformControls.enabled = false;
           orbitControls.enabled = false;
           transformControls.setMode(key === "g" ? "translate" : key === "r" ? "rotate" : "scale");
+          resetAxisLock();
+          setActiveHotkeyText(buildHotkeyText(key, null));
           e.preventDefault();
           return;
         }
@@ -424,6 +465,7 @@ export function ShadowSimulateDialog({
               shadowLight.position.copy(hotkeyOrigPos);
               shadowLight.shadow.camera.updateProjectionMatrix();
             }
+            if (selectedType === "camera") syncCameraFromGizmo();
             endHotkeyDrag(false);
           } else {
             selectObject(null, null);
@@ -452,7 +494,7 @@ export function ShadowSimulateDialog({
         const obj = selectedObj;
 
         if (activeHotkey === "g") {
-          const speed = 24;
+          const speed = 20;
           const pos = hotkeyOrigPos.clone();
           const axis = hotkeyAxisLock;
           if (!axis || axis === "x") pos.x += dx * speed;
@@ -463,6 +505,7 @@ export function ShadowSimulateDialog({
             shadowLight.position.copy(pos);
             shadowLight.shadow.camera.updateProjectionMatrix();
           }
+          if (selectedType === "camera") syncCameraFromGizmo();
         } else if (activeHotkey === "r") {
           const angle = -dy * Math.PI * 2;
           const axis = hotkeyAxisLock ?? "y";
@@ -475,6 +518,7 @@ export function ShadowSimulateDialog({
           const result = deltaQ.multiply(origQ);
           obj.quaternion.copy(result);
           obj.rotation.setFromQuaternion(result, obj.rotation.order);
+          if (selectedType === "camera") syncCameraFromGizmo();
         } else if (activeHotkey === "s") {
           const factor = 1 + dx * 2;
           const scl = hotkeyOrigScl.clone();
@@ -491,15 +535,18 @@ export function ShadowSimulateDialog({
 
       const endHotkeyDrag = (commit: boolean) => {
         if (commit && selectedType === "light") syncLightPos();
+        if (commit && selectedType === "camera") syncCameraFromGizmo();
         activeHotkey = null;
         hotkeyAxisLock = null;
         hotkeyDragging = false;
         transformControls.enabled = true;
         orbitControls.enabled = true;
+        resetAxisLock();
+        setActiveHotkeyText(null);
       };
 
-      renderer.domElement.addEventListener("mousedown", onMouseDown);
-      renderer.domElement.addEventListener("mouseup", onMouseUp);
+      window.addEventListener("mousedown", onMouseDown);
+      window.addEventListener("mouseup", onMouseUp);
       renderer.domElement.addEventListener("mousemove", onMouseMove);
       window.addEventListener("keydown", onKeyDown);
       window.addEventListener("keyup", onKeyUp);
@@ -515,8 +562,8 @@ export function ShadowSimulateDialog({
       // ── Render loop ───────────────────────────────────────────────────────────
       simObj = {
         renderer, scene, camera, orbitControls, transformControls,
-        shadowLight, lightSphere, cameraGizmo, modelClone,
-        floorBase, wallBase, floorShadow, wallShadow,
+        shadowLight, lightSphere, cameraGizmo, recordingCam, camHelper,
+        modelClone, floorBase, wallBase, floorShadow, wallShadow,
         animFrameId: null, isDisposed: false,
       };
 
@@ -544,8 +591,8 @@ export function ShadowSimulateDialog({
       const evtCleanup = () => {
         window.removeEventListener("keydown", onKeyDown);
         window.removeEventListener("keyup", onKeyUp);
-        renderer.domElement.removeEventListener("mousedown", onMouseDown);
-        renderer.domElement.removeEventListener("mouseup", onMouseUp);
+        window.removeEventListener("mousedown", onMouseDown);
+        window.removeEventListener("mouseup", onMouseUp);
         renderer.domElement.removeEventListener("mousemove", onMouseMove);
       };
       (simObj as SimScene & { _resizeObs: ResizeObserver; _evtCleanup: () => void })._resizeObs =
@@ -693,6 +740,11 @@ export function ShadowSimulateDialog({
             {activeSelect && (
               <span className="ml-2 text-[11px] font-normal px-2 py-0.5 rounded-full bg-yellow-400/20 text-yellow-600 border border-yellow-400/40">
                 {activeSelect === "light" ? "💡 Light" : activeSelect === "camera" ? "📷 Camera" : "🎯 Cue"} selected
+              </span>
+            )}
+            {activeHotkeyText && (
+              <span className="text-[11px] font-normal px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-600 border border-blue-400/40">
+                {activeHotkeyText}
               </span>
             )}
           </DialogTitle>

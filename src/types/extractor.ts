@@ -303,9 +303,9 @@ export interface CueShadowConfig {
 
 export const DEFAULT_CUE_SHADOW: CueShadowConfig = {
   enabled: false,
-  lightX: 5,
-  lightY: 10,
-  lightZ: 5,
+  lightX: 1.5,
+  lightY: 2.0,
+  lightZ: 0.5,
   intensity: 0.5,
   blur: 4,
   wallColor: '#ffffff',

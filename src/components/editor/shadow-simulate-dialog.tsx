@@ -22,6 +22,8 @@ interface SimScene {
   transformControls: TransformControls;
   shadowLight: THREE.DirectionalLight;
   lightSphere: THREE.Mesh;
+  cameraGizmo: THREE.Group;
+  modelClone: THREE.Object3D | null;
   floorBase: THREE.Mesh;
   wallBase: THREE.Mesh;
   floorShadow: THREE.Mesh;
@@ -79,7 +81,23 @@ function applyStudioColor(mat: THREE.MeshBasicMaterial, colorHex: string, gradie
   mat.needsUpdate = true;
 }
 
+/** Walk parent chain to find which selectable root object belongs to. */
+function findSelectableRoot(
+  obj: THREE.Object3D,
+  roots: THREE.Object3D[]
+): THREE.Object3D | null {
+  let node: THREE.Object3D | null = obj;
+  while (node) {
+    if (roots.includes(node)) return node;
+    node = node.parent;
+  }
+  return null;
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
+
+/** Studio scale multiplier — matches video studio model scale */
+const SCALE = 7;
 
 export function ShadowSimulateDialog({
   open,
@@ -98,12 +116,14 @@ export function ShadowSimulateDialog({
   const [localCfg, setLocalCfg] = useState<CueShadowConfig>(() => ({ ...shadowConfig }));
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [showGradient, setShowGradient] = useState(false);
+  const [activeSelect, setActiveSelect] = useState<"light" | "camera" | "cue" | null>(null);
 
   // Sync localCfg when dialog opens
   useEffect(() => {
     if (open) {
       setLocalCfg({ ...shadowConfig });
       setShowGradient(!!shadowConfig.wallGradientEnd);
+      setActiveSelect(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -122,12 +142,7 @@ export function ShadowSimulateDialog({
       const W = container.clientWidth;
       const H = container.clientHeight;
 
-      // Studio scale: cue is rendered at scale=7 to match video studio proportions.
-      // Light XYZ values in CueShadowConfig are in "natural" (÷7) space; we multiply
-      // by SCALE here and divide back when saving so the main extractor stays correct.
-      const SCALE = 7;
-
-      // Renderer
+      // ── Renderer ──────────────────────────────────────────────────────────────
       const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
       renderer.setSize(W, H);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -163,24 +178,26 @@ export function ShadowSimulateDialog({
       const hemi = new THREE.HemisphereLight(0xffffff, 0x888888, 2.0);
       scene.add(hemi);
 
-      // Shadow-casting directional light — intensity=0 (shadow only, no color tint)
+      // Shadow-casting directional light — intensity=0 (shadow only, no colour tint)
+      // 4096 map + tight frustum (±25, far=150) gives high-quality sharp shadows
+      const cfg = shadowConfig;
       const shadowLight = new THREE.DirectionalLight(0xfffdf5, 0);
       shadowLight.castShadow = true;
-      shadowLight.shadow.mapSize.set(2048, 2048);
+      shadowLight.shadow.mapSize.set(4096, 4096);
       shadowLight.shadow.camera.near = 0.5;
-      shadowLight.shadow.camera.far = 400;
-      shadowLight.shadow.camera.left = -80;
-      shadowLight.shadow.camera.right = 80;
-      shadowLight.shadow.camera.top = 80;
-      shadowLight.shadow.camera.bottom = -80;
+      shadowLight.shadow.camera.far = 150;
+      shadowLight.shadow.camera.left = -25;
+      shadowLight.shadow.camera.right = 25;
+      shadowLight.shadow.camera.top = 25;
+      shadowLight.shadow.camera.bottom = -25;
       shadowLight.shadow.bias = 0.0001;
       shadowLight.shadow.normalBias = 0.02;
+      shadowLight.shadow.radius = cfg.blur;
       shadowLight.target.position.set(0, 0, 0);
       scene.add(shadowLight);
       scene.add(shadowLight.target);
 
       // ── True-white studio surfaces — MeshBasicMaterial, unlit ────────────────
-      const cfg = shadowConfig;
       const wallColor = cfg.wallColor ?? "#ffffff";
       const wallGradientEnd = cfg.wallGradientEnd;
 
@@ -223,75 +240,74 @@ export function ShadowSimulateDialog({
       scene.add(wallShadow);
 
       // ── Cue model at studio scale ─────────────────────────────────────────────
-      const modelClone = extractorRef.current?.getModelClone?.();
+      const modelClone: THREE.Object3D | null = extractorRef.current?.getModelClone?.() ?? null;
       if (modelClone) {
         modelClone.scale.setScalar(SCALE);
         modelClone.position.set(0, 0, 0);
+        modelClone.userData.selectType = "cue";
         modelClone.traverse((child) => {
           if (child instanceof THREE.Mesh) {
             child.castShadow = true;
             child.receiveShadow = false;
+            child.userData.selectType = "cue";
           }
         });
         scene.add(modelClone);
       }
 
-      // ── Camera gizmo — orange box+cone at studio recording camera start ───────
-      // Mirrors ExtractorSceneManager.initSceneView() camera gizmo
+      // ── Camera gizmo — orange box+cone at recording-camera start position ──────
       const cameraGizmo = new THREE.Group();
+      cameraGizmo.userData.selectType = "camera";
       const camBody = new THREE.Mesh(
         new THREE.BoxGeometry(0.6, 0.45, 0.45),
-        new THREE.MeshBasicMaterial({ color: 0xff6600 })
+        new THREE.MeshStandardMaterial({ color: 0xff6600, emissive: 0xff3300, emissiveIntensity: 0.4 })
       );
+      camBody.userData.selectType = "camera";
       cameraGizmo.add(camBody);
       const camLens = new THREE.Mesh(
         new THREE.ConeGeometry(0.3, 0.5, 4),
-        new THREE.MeshBasicMaterial({ color: 0xff9933 })
+        new THREE.MeshStandardMaterial({ color: 0xff9933, emissive: 0xff6600, emissiveIntensity: 0.3 })
       );
       camLens.rotation.x = Math.PI / 2;
       camLens.position.z = 0.45;
+      camLens.userData.selectType = "camera";
       cameraGizmo.add(camLens);
-      // Place at DEFAULT_CAMERA_START equivalent: (0, 0, 3) in studio coords
       cameraGizmo.position.set(0, 0, 3);
       scene.add(cameraGizmo);
 
-      // CameraHelper frustum lines so user can see recording view boundaries
+      // CameraHelper shows recording camera frustum lines
       const recordingCam = new THREE.PerspectiveCamera(50, 1, 0.3, 7);
       recordingCam.position.copy(cameraGizmo.position);
       recordingCam.lookAt(0, 0, 0);
       recordingCam.updateProjectionMatrix();
-      const camHelper = new THREE.CameraHelper(recordingCam);
-      scene.add(camHelper);
+      scene.add(new THREE.CameraHelper(recordingCam));
 
-      // ── Light sphere (draggable) ──────────────────────────────────────────────
-      const sphereMat = new THREE.MeshStandardMaterial({
-        color: 0xffcc00, emissive: 0xff8800, emissiveIntensity: 1.2,
-        roughness: 0.2, metalness: 0.1,
-      });
-      const lightSphere = new THREE.Mesh(new THREE.SphereGeometry(0.55, 24, 24), sphereMat);
+      // ── Light sphere ──────────────────────────────────────────────────────────
+      const lightSphere = new THREE.Mesh(
+        new THREE.SphereGeometry(0.55, 24, 24),
+        new THREE.MeshStandardMaterial({
+          color: 0xffcc00, emissive: 0xff8800, emissiveIntensity: 1.2,
+          roughness: 0.2, metalness: 0.1,
+        })
+      );
+      lightSphere.userData.selectType = "light";
       lightSphere.name = "lightSphere";
       scene.add(lightSphere);
-
-      // Glow halo
       lightSphere.add(new THREE.Mesh(
         new THREE.SphereGeometry(0.9, 16, 16),
         new THREE.MeshBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.18, side: THREE.DoubleSide })
       ));
-
-      // Drop-line guide from sphere to floor
       const lineGeo = new THREE.BufferGeometry().setFromPoints([
         new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -300, 0),
       ]);
-      lightSphere.add(new THREE.Line(
-        lineGeo,
+      lightSphere.add(new THREE.Line(lineGeo,
         new THREE.LineBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.3 })
       ));
 
-      // ── TransformControls on light sphere ─────────────────────────────────────
+      // ── TransformControls ──────────────────────────────────────────────────────
       const transformControls = new TransformControls(camera, renderer.domElement);
       transformControls.setMode("translate");
-      transformControls.setSize(0.65);
-      transformControls.attach(lightSphere);
+      transformControls.setSize(0.8);
       scene.add(transformControls.getHelper());
 
       transformControls.addEventListener("dragging-changed", (event: { value: unknown }) => {
@@ -299,34 +315,208 @@ export function ShadowSimulateDialog({
       });
 
       transformControls.addEventListener("objectChange", () => {
+        if (selectedType === "light") syncLightPos();
+      });
+
+      // ── Selection + Blender-style G/R/S hotkeys ────────────────────────────────
+      const selectableRoots: THREE.Object3D[] = [
+        lightSphere, cameraGizmo, ...(modelClone ? [modelClone] : []),
+      ];
+
+      let selectedObj: THREE.Object3D | null = null;
+      let selectedType: "light" | "camera" | "cue" | null = null;
+
+      let activeHotkey: "g" | "r" | "s" | null = null;
+      let hotkeyAxisLock: "x" | "y" | "z" | null = null;
+      let hotkeyDragging = false;
+      let hotkeyStartX = 0;
+      let hotkeyStartY = 0;
+      const hotkeyOrigPos = new THREE.Vector3();
+      const hotkeyOrigRot = new THREE.Euler();
+      const hotkeyOrigScl = new THREE.Vector3();
+
+      const syncLightPos = () => {
         const { x, y, z } = lightSphere.position;
-        // Clamp in studio-scale space
         const cx = Math.max(-80, Math.min(80, x));
-        const cy = Math.max(1, Math.min(150, y));
+        const cy = Math.max(0.5, Math.min(150, y));
         const cz = Math.max(-80, Math.min(80, z));
         if (cx !== x || cy !== y || cz !== z) lightSphere.position.set(cx, cy, cz);
         shadowLight.position.set(cx, cy, cz);
         shadowLight.shadow.camera.updateProjectionMatrix();
-        // Convert back to natural scale (÷ SCALE) for CueShadowConfig storage
         setLocalCfg(prev => {
           const next = { ...prev, lightX: cx / SCALE, lightY: cy / SCALE, lightZ: cz / SCALE };
           setTimeout(() => onConfigChangeRef.current(next), 0);
           return next;
         });
-      });
+      };
 
-      // Initial light position: multiply stored natural-scale values × SCALE
+      const selectObject = (
+        obj: THREE.Object3D | null,
+        type: "light" | "camera" | "cue" | null
+      ) => {
+        selectedObj = obj;
+        selectedType = type;
+        if (obj) {
+          transformControls.attach(obj);
+          transformControls.enabled = true;
+          transformControls.setMode("translate");
+        } else {
+          transformControls.detach();
+        }
+        setActiveSelect(type);
+      };
+
+      // Raycaster click selection
+      let mouseDownX = 0;
+      let mouseDownY = 0;
+      const raycaster = new THREE.Raycaster();
+      const mouseVec = new THREE.Vector2();
+
+      const onMouseDown = (e: MouseEvent) => {
+        mouseDownX = e.clientX;
+        mouseDownY = e.clientY;
+      };
+
+      const onMouseUp = (e: MouseEvent) => {
+        if (Math.abs(e.clientX - mouseDownX) > 5 || Math.abs(e.clientY - mouseDownY) > 5) return;
+        if (activeHotkey) return;
+        const rect = renderer.domElement.getBoundingClientRect();
+        mouseVec.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        mouseVec.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        raycaster.setFromCamera(mouseVec, camera);
+        const hits = raycaster.intersectObjects(selectableRoots, true);
+        if (!hits.length) { selectObject(null, null); return; }
+        const root = findSelectableRoot(hits[0].object, selectableRoots);
+        if (!root) { selectObject(null, null); return; }
+        selectObject(root, (root.userData.selectType as "light" | "camera" | "cue") ?? null);
+      };
+
+      const onKeyDown = (e: KeyboardEvent) => {
+        if (e.repeat) return;
+        const key = e.key.toLowerCase();
+
+        if ((key === "x" || key === "y" || key === "z") && activeHotkey && selectedObj) {
+          hotkeyAxisLock = key;
+          return;
+        }
+
+        if ((key === "g" || key === "r" || key === "s") && selectedObj) {
+          if (key === "s" && selectedType === "camera") return;
+          activeHotkey = key;
+          hotkeyAxisLock = null;
+          hotkeyDragging = false;
+          hotkeyOrigPos.copy(selectedObj.position);
+          hotkeyOrigRot.copy(selectedObj.rotation);
+          hotkeyOrigScl.copy(selectedObj.scale);
+          transformControls.enabled = false;
+          orbitControls.enabled = false;
+          transformControls.setMode(key === "g" ? "translate" : key === "r" ? "rotate" : "scale");
+          e.preventDefault();
+          return;
+        }
+
+        if (key === "escape") {
+          if (activeHotkey && selectedObj) {
+            selectedObj.position.copy(hotkeyOrigPos);
+            selectedObj.rotation.copy(hotkeyOrigRot);
+            selectedObj.scale.copy(hotkeyOrigScl);
+            if (selectedType === "light") {
+              shadowLight.position.copy(hotkeyOrigPos);
+              shadowLight.shadow.camera.updateProjectionMatrix();
+            }
+            endHotkeyDrag(false);
+          } else {
+            selectObject(null, null);
+          }
+        }
+      };
+
+      const onKeyUp = (e: KeyboardEvent) => {
+        const key = e.key.toLowerCase();
+        if ((key === "g" || key === "r" || key === "s") && activeHotkey === key) {
+          endHotkeyDrag(true);
+        }
+      };
+
+      const onMouseMove = (e: MouseEvent) => {
+        if (!activeHotkey || !selectedObj) return;
+        if (!hotkeyDragging) {
+          hotkeyDragging = true;
+          hotkeyStartX = e.clientX;
+          hotkeyStartY = e.clientY;
+        }
+        const w = container.clientWidth || 1;
+        const h = container.clientHeight || 1;
+        const dx = (e.clientX - hotkeyStartX) / w;
+        const dy = (e.clientY - hotkeyStartY) / h;
+        const obj = selectedObj;
+
+        if (activeHotkey === "g") {
+          const speed = 24;
+          const pos = hotkeyOrigPos.clone();
+          const axis = hotkeyAxisLock;
+          if (!axis || axis === "x") pos.x += dx * speed;
+          if (!axis || axis === "y") pos.y -= dy * speed;
+          if (axis === "z") pos.z += dx * speed;
+          obj.position.copy(pos);
+          if (selectedType === "light") {
+            shadowLight.position.copy(pos);
+            shadowLight.shadow.camera.updateProjectionMatrix();
+          }
+        } else if (activeHotkey === "r") {
+          const angle = -dy * Math.PI * 2;
+          const axis = hotkeyAxisLock ?? "y";
+          const origQ = new THREE.Quaternion().setFromEuler(hotkeyOrigRot);
+          const axVec =
+            axis === "x" ? new THREE.Vector3(1, 0, 0) :
+            axis === "z" ? new THREE.Vector3(0, 0, 1) :
+                           new THREE.Vector3(0, 1, 0);
+          const deltaQ = new THREE.Quaternion().setFromAxisAngle(axVec, angle);
+          const result = deltaQ.multiply(origQ);
+          obj.quaternion.copy(result);
+          obj.rotation.setFromQuaternion(result, obj.rotation.order);
+        } else if (activeHotkey === "s") {
+          const factor = 1 + dx * 2;
+          const scl = hotkeyOrigScl.clone();
+          const axis = hotkeyAxisLock;
+          if (!axis) scl.multiplyScalar(factor);
+          else {
+            if (axis === "x") scl.x *= factor;
+            if (axis === "y") scl.y *= factor;
+            if (axis === "z") scl.z *= factor;
+          }
+          obj.scale.copy(scl);
+        }
+      };
+
+      const endHotkeyDrag = (commit: boolean) => {
+        if (commit && selectedType === "light") syncLightPos();
+        activeHotkey = null;
+        hotkeyAxisLock = null;
+        hotkeyDragging = false;
+        transformControls.enabled = true;
+        orbitControls.enabled = true;
+      };
+
+      renderer.domElement.addEventListener("mousedown", onMouseDown);
+      renderer.domElement.addEventListener("mouseup", onMouseUp);
+      renderer.domElement.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("keydown", onKeyDown);
+      window.addEventListener("keyup", onKeyUp);
+
+      // ── Initial light position: stored natural-scale × SCALE ──────────────────
       const initLx = cfg.lightX * SCALE;
       const initLy = cfg.lightY * SCALE;
       const initLz = cfg.lightZ * SCALE;
       lightSphere.position.set(initLx, initLy, initLz);
       shadowLight.position.set(initLx, initLy, initLz);
-      shadowLight.shadow.radius = cfg.blur;
+      shadowLight.shadow.camera.updateProjectionMatrix();
 
-      // ── Render loop ────────────────────────────────────────────────────────────
+      // ── Render loop ───────────────────────────────────────────────────────────
       simObj = {
         renderer, scene, camera, orbitControls, transformControls,
-        shadowLight, lightSphere, floorBase, wallBase, floorShadow, wallShadow,
+        shadowLight, lightSphere, cameraGizmo, modelClone,
+        floorBase, wallBase, floorShadow, wallShadow,
         animFrameId: null, isDisposed: false,
       };
 
@@ -350,7 +540,18 @@ export function ShadowSimulateDialog({
         camera.updateProjectionMatrix();
       });
       resizeObserver.observe(container);
-      (simObj as SimScene & { _resizeObs: ResizeObserver })._resizeObs = resizeObserver;
+
+      const evtCleanup = () => {
+        window.removeEventListener("keydown", onKeyDown);
+        window.removeEventListener("keyup", onKeyUp);
+        renderer.domElement.removeEventListener("mousedown", onMouseDown);
+        renderer.domElement.removeEventListener("mouseup", onMouseUp);
+        renderer.domElement.removeEventListener("mousemove", onMouseMove);
+      };
+      (simObj as SimScene & { _resizeObs: ResizeObserver; _evtCleanup: () => void })._resizeObs =
+        resizeObserver;
+      (simObj as SimScene & { _resizeObs: ResizeObserver; _evtCleanup: () => void })._evtCleanup =
+        evtCleanup;
     };
 
     // rAF retry until dialog container has real dimensions
@@ -370,8 +571,9 @@ export function ShadowSimulateDialog({
       cancelled = true;
       cancelAnimationFrame(rafId);
       if (simObj) {
-        const s = simObj as SimScene & { _resizeObs?: ResizeObserver };
+        const s = simObj as SimScene & { _resizeObs?: ResizeObserver; _evtCleanup?: () => void };
         s._resizeObs?.disconnect();
+        s._evtCleanup?.();
         s.isDisposed = true;
         if (s.animFrameId !== null) cancelAnimationFrame(s.animFrameId);
         s.transformControls.detach();
@@ -488,6 +690,11 @@ export function ShadowSimulateDialog({
           <DialogTitle className="flex items-center gap-2 text-base">
             <Lightbulb className="w-4 h-4 text-yellow-400 fill-yellow-400/30" />
             Studio Shadow Simulator — 3D
+            {activeSelect && (
+              <span className="ml-2 text-[11px] font-normal px-2 py-0.5 rounded-full bg-yellow-400/20 text-yellow-600 border border-yellow-400/40">
+                {activeSelect === "light" ? "💡 Light" : activeSelect === "camera" ? "📷 Camera" : "🎯 Cue"} selected
+              </span>
+            )}
           </DialogTitle>
         </DialogHeader>
 
@@ -499,10 +706,10 @@ export function ShadowSimulateDialog({
           >
             <div className="absolute bottom-3 left-3 pointer-events-none select-none space-y-1 z-10">
               <p className="text-[10px] bg-black/40 text-white/85 px-2 py-0.5 rounded-full backdrop-blur-sm">
-                💡 Drag the yellow sphere to move the studio light
+                🖱 Click object to select · right-click/scroll to orbit/zoom
               </p>
               <p className="text-[10px] bg-black/40 text-white/85 px-2 py-0.5 rounded-full backdrop-blur-sm">
-                🖱 Right-click / scroll to orbit / zoom camera
+                ⌨ G=grab · R=rotate · S=scale · then X/Y/Z to lock axis · Esc=cancel
               </p>
             </div>
           </div>

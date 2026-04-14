@@ -808,18 +808,21 @@ export function FrameControlsPanel({
                   checked={shadowCfg.enabled}
                   onCheckedChange={(checked) => {
                     const enabled = !!checked;
-                    updateShadow({ enabled });
-                    // Auto-resize frame to 2048×2048 at (0,0) when enabling shadow
-                    if (enabled && selectedFrame) {
-                      onFrameChange({
-                        ...selectedFrame,
-                        transform: {
-                          ...(selectedFrame.transform ?? {}),
-                          x: 0, y: 0, width: 2048, height: 2048,
-                        },
-                      } as typeof selectedFrame);
-                      setShadowSimulateOpen(true);
+                    if (!selectedFrame || !isCueFrame(selectedFrame)) return;
+                    const current = selectedFrame.cue.studioShadow ?? { ...DEFAULT_CUE_SHADOW };
+                    // Merge shadow enable + optional transform resize into a single onFrameChange call
+                    // so neither update overwrites the other.
+                    const updates: Partial<typeof selectedFrame> = {
+                      cue: { ...selectedFrame.cue, studioShadow: { ...current, enabled } },
+                    };
+                    if (enabled) {
+                      updates.transform = {
+                        ...(selectedFrame.transform ?? {}),
+                        x: 0, y: 0, width: 2048, height: 2048,
+                      };
                     }
+                    onFrameChange({ ...selectedFrame, ...updates });
+                    if (enabled) setShadowSimulateOpen(true);
                   }}
                 />
                 <label htmlFor="shadow-enabled" className="text-xs text-muted-foreground cursor-pointer select-none">

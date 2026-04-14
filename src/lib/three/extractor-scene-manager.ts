@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import fixWebmDuration from 'fix-webm-duration';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type {
   ImageExtractorConfig,
@@ -38,7 +39,8 @@ export const HDRI_OPTIONS_FALLBACK = [
 ];
 
 /**
- * Detect best supported video format for MediaRecorder
+ * Detect best supported video format for MediaRecorder.
+ * WebM is the most reliable container for streaming MediaRecorder output across browsers.
  */
 export function getSupportedMimeType(): string {
   const types = [
@@ -1989,21 +1991,31 @@ export class ExtractorSceneManager {
     this.camera.fov = 50;
     this.camera.updateProjectionMatrix();
 
-    const animate = () => {
+    // 60fps is the reference rate for spin speed (0.02 rad/frame at 60fps = 1.2 rad/s).
+    // Delta-time scaling ensures the same angular velocity on any display refresh rate.
+    const SPIN_REF_MS = 1000 / 60;
+    let prevPreviewTimestamp = -1;
+
+    const animate = (timestamp: number) => {
       if (this.isDisposed || !this.studioConfigRef) return;
       this.animationFrameId = requestAnimationFrame(animate);
       const cfg = this.studioConfigRef;
+      const deltaMs = prevPreviewTimestamp < 0
+        ? SPIN_REF_MS
+        : Math.min(timestamp - prevPreviewTimestamp, 100); // cap to prevent jumps after tab switch
+      prevPreviewTimestamp = timestamp;
+      const timeScale = deltaMs / SPIN_REF_MS;
       const hasSpinY = cfg.cueConfig.spinSpeed > 0;
       const hasSpinX = (cfg.cueConfig.spinSpeedX || 0) > 0;
       if ((hasSpinY || hasSpinX) && !this._spinPaused) {
         this.spinCueInstances(
-          hasSpinY ? cfg.cueConfig.spinSpeed * 0.02 : 0,
-          hasSpinX ? (cfg.cueConfig.spinSpeedX || 0) * 0.02 : 0
+          hasSpinY ? cfg.cueConfig.spinSpeed * 0.02 * timeScale : 0,
+          hasSpinX ? (cfg.cueConfig.spinSpeedX || 0) * 0.02 * timeScale : 0
         );
       }
       this.render();
     };
-    animate();
+    animate(performance.now());
   }
 
   /** Update studio preview config without restarting the loop */
@@ -2145,8 +2157,10 @@ export class ExtractorSceneManager {
 
     // Compute duration from path + speed
     const duration = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, config.cameraDirection);
-    const totalFrames = Math.ceil(qp.fps * duration);
     const easingFn = createEasingFunction(config.easing);
+
+    // Compute wall-clock duration in ms before MediaRecorder setup so the onstop closure can use it
+    const durationMs = duration * 1000;
 
     // MediaRecorder setup
     const stream = this.renderer.domElement.captureStream(qp.fps);
@@ -2159,7 +2173,7 @@ export class ExtractorSceneManager {
       if (e.data.size > 0) this.recordedChunks.push(e.data);
     };
 
-    this.mediaRecorder.onstop = () => {
+    this.mediaRecorder.onstop = async () => {
       this.setHelpersVisible(true);
       // Restore pre-recording spin state to prevent rotation drift
       if (this.currentCueConfig) {
@@ -2177,38 +2191,32 @@ export class ExtractorSceneManager {
       if (this.instancedMeshes.length > 0 && this.currentCueConfig) {
         this.setupCueInstances(this.currentCueConfig);
       }
-      resolve(new Blob(this.recordedChunks, { type: getSupportedMimeType() }));
+      // Chrome's MediaRecorder writes incorrect WebM Duration metadata (chromium #639939).
+      // Fix it by patching the EBML container with the known wall-clock duration.
+      const rawBlob = new Blob(this.recordedChunks, { type: getSupportedMimeType() });
+      const fixedBlob = await fixWebmDuration(rawBlob, durationMs, { logger: false });
+      resolve(fixedBlob);
     };
     this.mediaRecorder.onerror = () => {
       this.setHelpersVisible(true);
       reject(new Error('Recording failed'));
     };
 
-    let currentFrame = 0;
+    // Wall-clock based timing: progress and stop are driven by elapsed real time so that
+    // every device produces a video with the same duration and the same camera speed,
+    // regardless of GPU rendering throughput.
+    const recordingStartTime = performance.now();
     const frameDuration = 1000 / qp.fps;
-    let lastTimestamp = -1;
+    // Spin speed is defined as "0.02 rad/frame at 60 fps" (1.2 rad/s).
+    // Scale each frame's delta by the ratio of this frame's period to the 60fps period
+    // so spin angular velocity is identical at 60fps and 120fps.
+    const spinTimeScale = frameDuration / (1000 / 60);
+    let lastFrameTime = -1;
     const start = config.cameraStart;
     const end = effectiveEnd;
     const cue = config.cueConfig;
 
-    const animate = (timestamp: number) => {
-      if (this.isDisposed || currentFrame >= totalFrames) {
-        this.mediaRecorder?.stop();
-        this.animationFrameId = null;
-        return;
-      }
-
-      if (lastTimestamp >= 0 && timestamp - lastTimestamp < frameDuration) {
-        this.animationFrameId = requestAnimationFrame(animate);
-        return;
-      }
-      lastTimestamp = timestamp;
-
-      const progress = currentFrame / totalFrames;
-      onProgress?.(Math.round(progress * 100));
-      const t = easingFn(progress);
-
-      // Interpolate camera keyframe
+    const renderFrame = (t: number) => {
       const interpolatedKeyframe: CameraKeyframe = {
         x: start.x + (end.x - start.x) * t,
         y: start.y + (end.y - start.y) * t,
@@ -2218,19 +2226,44 @@ export class ExtractorSceneManager {
         rotationZ: (start.rotationZ ?? 0) + ((end.rotationZ ?? 0) - (start.rotationZ ?? 0)) * t,
       };
       this.setCameraFromKeyframe(interpolatedKeyframe);
+      this.renderer.render(this.scene, this.camera);
+    };
 
-      // Cue spin
+    const animate = (timestamp: number) => {
+      const elapsedMs = performance.now() - recordingStartTime;
+
+      if (this.isDisposed || elapsedMs >= durationMs) {
+        // Render exact final frame so the video ends precisely at the end keyframe position
+        renderFrame(easingFn(1));
+        onProgress?.(100);
+        this.animationFrameId = null;
+        this.mediaRecorder?.stop();
+        return;
+      }
+
+      // Throttle: skip this rAF tick if less than one frame period has elapsed
+      const sinceLastFrame = lastFrameTime < 0 ? frameDuration : timestamp - lastFrameTime;
+      if (sinceLastFrame < frameDuration) {
+        this.animationFrameId = requestAnimationFrame(animate);
+        return;
+      }
+      // Drift-corrected advance so timing stays accurate over long recordings
+      lastFrameTime = lastFrameTime < 0 ? timestamp : lastFrameTime + frameDuration;
+
+      const progress = Math.min(1, elapsedMs / durationMs);
+      onProgress?.(Math.round(progress * 100));
+
+      // Cue spin — time-normalized to 60fps reference so speed is identical at 120fps and 60fps
       const hasSpinY = cue.spinSpeed > 0;
       const hasSpinX = (cue.spinSpeedX || 0) > 0;
       if (hasSpinY || hasSpinX) {
         this.spinCueInstances(
-          hasSpinY ? cue.spinSpeed * 0.02 : 0,
-          hasSpinX ? (cue.spinSpeedX || 0) * 0.02 : 0
+          hasSpinY ? cue.spinSpeed * 0.02 * spinTimeScale : 0,
+          hasSpinX ? (cue.spinSpeedX || 0) * 0.02 * spinTimeScale : 0
         );
       }
 
-      this.renderer.render(this.scene, this.camera);
-      currentFrame++;
+      renderFrame(easingFn(progress));
       this.animationFrameId = requestAnimationFrame(animate);
     };
 
@@ -2565,35 +2598,38 @@ export class ExtractorSceneManager {
       reject(new Error('Recording failed'));
     };
 
-    const totalFrames = config.fps * config.duration;
-    let currentFrame = 0;
-
-    // ── Timestamp-throttled animation loop ──
-    // Critical: we must render at real wall-clock FPS so MediaRecorder captures
-    // the correct duration. Without throttling, all frames render instantly and
-    // the video ends up ~2 seconds regardless of duration setting.
-    const frameDuration = 1000 / config.fps; // ms per frame
-    let lastTimestamp = -1;
+    // ── Wall-clock based timing ──
+    // Progress and stop condition are driven by elapsed real time so that every device
+    // produces a video of the same duration with the same camera/rotation speed,
+    // regardless of GPU rendering throughput.
+    const durationMs = config.duration * 1000;
+    const recordingStartTime = performance.now();
+    const frameDuration = 1000 / config.fps;
+    let lastFrameTime = -1;
 
     const animate = (timestamp: number) => {
-      if (this.isDisposed || currentFrame >= totalFrames) {
-        this.mediaRecorder?.stop();
+      const elapsedMs = performance.now() - recordingStartTime;
+
+      if (this.isDisposed || elapsedMs >= durationMs) {
         this.animationFrameId = null;
+        this.mediaRecorder?.stop();
         return;
       }
 
-      // Skip this rAF tick if not enough wall-clock time has elapsed
-      if (lastTimestamp >= 0 && timestamp - lastTimestamp < frameDuration) {
+      // Throttle: skip this rAF tick if less than one frame period has elapsed
+      const sinceLastFrame = lastFrameTime < 0 ? frameDuration : timestamp - lastFrameTime;
+      if (sinceLastFrame < frameDuration) {
         this.animationFrameId = requestAnimationFrame(animate);
         return;
       }
-      lastTimestamp = timestamp;
+      lastFrameTime = lastFrameTime < 0 ? timestamp : lastFrameTime + frameDuration;
 
-      const progress = currentFrame / totalFrames;
+      const progress = Math.min(1, elapsedMs / durationMs);
       onProgress?.(Math.round(progress * 100));
 
-      // Cue spins around its own long axis
-      this.model!.rotation.y += config.rotationSpeed / config.fps;
+      // Cue spin based on elapsed wall-clock time for device-independent rotation speed
+      const elapsedSec = elapsedMs / 1000;
+      this.model!.rotation.y = elapsedSec * config.rotationSpeed;
 
       // Camera pans right along cue — cameraDollySpeed controls fraction covered per video
       const dollySpeed = config.cameraDollySpeed ?? 0.15;
@@ -2602,8 +2638,6 @@ export class ExtractorSceneManager {
       this.camera.lookAt(camX, 0, 0);
 
       this.renderer.render(this.scene, this.camera);
-
-      currentFrame++;
       this.animationFrameId = requestAnimationFrame(animate);
     };
 

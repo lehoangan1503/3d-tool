@@ -58,6 +58,7 @@ import {
   VIDEO_QUALITY_PRESETS,
   ensureFullConfig,
   migrateVideoStudioConfig,
+  computeVideoDuration,
 } from "@/types/video-studio";
 import { createDefaultHdriLayer, STUDIO_WHITE_HDRI } from "@/types/extractor";
 import { CameraControlsPanel } from "./camera-controls-panel";
@@ -727,7 +728,16 @@ export function VideoStudio({
                   />
                 </div>
                 <p className="text-xs text-muted-foreground mt-1 text-center">
-                  Recording... {progress}%
+                  {(() => {
+                    const total = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, config.cameraDirection);
+                    const elapsed = (progress / 100) * total;
+                    const fmt = (s: number) => {
+                      const m = Math.floor(s / 60);
+                      const sec = Math.round(s % 60);
+                      return m > 0 ? `${m}:${String(sec).padStart(2, "0")}` : `${s.toFixed(0)}s`;
+                    };
+                    return `Recording… ${fmt(elapsed)} / ${fmt(total)}`;
+                  })()}
                 </p>
               </div>
             )}
@@ -1320,9 +1330,18 @@ export function VideoStudio({
                 </Button>
               </>
             ) : (
-              <Button size="sm" onClick={handleRecord}>
-                <Video className="h-4 w-4 mr-1" /> Record
-              </Button>
+              <>
+                {(() => {
+                  const sec = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, config.cameraDirection);
+                  const m = Math.floor(sec / 60);
+                  const s = Math.round(sec % 60);
+                  const label = m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `${sec.toFixed(1)}s`;
+                  return <span className="text-xs text-muted-foreground tabular-nums">{label}</span>;
+                })()}
+                <Button size="sm" onClick={handleRecord}>
+                  <Video className="h-4 w-4 mr-1" /> Record
+                </Button>
+              </>
             )}
             <Button
               variant="outline"

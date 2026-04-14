@@ -256,8 +256,12 @@ export function CameraControlsPanel({
       <div className="flex items-center justify-between rounded-md bg-muted px-3 py-2">
         <Label className="text-xs text-muted-foreground">Duration</Label>
         <span className="text-sm font-medium tabular-nums">
-          {computeVideoDuration(cameraStart, cameraEnd, cameraSpeed, cameraDirection).toFixed(1)}
-          s
+          {(() => {
+            const sec = computeVideoDuration(cameraStart, cameraEnd, cameraSpeed, cameraDirection);
+            const m = Math.floor(sec / 60);
+            const s = Math.round(sec % 60);
+            return m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `${sec.toFixed(1)}s`;
+          })()}
         </span>
       </div>
     </div>

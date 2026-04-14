@@ -260,7 +260,7 @@ export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
   cameraDirection: "yz",
   cameraStart: { ...DEFAULT_CAMERA_START },
   cameraEnd: { ...DEFAULT_CAMERA_END },
-  cameraSpeed: 0.5,
+  cameraSpeed: 0.25,
   lockDistance: false,
   easing: { ...DEFAULT_EASING },
   wallSurface: { ...DEFAULT_WALL_SURFACE },
@@ -323,7 +323,7 @@ export function computeVideoDuration(
   const dZ = effectiveEnd.z - start.z;
   const pathLength = Math.sqrt(dX * dX + dY * dY + dZ * dZ);
   const duration = pathLength / Math.max(0.01, cameraSpeed);
-  return Math.max(3, Math.min(30, duration));
+  return Math.max(3, Math.min(60, duration));
 }
 
 // ── Utility: Parse easing to interpolation function ──

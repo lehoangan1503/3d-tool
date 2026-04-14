@@ -138,7 +138,7 @@ export const DEFAULT_VIDEO_CONFIG: VideoExtractorConfig = {
   width: 1920,
   height: 1080,
   fps: 30,
-  duration: 8,
+  duration: 16,
   format: "webm",
   bitrate: 8000000,
   rotationSpeed: 0.5,

@@ -17,9 +17,9 @@ interface GradientPickerProps {
 }
 
 const CATEGORIES: { value: GradientCategory; label: string }[] = [
-  { value: "cold", label: "Cold" },
-  { value: "warm", label: "Warm" },
-  { value: "neutral", label: "Neutral" },
+  { value: "cold", label: "Lạnh" },
+  { value: "warm", label: "Ấm" },
+  { value: "neutral", label: "Trung tính" },
 ];
 
 export function GradientPicker({
@@ -76,7 +76,7 @@ export function GradientPicker({
       {/* Angle slider */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
-          <Label className="text-xs text-muted-foreground">Direction</Label>
+          <Label className="text-xs text-muted-foreground">Hướng</Label>
           <span className="text-xs text-muted-foreground tabular-nums">
             {angle}°
           </span>

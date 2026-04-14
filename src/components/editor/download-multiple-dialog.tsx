@@ -178,7 +178,7 @@ export function DownloadMultipleDialog({
   const handleDeleteRef = async (e: React.MouseEvent, refId: string) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!confirm("Delete this template? This cannot be undone.")) return;
+    if (!confirm("Xóa mẫu này? Thao tác này không thể hoàn tác.")) return;
     try {
       const res = await fetch(`/api/extractor-references/${refId}`, { method: "DELETE" });
       if (res.ok) {
@@ -199,7 +199,7 @@ export function DownloadMultipleDialog({
 
   const handleDeleteGroup = async (e: React.MouseEvent, groupId: string) => {
     e.stopPropagation();
-    if (!confirm("Delete this group? Templates are not deleted.")) return;
+    if (!confirm("Xóa nhóm này? Các mẫu sẽ không bị xóa.")) return;
     try {
       await fetch(`/api/extractor-reference-groups/${groupId}`, { method: "DELETE" });
       setGroups((prev) => prev.filter((g) => g.id !== groupId));
@@ -293,7 +293,7 @@ export function DownloadMultipleDialog({
       }
 
       if (refsToExport.length === 0) {
-        setError("Nothing to export.");
+        setError("Không có gì để xuất.");
         setIsExporting(false);
         return;
       }
@@ -303,13 +303,13 @@ export function DownloadMultipleDialog({
 
       for (let i = 0; i < refsToExport.length; i++) {
         const ref = refsToExport[i];
-        setExportProgress({ current: i + 1, total: refsToExport.length, status: `Rendering "${ref.name}"...` });
+        setExportProgress({ current: i + 1, total: refsToExport.length, status: `Đang render "${ref.name}"...` });
         const blob = await onRenderReference(ref);
         zip.file(`${ref.name.replace(/[^a-zA-Z0-9-_]/g, "-")}.png`, blob);
         if (i < refsToExport.length - 1) await new Promise((r) => setTimeout(r, 80));
       }
 
-      setExportProgress({ current: refsToExport.length, total: refsToExport.length, status: "Creating ZIP..." });
+      setExportProgress({ current: refsToExport.length, total: refsToExport.length, status: "Đang tạo ZIP..." });
       const zipBlob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
 
       const timestamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-");
@@ -325,7 +325,7 @@ export function DownloadMultipleDialog({
       onOpenChange(false);
     } catch (err) {
       console.error("Export failed:", err);
-      setError("Export failed. Please try again.");
+      setError("Xuất thất bại. Vui lòng thử lại.");
     } finally {
       onExportEnd?.();
       setIsExporting(false);
@@ -335,7 +335,7 @@ export function DownloadMultipleDialog({
 
   const getFramesSummary = (frames: ExtractorFrame[]) => {
     const n = frames.filter(isCueFrame).length;
-    return `${n} frame${n !== 1 ? "s" : ""}`;
+    return `${n} khung`;
   };
 
   // Filtered groups by search
@@ -346,8 +346,8 @@ export function DownloadMultipleDialog({
   // Footer counters
   const footerLabel =
     activeTab === "references"
-      ? `${selectedRefIds.size} of ${total} templates selected`
-      : `${selectedGroupIds.size} of ${filteredGroups.length} groups selected`;
+      ? `Đã chọn ${selectedRefIds.size} / ${total} mẫu`
+      : `Đã chọn ${selectedGroupIds.size} / ${filteredGroups.length} nhóm`;
 
   const exportDisabled =
     isExporting ||
@@ -382,7 +382,7 @@ export function DownloadMultipleDialog({
           <button
             onClick={onDelete}
             className="opacity-0 group-hover/row:opacity-100 transition-opacity text-muted-foreground hover:text-destructive p-1 rounded"
-            title="Delete template"
+            title="Xóa mẫu"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
@@ -418,10 +418,10 @@ export function DownloadMultipleDialog({
         <DialogHeader className="pb-3">
           <DialogTitle className="flex items-center gap-2">
             <Download className="h-5 w-5" />
-            Download Multiple References
+            Tải Xuống Nhiều Mẫu
           </DialogTitle>
           <DialogDescription>
-            Select references or groups to export as a ZIP file.
+            Chọn mẫu hoặc nhóm để xuất thành file ZIP.
           </DialogDescription>
         </DialogHeader>
 
@@ -437,7 +437,7 @@ export function DownloadMultipleDialog({
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              {tab}
+              {tab === "references" ? "Mẫu" : "Nhóm"}
             </button>
           ))}
         </div>
@@ -447,7 +447,7 @@ export function DownloadMultipleDialog({
           <>
             <div className="relative mb-2">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input placeholder="Search templates..." value={search}
+              <Input placeholder="Tìm kiếm mẫu..." value={search}
                 onChange={(e) => setSearch(e.target.value)} className="pl-8" />
             </div>
 
@@ -458,14 +458,14 @@ export function DownloadMultipleDialog({
             ) : references.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center py-8 text-center">
                 <ImageIcon className="h-10 w-10 text-muted-foreground/50 mb-2" />
-                <p className="text-sm text-muted-foreground">No saved references found</p>
-                <p className="text-xs text-muted-foreground/70 mt-1">Save a layout in Image Extractor first</p>
+                <p className="text-sm text-muted-foreground">Không tìm thấy mẫu nào đã lưu</p>
+                <p className="text-xs text-muted-foreground/70 mt-1">Hãy lưu một bố cục trong Image Extractor trước</p>
               </div>
             ) : (
               <>
                 <div className="flex gap-2 pb-2 border-b mb-1">
-                  <Button variant="ghost" size="sm" onClick={handleSelectAllRefs}>Select All</Button>
-                  <Button variant="ghost" size="sm" onClick={handleDeselectAllRefs}>Deselect All</Button>
+                  <Button variant="ghost" size="sm" onClick={handleSelectAllRefs}>Chọn Tất Cả</Button>
+                  <Button variant="ghost" size="sm" onClick={handleDeselectAllRefs}>Bỏ Chọn Tất Cả</Button>
                 </div>
 
                 <div className="flex-1 overflow-y-auto space-y-0.5 py-1"
@@ -510,14 +510,14 @@ export function DownloadMultipleDialog({
                     <ChevronLeft className="h-4 w-4" />
                   </button>
                   <span className="font-medium text-sm truncate flex-1">{detailGroup.name}</span>
-                  <span className="text-xs text-muted-foreground">{detailEditIds.size} templates</span>
+                  <span className="text-xs text-muted-foreground">{detailEditIds.size} mẫu</span>
                 </div>
 
                 {/* Search picker */}
                 <div className="relative">
                   <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input
-                    placeholder="Search to add/remove templates..."
+                    placeholder="Tìm kiếm để thêm/xóa mẫu..."
                     value={pickerSearch}
                     onChange={(e) => setPickerSearch(e.target.value)}
                     className="pl-8 h-8 text-sm"
@@ -537,7 +537,7 @@ export function DownloadMultipleDialog({
                       <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                     </div>
                   ) : pickerRefs.length === 0 ? (
-                    <p className="text-xs text-muted-foreground text-center py-3">No templates found</p>
+                    <p className="text-xs text-muted-foreground text-center py-3">Không tìm thấy mẫu nào</p>
                   ) : (
                     pickerRefs.map((ref) => (
                       <PickerRow
@@ -563,7 +563,7 @@ export function DownloadMultipleDialog({
 
                 <div className="flex justify-end pt-1 border-t">
                   <Button size="sm" onClick={handleSaveGroupDetail} disabled={savingDetail}>
-                    {savingDetail ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save Changes"}
+                    {savingDetail ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Lưu Thay Đổi"}
                   </Button>
                 </div>
               </div>
@@ -574,13 +574,13 @@ export function DownloadMultipleDialog({
                 <div className="flex gap-2 mb-2">
                   <div className="relative flex-1">
                     <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input placeholder="Search groups..." value={groupSearch}
+                    <Input placeholder="Tìm kiếm nhóm..." value={groupSearch}
                       onChange={(e) => setGroupSearch(e.target.value)} className="pl-8" />
                   </div>
                   <Button variant="outline" size="sm" className="shrink-0"
                     onClick={() => { setShowNewGroup(true); setPickerSearch(""); setNewGroupIds(new Set()); setNewGroupName(""); }}>
                     <FolderPlus className="h-4 w-4 mr-1.5" />
-                    New Group
+                    Nhóm Mới
                   </Button>
                 </div>
 
@@ -588,16 +588,16 @@ export function DownloadMultipleDialog({
                 {showNewGroup && (
                   <div className="border rounded-lg p-3 space-y-2 bg-muted/30 mb-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium">New Group</span>
+                      <span className="text-sm font-medium">Nhóm Mới</span>
                       <button onClick={() => setShowNewGroup(false)} className="text-muted-foreground hover:text-foreground">
                         <X className="h-4 w-4" />
                       </button>
                     </div>
-                    <Input placeholder="Group name..." value={newGroupName}
+                    <Input placeholder="Tên nhóm..." value={newGroupName}
                       onChange={(e) => setNewGroupName(e.target.value)} className="h-8 text-sm" />
                     <div className="relative">
                       <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-muted-foreground" />
-                      <Input placeholder="Search templates..." value={pickerSearch}
+                      <Input placeholder="Tìm kiếm mẫu..." value={pickerSearch}
                         onChange={(e) => setPickerSearch(e.target.value)} className="pl-7 h-8 text-sm" />
                     </div>
                     <div className="max-h-44 overflow-y-auto space-y-0.5"
@@ -610,7 +610,7 @@ export function DownloadMultipleDialog({
                       {pickerLoading && pickerRefs.length === 0 ? (
                         <div className="flex justify-center py-4"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>
                       ) : pickerRefs.length === 0 ? (
-                        <p className="text-xs text-muted-foreground text-center py-3">No templates found</p>
+                        <p className="text-xs text-muted-foreground text-center py-3">Không tìm thấy mẫu nào</p>
                       ) : pickerRefs.map((ref) => (
                         <PickerRow key={ref.id} ref={ref}
                           checked={newGroupIds.has(ref.id)}
@@ -622,9 +622,9 @@ export function DownloadMultipleDialog({
                       {pickerFetchingMore && <div className="py-2 flex justify-center"><Loader2 className="h-3 w-3 animate-spin text-muted-foreground" /></div>}
                     </div>
                     <div className="flex items-center justify-between pt-1">
-                      <span className="text-xs text-muted-foreground">{newGroupIds.size} selected</span>
+                      <span className="text-xs text-muted-foreground">{newGroupIds.size} đã chọn</span>
                       <Button size="sm" disabled={savingGroup || !newGroupName.trim() || newGroupIds.size === 0} onClick={handleSaveNewGroup}>
-                        {savingGroup ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save Group"}
+                        {savingGroup ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Lưu Nhóm"}
                       </Button>
                     </div>
                   </div>
@@ -637,14 +637,14 @@ export function DownloadMultipleDialog({
                 ) : filteredGroups.length === 0 ? (
                   <div className="flex-1 flex flex-col items-center justify-center py-8 text-center">
                     <ImageIcon className="h-10 w-10 text-muted-foreground/50 mb-2" />
-                    <p className="text-sm text-muted-foreground">{groupSearch ? "No groups match" : "No groups yet"}</p>
-                    {!groupSearch && <p className="text-xs text-muted-foreground/70 mt-1">Create a group to bundle templates for export</p>}
+                    <p className="text-sm text-muted-foreground">{groupSearch ? "Không tìm thấy nhóm nào" : "Chưa có nhóm nào"}</p>
+                    {!groupSearch && <p className="text-xs text-muted-foreground/70 mt-1">Tạo nhóm để gộp các mẫu khi xuất</p>}
                   </div>
                 ) : (
                   <>
                     <div className="flex gap-2 pb-2 border-b mb-1">
-                      <Button variant="ghost" size="sm" onClick={handleSelectAllGroups}>Select All</Button>
-                      <Button variant="ghost" size="sm" onClick={handleDeselectAllGroups}>Deselect All</Button>
+                      <Button variant="ghost" size="sm" onClick={handleSelectAllGroups}>Chọn Tất Cả</Button>
+                      <Button variant="ghost" size="sm" onClick={handleDeselectAllGroups}>Bỏ Chọn Tất Cả</Button>
                     </div>
 
                     <div className="flex-1 overflow-y-auto space-y-0.5 py-1">
@@ -660,14 +660,14 @@ export function DownloadMultipleDialog({
                           <div className="flex-1 min-w-0 cursor-pointer" onClick={() => openGroupDetail(group)}>
                             <div className="font-medium text-sm truncate">{group.name}</div>
                             <div className="text-xs text-muted-foreground">
-                              {group.referenceIds.length} template{group.referenceIds.length !== 1 ? "s" : ""}
+                              {group.referenceIds.length} mẫu
                             </div>
                           </div>
                           {/* Detail button */}
                           <button
                             onClick={() => openGroupDetail(group)}
                             className="opacity-0 group-hover/row:opacity-100 transition-opacity text-muted-foreground hover:text-foreground p-1 rounded"
-                            title="Edit group"
+                            title="Chỉnh sửa nhóm"
                           >
                             <Pencil className="h-3.5 w-3.5" />
                           </button>
@@ -675,7 +675,7 @@ export function DownloadMultipleDialog({
                           <button
                             onClick={(e) => handleDeleteGroup(e, group.id)}
                             className="opacity-0 group-hover/row:opacity-100 transition-opacity text-muted-foreground hover:text-destructive p-1 rounded"
-                            title="Delete group"
+                            title="Xóa nhóm"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -705,9 +705,9 @@ export function DownloadMultipleDialog({
           <span className="text-xs text-muted-foreground flex-1">{footerLabel}</span>
           <Button onClick={handleExport} disabled={exportDisabled} className="w-full sm:w-auto">
             {isExporting ? (
-              <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Exporting...</>
+              <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Đang xuất...</>
             ) : (
-              <><Download className="h-4 w-4 mr-2" />Export ({activeTab === "references" ? selectedRefIds.size : selectedGroupIds.size})</>
+              <><Download className="h-4 w-4 mr-2" />Xuất ({activeTab === "references" ? selectedRefIds.size : selectedGroupIds.size})</>
             )}
           </Button>
         </DialogFooter>

@@ -322,7 +322,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
       router.refresh();
     } catch (error) {
       console.error("Save error:", error);
-      alert("Failed to save changes");
+      alert("Không thể lưu thay đổi");
     } finally {
       setSaving(false);
       setUploading(false);
@@ -398,7 +398,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
               className="font-semibold text-base sm:text-lg border-none shadow-none px-0 h-auto focus-visible:ring-0 bg-transparent truncate"
             />
             <p className="text-xs sm:text-sm text-muted-foreground capitalize">
-              {product.type} cue
+              {product.type} cơ
             </p>
           </div>
         </div>
@@ -407,7 +407,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
             variant="ghost"
             size="icon"
             onClick={toggleAutoRotate}
-            title={isAutoRotating ? "Pause auto-rotation" : "Start auto-rotation"}
+            title={isAutoRotating ? "Tạm dừng tự động xoay" : "Bắt đầu tự động xoay"}
             className="h-8 w-8 sm:h-10 sm:w-10"
           >
             {isAutoRotating ? (
@@ -420,7 +420,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
             variant="ghost"
             size="icon"
             onClick={toggleBackground}
-            title={isDarkBg ? "Light background" : "Dark background"}
+            title={isDarkBg ? "Nền sáng" : "Nền tối"}
             className="h-8 w-8 sm:h-10 sm:w-10"
           >
             {isDarkBg ? (
@@ -433,7 +433,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
             variant="ghost"
             size="icon"
             onClick={() => setShowImageExtractor(true)}
-            title="Extract image"
+            title="Chụp ảnh"
             className="h-8 w-8 sm:h-10 sm:w-10"
           >
             <Camera className="h-4 w-4 sm:h-5 sm:w-5" />
@@ -442,7 +442,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
             variant="ghost"
             size="icon"
             onClick={() => setShowVideoExtractor(true)}
-            title="Extract video"
+            title="Quay video"
             className="h-8 w-8 sm:h-10 sm:w-10"
           >
             <Video className="h-4 w-4 sm:h-5 sm:w-5" />
@@ -456,12 +456,12 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
             {saving ? (
               <>
                 <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
-                <span className="hidden sm:inline ml-1">{uploading ? "Uploading..." : "Saving..."}</span>
+                <span className="hidden sm:inline ml-1">{uploading ? "Đang tải lên..." : "Đang lưu..."}</span>
               </>
             ) : (
               <>
                 <Save className="h-3 w-3 sm:h-4 sm:w-4" />
-                <span className="hidden sm:inline ml-1">Save</span>
+                <span className="hidden sm:inline ml-1">Lưu</span>
               </>
             )}
           </Button>
@@ -515,7 +515,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
             }}
             onTouchEnd={() => setSheetDragStart(null)}
             className="w-full flex items-center justify-center py-4 active:bg-muted/30 transition-colors rounded-t-2xl cursor-pointer touch-none"
-            aria-label={mobileControlsExpanded ? "Collapse settings" : "Expand settings"}
+            aria-label={mobileControlsExpanded ? "Thu gọn cài đặt" : "Mở rộng cài đặt"}
           >
             <div className="w-12 h-1.5 rounded-full bg-muted-foreground/50" />
           </div>
@@ -524,14 +524,14 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
           <div className="overflow-y-auto px-4 pb-6" style={{ height: 'calc(40vh - 56px)' }}>
             {/* Touch control hints */}
             <div className="flex justify-center gap-4 text-xs text-muted-foreground mb-3 pb-3 border-b border-border">
-              <span className="flex items-center gap-1"><RotateCcw className="h-3 w-3" /> Drag to rotate</span>
-              <span className="flex items-center gap-1"><ZoomIn className="h-3 w-3" /> Pinch to zoom</span>
-              <span className="flex items-center gap-1"><Move className="h-3 w-3" /> Two-finger pan</span>
+              <span className="flex items-center gap-1"><RotateCcw className="h-3 w-3" /> Kéo để xoay</span>
+              <span className="flex items-center gap-1"><ZoomIn className="h-3 w-3" /> Chụm để thu phóng</span>
+              <span className="flex items-center gap-1"><Move className="h-3 w-3" /> Hai ngón để di chuyển</span>
             </div>
             <div className="flex flex-col gap-3">
               {/* Surface Upload */}
               <CollapsibleCard
-                title="Surface"
+                title="Bề mặt"
                 icon={<Image className="h-4 w-4 text-primary" />}
               >
                 <SurfaceUploader
@@ -546,15 +546,15 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
 
               {/* HDRI Exposure Control */}
               <CollapsibleCard
-                title="HDRI Exposure"
+                title="Ánh sáng HDRI"
                 icon={<Lightbulb className="h-4 w-4 text-primary" />}
               >
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-2">
-                    <Label>HDRI Type</Label>
+                    <Label>Loại HDRI</Label>
                     <Select value={config.hdriType} onValueChange={(v) => updateConfig({ hdriType: v })}>
                       <SelectTrigger id="hdriType-mobile">
-                        <SelectValue placeholder="Select HDRI" />
+                        <SelectValue placeholder="Chọn HDRI" />
                       </SelectTrigger>
                       <SelectContent>
                         {hdriOptions.map((o) => (
@@ -567,7 +567,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                   </div>
 
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor="hdriExposure-mobile">Intensity</Label>
+                    <Label htmlFor="hdriExposure-mobile">Cường độ</Label>
                     <Input
                       id="hdriExposure-mobile"
                       type="number"
@@ -585,7 +585,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
 
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center justify-between">
-                      <Label htmlFor="hdriRotationX-mobile">Direction X (Vertical)</Label>
+                      <Label htmlFor="hdriRotationX-mobile">Hướng X (Dọc)</Label>
                       <span className="text-xs text-muted-foreground">{config.hdriRotationX}°</span>
                     </div>
                     <input
@@ -604,7 +604,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
 
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center justify-between">
-                      <Label htmlFor="hdriRotationY-mobile">Direction Y (Horizontal)</Label>
+                      <Label htmlFor="hdriRotationY-mobile">Hướng Y (Ngang)</Label>
                       <span className="text-xs text-muted-foreground">{config.hdriRotationY}°</span>
                     </div>
                     <input
@@ -823,12 +823,12 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
 
               {/* Joint Top Config */}
               <CollapsibleCard
-                title="Joint Top"
+                title="Khớp đầu"
                 icon={<Settings className="h-4 w-4 text-primary" />}
               >
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor="jointRoughness-mobile">Roughness</Label>
+                    <Label htmlFor="jointRoughness-mobile">Độ nhám</Label>
                     <Input
                       id="jointRoughness-mobile"
                       type="number"
@@ -844,7 +844,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                     />
                   </div>
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor="jointClearcoat-mobile">Clearcoat</Label>
+                    <Label htmlFor="jointClearcoat-mobile">Độ bóng</Label>
                     <Input
                       id="jointClearcoat-mobile"
                       type="number"
@@ -860,7 +860,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                     />
                   </div>
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor="jointMetalness-mobile">Metalness</Label>
+                    <Label htmlFor="jointMetalness-mobile">Độ kim loại</Label>
                     <Input
                       id="jointMetalness-mobile"
                       type="number"
@@ -963,24 +963,24 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
           <div className="p-4 flex flex-col gap-4">
             {/* 3D Controls */}
             <CollapsibleCard
-              title="3D Controls"
+              title="Điều khiển 3D"
               icon={<Info className="h-4 w-4 text-primary" />}
               defaultExpanded={true}
             >
               <div className="text-sm text-muted-foreground">
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center justify-between">
-                    <span>Rotate</span>
+                    <span>Xoay</span>
                     <div className="flex items-center gap-2">
                       <span className="text-xs bg-background px-2 py-0.5 rounded">
-                        Left-click + drag (horizontal: spin, vertical: tilt)
+                        Click trái + kéo (ngang: quay, dọc: nghiêng)
                       </span>
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={toggleAutoRotate}
                         className="h-7 px-2"
-                        title={isAutoRotating ? "Pause auto-rotation" : "Start auto-rotation"}
+                        title={isAutoRotating ? "Tạm dừng tự động xoay" : "Bắt đầu tự động xoay"}
                       >
                         {isAutoRotating ? (
                           <Pause className="h-3.5 w-3.5" />
@@ -991,15 +991,15 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                     </div>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span>Zoom</span>
+                    <span>Thu phóng</span>
                     <span className="text-xs bg-background px-2 py-0.5 rounded">
-                      Scroll wheel
+                      Con lăn chuột
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span>Pan</span>
+                    <span>Di chuyển</span>
                     <span className="text-xs bg-background px-2 py-0.5 rounded">
-                      Right-click + drag
+                      Click phải + kéo
                     </span>
                   </div>
                 </div>
@@ -1008,7 +1008,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
 
             {/* Surface Upload */}
             <CollapsibleCard
-              title="Surface"
+              title="Bề mặt"
               icon={<Image className="h-4 w-4 text-primary" />}
             >
               <SurfaceUploader
@@ -1023,15 +1023,15 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
 
             {/* HDRI Exposure Control */}
             <CollapsibleCard
-              title="HDRI Exposure"
+              title="Ánh sáng HDRI"
               icon={<Lightbulb className="h-4 w-4 text-primary" />}
             >
               <div className="flex flex-col gap-4">
                 <div className="flex flex-col gap-2">
-                  <Label>HDRI Type</Label>
+                  <Label>Loại HDRI</Label>
                   <Select value={config.hdriType} onValueChange={(v) => updateConfig({ hdriType: v })}>
                     <SelectTrigger id="hdriType">
-                      <SelectValue placeholder="Select HDRI" />
+                      <SelectValue placeholder="Chọn HDRI" />
                     </SelectTrigger>
                     <SelectContent>
                       {hdriOptions.map((o) => (
@@ -1044,7 +1044,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                 </div>
 
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="hdriExposure">Intensity</Label>
+                  <Label htmlFor="hdriExposure">Cường độ</Label>
                   <Input
                     id="hdriExposure"
                     type="number"
@@ -1063,7 +1063,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
 
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center justify-between">
-                    <Label htmlFor="hdriRotationX">Direction X (Vertical)</Label>
+                    <Label htmlFor="hdriRotationX">Hướng X (Dọc)</Label>
                     <span className="text-xs text-muted-foreground">{config.hdriRotationX}°</span>
                   </div>
                   <input
@@ -1082,7 +1082,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
 
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center justify-between">
-                    <Label htmlFor="hdriRotationY">Direction Y (Horizontal)</Label>
+                    <Label htmlFor="hdriRotationY">Hướng Y (Ngang)</Label>
                     <span className="text-xs text-muted-foreground">{config.hdriRotationY}°</span>
                   </div>
                   <input
@@ -1312,12 +1312,12 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
 
             {/* Joint Top Config */}
             <CollapsibleCard
-              title="Joint Top"
+              title="Khớp đầu"
               icon={<Settings className="h-4 w-4 text-primary" />}
             >
               <div className="flex flex-col gap-4">
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="jointRoughness">Roughness</Label>
+                  <Label htmlFor="jointRoughness">Độ nhám</Label>
                   <Input
                     id="jointRoughness"
                     type="number"
@@ -1334,7 +1334,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                   <p className="text-xs text-muted-foreground">0 - 255 (default: 255)</p>
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="jointClearcoat">Clearcoat</Label>
+                  <Label htmlFor="jointClearcoat">Độ bóng</Label>
                   <Input
                     id="jointClearcoat"
                     type="number"
@@ -1351,7 +1351,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                   <p className="text-xs text-muted-foreground">0 - 100 (default: 0)</p>
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="jointMetalness">Metalness</Label>
+                  <Label htmlFor="jointMetalness">Độ kim loại</Label>
                   <Input
                     id="jointMetalness"
                     type="number"
@@ -1452,12 +1452,12 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
 
             {/* Copy JSON Metadata */}
             <CollapsibleCard
-              title="Export"
+              title="Xuất"
               icon={<Copy className="h-4 w-4 text-primary" />}
             >
               <div className="flex flex-col gap-2">
                 <p className="text-sm text-muted-foreground">
-                  Copy all configuration as JSON for Shopify metafield integration.
+                  Sao chép toàn bộ cấu hình dưới dạng JSON để tích hợp metafield Shopify.
                 </p>
                 <Button
                   variant="outline"
@@ -1468,12 +1468,12 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
                   {copied ? (
                     <>
                       <Check className="h-4 w-4" />
-                      Copied!
+                      Đã sao chép!
                     </>
                   ) : (
                     <>
                       <Copy className="h-4 w-4" />
-                      Copy JSON Metadata
+                      Sao chép JSON Metadata
                     </>
                   )}
                 </Button>

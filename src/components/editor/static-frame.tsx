@@ -76,7 +76,7 @@ export function StaticFrameInner({
           screenshot ? (
             <img
               src={screenshot}
-              alt={`Frame ${frame.order + 1}`}
+              alt={`Khung ${frame.order + 1}`}
               className="w-full h-full object-cover pointer-events-none"
               draggable={false}
             />
@@ -104,7 +104,7 @@ export function StaticFrameInner({
             {frame.imageSettings.imageUrl ? (
               <img
                 src={resolveStorageUrl(frame.imageSettings.imageUrl)!}
-                alt={`Image Frame ${frame.order + 1}`}
+                alt={`Ảnh Khung ${frame.order + 1}`}
                 className="absolute inset-0 w-full h-full pointer-events-none"
                 style={{
                   objectFit: frame.imageSettings.objectFit as React.CSSProperties['objectFit'],
@@ -181,7 +181,7 @@ export function StaticFrameInner({
       {/* Frame label */}
       {!previewMode && (
         <div className="absolute bottom-1 left-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded pointer-events-none">
-          {isCueFrame(frame) ? `${frame.cue.zoom.toFixed(1)}x` : 'Image'}
+          {isCueFrame(frame) ? `${frame.cue.zoom.toFixed(1)}x` : 'Ảnh'}
         </div>
       )}
     </div>

@@ -87,7 +87,7 @@ export function LeatherPicker({
     <div className="flex flex-col gap-5">
       {/* Texture Type */}
       <div className="flex flex-col gap-2">
-        <Label>Texture Type</Label>
+        <Label>Loại Kết Cấu</Label>
         <Select value={textureType} onValueChange={(v) => onTextureChange(v as LeatherTextureType)}>
           <SelectTrigger>
             <SelectValue />
@@ -105,19 +105,19 @@ export function LeatherPicker({
       {/* Custom Texture Upload (only when custom is selected) */}
       {textureType === "custom" && (
         <div className="flex flex-col gap-2">
-          <Label>Custom Texture</Label>
+          <Label>Kết Cấu Tùy Chỉnh</Label>
           {customTexturePreview ? (
             <div className="relative rounded-lg overflow-hidden border bg-muted group">
               <img
                 src={customTexturePreview}
-                alt="Custom texture preview"
+                alt="Xem trước kết cấu tùy chỉnh"
                 className="w-full h-24 object-contain bg-black/5"
               />
               {!uploading && (
                 <button
                   onClick={handleRemoveCustomTexture}
                   className="absolute top-2 right-2 p-1.5 bg-background/90 rounded-lg text-foreground opacity-0 group-hover:opacity-100 transition-all duration-200 hover:bg-destructive hover:text-destructive-foreground cursor-pointer"
-                  title="Remove texture"
+                  title="Xóa kết cấu"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -129,7 +129,7 @@ export function LeatherPicker({
               )}
               {customTexturePending && !uploading && (
                 <div className="absolute bottom-2 left-2 px-2 py-1 bg-amber-500/90 text-amber-950 text-xs rounded font-medium">
-                  Unsaved
+                  Chưa lưu
                 </div>
               )}
             </div>
@@ -148,7 +148,7 @@ export function LeatherPicker({
             >
               <ImageIcon className="h-5 w-5 text-muted-foreground" />
               <span className="text-xs text-muted-foreground">
-                {isDragging ? "Drop texture here" : "Upload leather texture"}
+                {isDragging ? "Thả kết cấu vào đây" : "Tải lên kết cấu da"}
               </span>
             </button>
           )}
@@ -164,7 +164,7 @@ export function LeatherPicker({
 
       {/* Color Palette */}
       <div className="flex flex-col gap-2">
-        <Label>Color</Label>
+        <Label>Màu Sắc</Label>
         <div className="grid grid-cols-3 gap-2">
           {Object.entries(LEATHER_COLORS).map(([key, { name, hex }]) => (
             <button
@@ -191,7 +191,7 @@ export function LeatherPicker({
           ))}
         </div>
         <p className="text-xs text-muted-foreground mt-1">
-          Selected: {LEATHER_COLORS[color]?.name || color}
+          Đã chọn: {LEATHER_COLORS[color]?.name || color}
         </p>
       </div>
     </div>

@@ -91,7 +91,7 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
 
         extractor.startVideoPreview(config);
       } catch (err) {
-        setError("Failed to initialize video extractor");
+        setError("Không thể khởi tạo trích xuất video");
         console.error(err);
       }
     };
@@ -153,7 +153,7 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
       videoUrlRef.current = url;
       setVideoUrl(url);
     } catch (err) {
-      setError("Recording failed. Try reducing quality or duration.");
+      setError("Ghi thất bại. Hãy thử giảm chất lượng hoặc thời lượng.");
       console.error(err);
     } finally {
       setIsRecording(false);
@@ -247,10 +247,9 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Video className="h-5 w-5" />
-            Video Extractor
-          </DialogTitle>
+            Trích Xuất Video          </DialogTitle>
           <DialogDescription>
-            Studio product video — cue spins with cinematic Dutch-angle dolly shot
+            Video sản phẩm studio — cơ xoay với góc quay điện ảnh Dutch-angle
           </DialogDescription>
         </DialogHeader>
 
@@ -265,12 +264,12 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
               {isRecording && (
                 <div className="absolute top-2 left-2 flex items-center gap-2 bg-red-600 text-white px-2 py-1 rounded text-sm z-10">
                   <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
-                  Recording...
+                  Đang ghi...
                 </div>
               )}
               {isRebuilding && !isRecording && (
                 <div className="absolute top-2 right-2 bg-background/80 text-foreground px-2 py-1 rounded text-xs z-10">
-                  Updating…
+                  Đang cập nhật…
                 </div>
               )}
               {videoUrl && !isRecording && (
@@ -290,7 +289,7 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
             {isRecording && (
               <div className="mt-2">
                 <Progress value={progress} className="h-2" />
-                <p className="text-xs text-muted-foreground mt-1 text-center">Recording: {progress}%</p>
+                <p className="text-xs text-muted-foreground mt-1 text-center">Đang ghi: {progress}%</p>
               </div>
             )}
           </div>
@@ -302,7 +301,7 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
             <div className="space-y-2">
               <h4 className="font-medium text-sm flex items-center gap-2">
                 <Settings className="h-4 w-4" />
-                Quality
+                Chất lượng
               </h4>
               <Select value={quality} onValueChange={(v) => setQuality(v as ExtractorQuality)} disabled={isRecording}>
                 <SelectTrigger className="h-9">
@@ -318,10 +317,9 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
             {/* Video Settings */}
             <div className="space-y-3">
               <h4 className="font-medium text-sm">Video</h4>
-
               <div>
                 <div className="flex justify-between">
-                  <Label className="text-xs">Duration</Label>
+                  <Label className="text-xs">Thời lượng</Label>
                   <span className="text-xs text-muted-foreground">{config.duration}s</span>
                 </div>
                 <Slider value={[config.duration]} min={5} max={30} step={1}
@@ -331,7 +329,7 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
 
               <div>
                 <div className="flex justify-between">
-                  <Label className="text-xs">Cue Spin Speed</Label>
+                  <Label className="text-xs">Tốc độ quay Cơ</Label>
                   <span className="text-xs text-muted-foreground">{config.rotationSpeed.toFixed(2)} rad/s</span>
                 </div>
                 <Slider value={[config.rotationSpeed]} min={0.1} max={1} step={0.05}
@@ -341,7 +339,7 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
 
               <div>
                 <div className="flex justify-between">
-                  <Label className="text-xs">Cue Scale</Label>
+                  <Label className="text-xs">Tỷ lệ Cơ</Label>
                   <span className="text-xs text-muted-foreground">{(config.modelScale ?? 7).toFixed(1)}×</span>
                 </div>
                 <Slider value={[config.modelScale ?? 7]} min={4} max={12} step={0.5}
@@ -351,22 +349,22 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
 
               <div>
                 <div className="flex justify-between">
-                  <Label className="text-xs">Camera Pan Speed</Label>
+                  <Label className="text-xs">Tốc độ lia máy quay</Label>
                   <span className="text-xs text-muted-foreground">{((config.cameraDollySpeed ?? 0.15) * 100).toFixed(0)}%</span>
                 </div>
                 <Slider value={[config.cameraDollySpeed ?? 0.15]} min={0.05} max={1} step={0.05}
                   onValueChange={([v]) => updateConfigLive({ cameraDollySpeed: v })}
                   className="mt-1" disabled={isRecording} />
-                <p className="text-xs text-muted-foreground mt-0.5">% of cue length covered per video</p>
+                <p className="text-xs text-muted-foreground mt-0.5">% chiều dài cơ được bao phủ mỗi video</p>
               </div>
             </div>
 
             {/* HDRI */}
             <div className="space-y-3">
-              <h4 className="font-medium text-sm">Lighting (HDRI)</h4>
+              <h4 className="font-medium text-sm">Ánh sáng (HDRI)</h4>
 
               <div>
-                <Label className="text-xs">HDRI Environment</Label>
+                <Label className="text-xs">Môi trường HDRI</Label>
                 <Select
                   value={config.hdriFile ?? 'ferndale_studio_07_2k.hdr'}
                   onValueChange={(v) => updateConfigAndRebuild({ hdriFile: v })}
@@ -385,7 +383,7 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
 
               <div>
                 <div className="flex justify-between">
-                  <Label className="text-xs">HDRI Rotation (Y)</Label>
+                  <Label className="text-xs">Xoay HDRI (Y)</Label>
                   <span className="text-xs text-muted-foreground">{config.hdriRotationY ?? 0}°</span>
                 </div>
                 <Slider
@@ -401,16 +399,16 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
             {/* Background Layers */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <h4 className="font-medium text-sm">Background Layers</h4>
+                <h4 className="font-medium text-sm">Các lớp nền</h4>
                 <Button size="sm" variant="outline" className="h-7 px-2" onClick={addBgLayer} disabled={isRecording}>
-                  <Plus className="h-3 w-3 mr-1" /> Add
+                  <Plus className="h-3 w-3 mr-1" /> Thêm
                 </Button>
               </div>
 
               {(config.backgroundLayers ?? []).map((layer, idx) => (
                 <div key={layer.id} className="border rounded-lg p-2 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium">Layer {idx + 1}</span>
+                    <span className="text-xs font-medium">Lớp {idx + 1}</span>
                     <div className="flex items-center gap-1">
                       <input
                         type="checkbox"
@@ -434,7 +432,7 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
                       className="h-6 text-xs flex-1"
                       onClick={() => updateBgLayer(layer.id, { type: 'color' })}
                       disabled={isRecording}
-                    >Color</Button>
+                    >Màu sắc</Button>
                     <Button
                       size="sm" variant={layer.type === 'image' ? 'default' : 'outline'}
                       className="h-6 text-xs flex-1"
@@ -446,7 +444,7 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
                         }, 50);
                       }}
                       disabled={isRecording}
-                    >Image</Button>
+                    >Ảnh</Button>
                     <input
                       type="file"
                       accept="image/*"
@@ -478,7 +476,7 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
                       <Button size="sm" variant="ghost" className="h-6 px-2 text-xs"
                         onClick={() => updateBgLayer(layer.id, { imageUrl: null, type: 'color' })}
                         disabled={isRecording}>
-                        <X className="h-3 w-3 mr-1" /> Clear
+                        <X className="h-3 w-3 mr-1" /> Xóa
                       </Button>
                     </div>
                   )}
@@ -486,7 +484,7 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
                   {/* Opacity */}
                   <div>
                     <div className="flex justify-between">
-                      <Label className="text-xs">Opacity</Label>
+                      <Label className="text-xs">Độ mờ</Label>
                       <span className="text-xs text-muted-foreground">{Math.round(layer.opacity * 100)}%</span>
                     </div>
                     <Slider value={[layer.opacity]} min={0} max={1} step={0.05}
@@ -496,7 +494,7 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
 
                   {/* Blend mode */}
                   <div>
-                    <Label className="text-xs">Blend Mode</Label>
+                    <Label className="text-xs">Chế độ hòa trộn</Label>
                     <Select value={layer.blendMode}
                       onValueChange={(v) => updateBgLayer(layer.id, { blendMode: v as VideoBackgroundLayer['blendMode'] })}
                       disabled={isRecording}>
@@ -504,9 +502,9 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="normal">Normal</SelectItem>
-                        <SelectItem value="additive">Additive (Screen)</SelectItem>
-                        <SelectItem value="multiply">Multiply</SelectItem>
+                        <SelectItem value="normal">Thường</SelectItem>
+                        <SelectItem value="additive">Cộng (Screen)</SelectItem>
+                        <SelectItem value="multiply">Nhân</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -516,15 +514,15 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
 
             {/* Textures */}
             <div className="space-y-3">
-              <h4 className="font-medium text-sm">Textures</h4>
+              <h4 className="font-medium text-sm">Kết cấu</h4>
 
               <div>
-                <Label className="text-xs">Table (Velvet)</Label>
+                <Label className="text-xs">Bàn (Nhung)</Label>
                 <div className="flex gap-1 mt-1">
                   <Button size="sm" variant="outline" className="h-7 flex-1 text-xs"
                     onClick={() => tableFileRef.current?.click()} disabled={isRecording}>
                     <Upload className="h-3 w-3 mr-1" />
-                    {config.tableTextureUrl?.startsWith('blob:') ? 'Custom' : 'Upload'}
+                    {config.tableTextureUrl?.startsWith('blob:') ? 'Tùy chỉnh' : 'Tải lên'}
                   </Button>
                   {config.tableTextureUrl?.startsWith('blob:') && (
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0"
@@ -538,12 +536,12 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
               </div>
 
               <div>
-                <Label className="text-xs">Wall (Cement)</Label>
+                <Label className="text-xs">Tường (Xi măng)</Label>
                 <div className="flex gap-1 mt-1">
                   <Button size="sm" variant="outline" className="h-7 flex-1 text-xs"
                     onClick={() => wallFileRef.current?.click()} disabled={isRecording}>
                     <Upload className="h-3 w-3 mr-1" />
-                    {config.wallTextureUrl?.startsWith('blob:') ? 'Custom' : 'Upload'}
+                    {config.wallTextureUrl?.startsWith('blob:') ? 'Tùy chỉnh' : 'Tải lên'}
                   </Button>
                   {config.wallTextureUrl?.startsWith('blob:') && (
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0"
@@ -559,17 +557,17 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
 
             {/* Shadow */}
             <div className="space-y-3">
-              <h4 className="font-medium text-sm">Shadow</h4>
+              <h4 className="font-medium text-sm">Bóng</h4>
               <div className="flex items-center gap-2">
                 <input type="checkbox" id="enableShadow" checked={config.enableShadow}
                   onChange={(e) => updateConfigAndRebuild({ enableShadow: e.target.checked })}
                   disabled={isRecording} />
-                <Label htmlFor="enableShadow" className="text-xs">Enable Shadow</Label>
+                <Label htmlFor="enableShadow" className="text-xs">Bật bóng</Label>
               </div>
               {config.enableShadow && (
                 <div>
                   <div className="flex justify-between">
-                    <Label className="text-xs">Shadow Intensity</Label>
+                    <Label className="text-xs">Cường độ bóng</Label>
                     <span className="text-xs text-muted-foreground">{config.shadowIntensity}</span>
                   </div>
                   <Slider value={[config.shadowIntensity]} min={0.1} max={1} step={0.1}
@@ -584,26 +582,26 @@ export function VideoExtractor({ sceneManager, productName, onClose, open }: Vid
 
         <DialogFooter className="flex justify-between sm:justify-between">
           <Button variant="outline" onClick={handleReset} size="sm" disabled={isRecording}>
-            <RefreshCw className="h-4 w-4 mr-1" /> Reset
+            <RefreshCw className="h-4 w-4 mr-1" /> Đặt lại
           </Button>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={onClose} size="sm" disabled={isRecording}>Cancel</Button>
+            <Button variant="outline" onClick={onClose} size="sm" disabled={isRecording}>Hủy</Button>
             {isRecording ? (
               <Button onClick={handleStopRecording} variant="destructive" size="sm">
-                <Square className="h-4 w-4 mr-1" /> Stop
+                <Square className="h-4 w-4 mr-1" /> Dừng
               </Button>
             ) : videoUrl ? (
               <>
                 <Button variant="outline" size="sm" onClick={() => { setVideoUrl(null); if (videoUrlRef.current) { URL.revokeObjectURL(videoUrlRef.current); videoUrlRef.current = null; } rebuildScene(config); }}>
-                  <RefreshCw className="h-4 w-4 mr-1" /> Re-record
+                  <RefreshCw className="h-4 w-4 mr-1" /> Ghi lại
                 </Button>
                 <Button onClick={handleDownload} size="sm">
-                  <Download className="h-4 w-4 mr-1" /> Download
+                  <Download className="h-4 w-4 mr-1" /> Tải xuống
                 </Button>
               </>
             ) : (
               <Button onClick={handleStartRecording} size="sm" disabled={isRebuilding}>
-                <Play className="h-4 w-4 mr-1" /> Start Recording
+                <Play className="h-4 w-4 mr-1" /> Bắt đầu ghi
               </Button>
             )}
           </div>

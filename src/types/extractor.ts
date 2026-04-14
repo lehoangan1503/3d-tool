@@ -297,6 +297,8 @@ export interface CueShadowConfig {
   lightZ: number;    // Light Z position in scene units (-10 to 10)
   intensity: number; // Shadow darkness (0–1)
   blur: number;      // Shadow softness / PCF radius (0–20)
+  wallColor: string;       // Wall + floor background color (hex, default #ffffff)
+  wallGradientEnd?: string; // Optional second color for a top→bottom gradient
 }
 
 export const DEFAULT_CUE_SHADOW: CueShadowConfig = {
@@ -306,6 +308,7 @@ export const DEFAULT_CUE_SHADOW: CueShadowConfig = {
   lightZ: 5,
   intensity: 0.5,
   blur: 4,
+  wallColor: '#ffffff',
 };
 
 /** Cue settings within a frame */

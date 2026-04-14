@@ -81,13 +81,13 @@ export function SurfaceUploader({
 
   return (
     <div className="flex flex-col gap-3">
-      <Label>Surface Image</Label>
+      <Label>Ảnh Bề Mặt</Label>
 
       {preview ? (
         <div className="relative rounded-lg overflow-hidden border bg-muted group">
           <img
             src={preview}
-            alt="Surface preview"
+            alt="Xem trước bề mặt"
             className="w-full h-32 object-contain bg-black/5"
           />
           {!uploading && (
@@ -95,14 +95,14 @@ export function SurfaceUploader({
               <button
                 onClick={() => setFullscreenOpen(true)}
                 className="p-1.5 bg-background/90 rounded-lg text-foreground hover:bg-primary hover:text-primary-foreground cursor-pointer"
-                title="View fullscreen"
+                title="Xem toàn màn hình"
               >
                 <Maximize2 className="h-4 w-4" />
               </button>
               <button
                 onClick={handleRemove}
                 className="p-1.5 bg-background/90 rounded-lg text-foreground hover:bg-destructive hover:text-destructive-foreground cursor-pointer"
-                title="Remove image"
+                title="Xóa ảnh"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -112,13 +112,13 @@ export function SurfaceUploader({
             <div className="absolute inset-0 flex items-center justify-center bg-background/80 backdrop-blur-sm">
               <div className="flex flex-col items-center gap-2">
                 <Loader2 className="h-6 w-6 text-primary animate-spin" />
-                <span className="text-xs text-muted-foreground">Uploading...</span>
+                <span className="text-xs text-muted-foreground">Đang tải lên...</span>
               </div>
             </div>
           )}
           {pendingFile && !uploading && (
             <div className="absolute bottom-2 left-2 px-2 py-1 bg-amber-500/90 text-amber-950 text-xs rounded font-medium">
-              Unsaved
+              Chưa lưu
             </div>
           )}
         </div>
@@ -139,7 +139,7 @@ export function SurfaceUploader({
             <ImageIcon className="h-5 w-5 text-primary" />
           </div>
           <span className="text-sm text-muted-foreground">
-            {isDragging ? "Drop image here" : "Click or drag to upload"}
+            {isDragging ? "Thả ảnh vào đây" : "Nhấn hoặc kéo để tải lên"}
           </span>
         </button>
       )}
@@ -152,19 +152,19 @@ export function SurfaceUploader({
         onChange={handleFileChange}
       />
 
-      <p className="text-xs text-muted-foreground">Recommended: 1141 × 8359</p>
+      <p className="text-xs text-muted-foreground">Khuyến nghị: 1141 × 8359</p>
 
       {/* Fullscreen Dialog */}
       <Dialog open={fullscreenOpen} onOpenChange={setFullscreenOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] p-0 overflow-hidden">
           <DialogHeader className="p-4 pb-2">
-            <DialogTitle>Surface Image</DialogTitle>
+            <DialogTitle>Ảnh Bề Mặt</DialogTitle>
           </DialogHeader>
           <div className="p-4 pt-0 flex items-center justify-center bg-black/5">
             {preview && (
               <img
                 src={preview}
-                alt="Surface fullscreen"
+                alt="Bề mặt toàn màn hình"
                 className="max-w-full max-h-[70vh] object-contain"
               />
             )}

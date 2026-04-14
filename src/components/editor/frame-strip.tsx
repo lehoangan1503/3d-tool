@@ -149,7 +149,7 @@ function SortableStripItem({
         </div>
 
         <span className="text-[10px] font-medium text-muted-foreground flex-1 truncate leading-none">
-          {index + 1} · {isCue ? "Cue" : "Img"}
+          {index + 1} · {isCue ? "Cơ" : "Ảnh"}
         </span>
 
         {/* Action buttons - visible on hover/selected */}
@@ -165,7 +165,7 @@ function SortableStripItem({
             size="icon"
             className="h-4 w-4 p-0"
             onClick={onToggleVisibility}
-            title={isHidden ? "Show" : "Hide"}
+            title={isHidden ? "Hiện" : "Ẩn"}
           >
             {isHidden ? (
               <EyeOff className="w-2.5 h-2.5 text-muted-foreground" />
@@ -178,7 +178,7 @@ function SortableStripItem({
             size="icon"
             className="h-4 w-4 p-0 text-destructive hover:text-destructive"
             onClick={onDelete}
-            title="Delete"
+            title="Xóa"
           >
             <Trash2 className="w-2.5 h-2.5" />
           </Button>
@@ -240,7 +240,7 @@ export function FrameStrip({
     return (
       <div className="border-t bg-muted/20 px-4 py-3 flex items-center justify-center">
         <span className="text-xs text-muted-foreground">
-          No frames yet — add a frame to get started.
+          Chưa có khung — thêm khung để bắt đầu.
         </span>
       </div>
     );
@@ -280,17 +280,17 @@ export function FrameStrip({
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete Frame</DialogTitle>
+            <DialogTitle>Xóa Khung</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete this frame? This cannot be undone.
+              Bạn có chắc chắn muốn xóa khung này không? Hành động này không thể hoàn tác.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>
-              Cancel
+              Hủy
             </Button>
             <Button variant="destructive" onClick={confirmDelete}>
-              Delete
+              Xóa
             </Button>
           </DialogFooter>
         </DialogContent>

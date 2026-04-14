@@ -63,7 +63,7 @@ export function GradientPickerDialog({
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-lg max-h-[80vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Choose Gradient</DialogTitle>
+          <DialogTitle>Chọn Độ Chuyển Màu</DialogTitle>
         </DialogHeader>
 
         <div className="relative">
@@ -71,7 +71,7 @@ export function GradientPickerDialog({
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search gradients…"
+            placeholder="Tìm kiếm độ chuyển màu…"
             className="pl-8 h-8 text-xs"
           />
         </div>
@@ -105,7 +105,7 @@ export function GradientPickerDialog({
             ))}
             {filtered.length === 0 && !loading && (
               <div className="col-span-3 text-center text-xs text-muted-foreground py-8">
-                No gradients found
+                Không tìm thấy độ chuyển màu
               </div>
             )}
           </div>

@@ -111,7 +111,7 @@ function SurfaceSection({
         <div className="px-2 pb-2 space-y-2">
           {/* Texture Preset */}
           <div className="space-y-1 px-1">
-            <Label className="text-xs text-muted-foreground">Material Texture</Label>
+            <Label className="text-xs text-muted-foreground">Vật liệu</Label>
             <TexturePresetPicker
               packs={texturePacks}
               selected={surface.texturePreset}
@@ -129,7 +129,7 @@ function SurfaceSection({
           {/* Roughness */}
           <div className="px-1 space-y-1">
             <Label className="text-xs text-muted-foreground">
-              Roughness — {Math.round(roughness * 100)}%
+              Độ nhám — {Math.round(roughness * 100)}%
             </Label>
             <Slider
               value={[roughness]}
@@ -176,14 +176,14 @@ export function BackgroundPanel({
   return (
     <div className="space-y-3">
       <SurfaceSection
-        title="Wall Background"
+        title="Nền tường"
         icon={RectangleHorizontal}
         surface={wallSurface}
         onChange={onWallSurfaceChange}
         texturePacks={manifest?.wall ?? []}
       />
       <SurfaceSection
-        title="Table Surface"
+        title="Bề mặt bàn"
         icon={Table2}
         surface={tableSurface}
         onChange={onTableSurfaceChange}

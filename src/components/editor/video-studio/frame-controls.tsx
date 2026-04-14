@@ -34,9 +34,9 @@ const TYPE_ICON: Record<BackgroundFrameType, typeof Palette> = {
 };
 
 const TYPE_LABEL: Record<BackgroundFrameType, string> = {
-  color: "Color",
+  color: "Màu sắc",
   gradient: "Gradient",
-  image: "Image",
+  image: "Hình ảnh",
 };
 
 const FRAME_TYPES: BackgroundFrameType[] = ["color", "gradient", "image"];
@@ -246,7 +246,7 @@ export function FrameControls({
           {/* ── Type-specific controls ── */}
           {frame.type === "color" && (
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Color</Label>
+              <Label className="text-xs text-muted-foreground">Màu sắc</Label>
               <input
                 type="color"
                 value={frame.color ?? "#000000"}
@@ -274,7 +274,7 @@ export function FrameControls({
 
           {frame.type === "image" && (
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Image</Label>
+              <Label className="text-xs text-muted-foreground">Hình ảnh</Label>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -287,12 +287,12 @@ export function FrameControls({
                 size="sm"
                 onClick={() => fileInputRef.current?.click()}
               >
-                Choose Image
+                Chọn ảnh
               </Button>
               {frame.imageUrl && (
                 <img
                   src={frame.imageUrl}
-                  alt="Frame preview"
+                  alt="Xem trước khung"
                   className="mt-1.5 h-16 w-full rounded object-cover"
                 />
               )}
@@ -302,7 +302,7 @@ export function FrameControls({
           {/* ── Transform controls ── */}
           <div className="space-y-2">
             <Label className="text-xs font-medium text-muted-foreground">
-              Transform
+              Biến đổi
             </Label>
 
             {/* X position */}
@@ -342,7 +342,7 @@ export function FrameControls({
             {/* Width */}
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <Label className="text-xs text-muted-foreground">Width</Label>
+                <Label className="text-xs text-muted-foreground">Chiều rộng</Label>
                 <span className="text-xs tabular-nums text-muted-foreground">
                   {frame.width.toFixed(2)}
                 </span>
@@ -359,7 +359,7 @@ export function FrameControls({
             {/* Height */}
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <Label className="text-xs text-muted-foreground">Height</Label>
+                <Label className="text-xs text-muted-foreground">Chiều cao</Label>
                 <span className="text-xs tabular-nums text-muted-foreground">
                   {frame.height.toFixed(2)}
                 </span>
@@ -377,7 +377,7 @@ export function FrameControls({
           {/* Rotation */}
           <div className="space-y-1">
             <div className="flex items-center justify-between">
-              <Label className="text-xs text-muted-foreground">Rotation</Label>
+              <Label className="text-xs text-muted-foreground">Xoay</Label>
               <span className="text-xs tabular-nums text-muted-foreground">
                 {frame.rotation}°
               </span>
@@ -394,7 +394,7 @@ export function FrameControls({
           {/* Opacity */}
           <div className="space-y-1">
             <div className="flex items-center justify-between">
-              <Label className="text-xs text-muted-foreground">Opacity</Label>
+              <Label className="text-xs text-muted-foreground">Độ mờ</Label>
               <span className="text-xs tabular-nums text-muted-foreground">
                 {Math.round(frame.opacity * 100)}%
               </span>

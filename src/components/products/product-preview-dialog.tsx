@@ -50,7 +50,7 @@ export function ProductPreviewDialog({ product, open, onOpenChange }: ProductPre
             className="absolute right-12 top-4"
           >
             <Pencil className="h-4 w-4 mr-1" />
-            Edit
+            Chỉnh Sửa
           </Button>
         </DialogHeader>
 
@@ -60,7 +60,7 @@ export function ProductPreviewDialog({ product, open, onOpenChange }: ProductPre
             <div className="absolute inset-0 flex items-center justify-center z-10">
               <div className="flex flex-col items-center gap-2 text-muted-foreground">
                 <Loader2 className="h-8 w-8 animate-spin" />
-                <span className="text-sm">Loading surface...</span>
+                <span className="text-sm">Đang tải bề mặt...</span>
               </div>
             </div>
           )}
@@ -69,10 +69,10 @@ export function ProductPreviewDialog({ product, open, onOpenChange }: ProductPre
           {imgState === "error" && (
             <div className="flex flex-col items-center gap-3 text-muted-foreground">
               <ImageOff className="h-10 w-10" />
-              <p className="text-sm">Failed to load surface image</p>
+              <p className="text-sm">Không thể tải ảnh bề mặt</p>
               <Button variant="outline" size="sm" onClick={handleRetry}>
                 <RefreshCw className="h-4 w-4 mr-2" />
-                Try Again
+                Thử Lại
               </Button>
             </div>
           )}

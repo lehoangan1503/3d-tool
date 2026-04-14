@@ -118,6 +118,10 @@ export class ExtractorSceneManager {
   // Studio shadow for CueFrame (image extractor) — independent from video-studio lights
   private frameShadowLight: THREE.DirectionalLight | null = null;
   private frameShadowFloor: THREE.Mesh | null = null;
+  // White studio backdrop (floor base + back wall) shown when shadow is enabled
+  private frameFloorBase: THREE.Mesh | null = null;
+  private frameWallBase: THREE.Mesh | null = null;
+  private frameWallShadow: THREE.Mesh | null = null;
 
   // Track last loaded HDRI file for change detection
   private lastLoadedHdriFile: string = '';
@@ -1560,22 +1564,69 @@ export class ExtractorSceneManager {
    * The DirectionalLight is positioned at (lightX, lightY, lightZ) and casts shadows
    * onto a ShadowMaterial floor plane beneath the cue model.
    * This light is completely separate from HDRI/cue lighting — it only affects the shadow.
+   * A white (or custom-color) floor base and back wall are also added to create the
+   * seamless-paper studio look used in the simulator capture.
    */
-  setFrameShadow(config: { enabled: boolean; lightX: number; lightY: number; lightZ: number; intensity: number; blur: number }): void {
+  setFrameShadow(config: { enabled: boolean; lightX: number; lightY: number; lightZ: number; intensity: number; blur: number; wallColor?: string; wallGradientEnd?: string }): void {
     if (!config.enabled) {
       this.clearFrameShadow();
       return;
     }
 
-    // Create shadow-receiving floor if missing
+    const wallColor = config.wallColor ?? '#ffffff';
+    const wallGradientEnd = config.wallGradientEnd;
+
+    // ── White floor base (MeshBasicMaterial behind shadow overlay) ───────────
+    if (!this.frameFloorBase) {
+      this.frameFloorBase = new THREE.Mesh(
+        new THREE.PlaneGeometry(30, 30),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(wallColor) })
+      );
+      this.frameFloorBase.rotation.x = -Math.PI / 2;
+      this.frameFloorBase.position.y = -1.182; // Slightly below shadow floor to avoid z-fight
+      this.scene.add(this.frameFloorBase);
+    } else {
+      this.applyStudioColor(
+        this.frameFloorBase.material as THREE.MeshBasicMaterial,
+        wallColor, wallGradientEnd
+      );
+    }
+
+    // ── Shadow-receiving floor (ShadowMaterial overlay) ───────────────────────
     if (!this.frameShadowFloor) {
-      this.frameShadowFloor = createShadowFloor(20, 20);
+      this.frameShadowFloor = createShadowFloor(30, 30);
       this.frameShadowFloor.position.y = -1.18;
       this.scene.add(this.frameShadowFloor);
     }
     (this.frameShadowFloor.material as THREE.ShadowMaterial).opacity = config.intensity;
 
-    // Create shadow-casting DirectionalLight if missing
+    // ── White back wall ───────────────────────────────────────────────────────
+    if (!this.frameWallBase) {
+      this.frameWallBase = new THREE.Mesh(
+        new THREE.PlaneGeometry(30, 20),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(wallColor) })
+      );
+      this.frameWallBase.position.set(0, 4.8, -3);
+      this.scene.add(this.frameWallBase);
+    } else {
+      this.applyStudioColor(
+        this.frameWallBase.material as THREE.MeshBasicMaterial,
+        wallColor, wallGradientEnd
+      );
+    }
+
+    // ── Shadow overlay on back wall ───────────────────────────────────────────
+    if (!this.frameWallShadow) {
+      const wallShadowMat = new THREE.ShadowMaterial({ opacity: config.intensity, transparent: true, depthWrite: false });
+      this.frameWallShadow = new THREE.Mesh(new THREE.PlaneGeometry(30, 20), wallShadowMat);
+      this.frameWallShadow.position.set(0, 4.8, -2.99);
+      this.frameWallShadow.receiveShadow = true;
+      this.scene.add(this.frameWallShadow);
+    } else {
+      (this.frameWallShadow.material as THREE.ShadowMaterial).opacity = config.intensity;
+    }
+
+    // ── Shadow-casting DirectionalLight ──────────────────────────────────────
     if (!this.frameShadowLight) {
       this.frameShadowLight = new THREE.DirectionalLight(0xffffff, 0);
       this.frameShadowLight.castShadow = true;
@@ -1599,6 +1650,64 @@ export class ExtractorSceneManager {
     this.frameShadowLight.shadow.camera.updateProjectionMatrix();
   }
 
+  /** Update only the wall/floor color without re-creating all shadow objects. */
+  setFrameShadowWallColor(wallColor: string, wallGradientEnd?: string): void {
+    if (this.frameFloorBase) {
+      this.applyStudioColor(this.frameFloorBase.material as THREE.MeshBasicMaterial, wallColor, wallGradientEnd);
+    }
+    if (this.frameWallBase) {
+      this.applyStudioColor(this.frameWallBase.material as THREE.MeshBasicMaterial, wallColor, wallGradientEnd);
+    }
+  }
+
+  /** Returns a deep-cloned copy of the current cue model for use in the simulator. */
+  getModelClone(): THREE.Group | null {
+    if (!this.clonedModel) return null;
+    const clone = this.clonedModel.clone(true);
+    clone.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry = child.geometry.clone();
+        const cloneMat = (mat: THREE.Material) => {
+          const m = mat.clone() as THREE.MeshPhysicalMaterial;
+          // Remove renderer-specific env maps; the simulator uses its own lighting
+          if ('envMap' in m) m.envMap = null;
+          m.needsUpdate = true;
+          return m;
+        };
+        if (Array.isArray(child.material)) {
+          child.material = child.material.map(cloneMat);
+        } else {
+          child.material = cloneMat(child.material as THREE.Material);
+        }
+        child.castShadow = true;
+        child.receiveShadow = false;
+      }
+    });
+    return clone;
+  }
+
+  /** Apply a solid color or linear gradient (via canvas texture) to a MeshBasicMaterial. */
+  private applyStudioColor(mat: THREE.MeshBasicMaterial, colorHex: string, gradientEnd?: string): void {
+    if (gradientEnd) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 256;
+      const ctx = canvas.getContext('2d')!;
+      const grad = ctx.createLinearGradient(0, 0, 0, 256);
+      grad.addColorStop(0, colorHex);
+      grad.addColorStop(1, gradientEnd);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 256, 256);
+      if (mat.map) mat.map.dispose();
+      mat.map = new THREE.CanvasTexture(canvas);
+      mat.color.set(0xffffff);
+    } else {
+      if (mat.map) { mat.map.dispose(); mat.map = null; }
+      mat.color.set(new THREE.Color(colorHex));
+    }
+    mat.needsUpdate = true;
+  }
+
   private clearFrameShadow(): void {
     if (this.frameShadowLight) {
       this.scene.remove(this.frameShadowLight);
@@ -1608,12 +1717,20 @@ export class ExtractorSceneManager {
       this.frameShadowLight.dispose();
       this.frameShadowLight = null;
     }
-    if (this.frameShadowFloor) {
-      this.scene.remove(this.frameShadowFloor);
-      (this.frameShadowFloor.material as THREE.Material).dispose();
-      this.frameShadowFloor.geometry.dispose();
-      this.frameShadowFloor = null;
-    }
+    const disposeMesh = (mesh: THREE.Mesh | null) => {
+      if (!mesh) return;
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      if (Array.isArray(mesh.material)) {
+        mesh.material.forEach((m: THREE.Material) => m.dispose());
+      } else {
+        (mesh.material as THREE.Material).dispose();
+      }
+    };
+    disposeMesh(this.frameShadowFloor); this.frameShadowFloor = null;
+    disposeMesh(this.frameFloorBase);   this.frameFloorBase = null;
+    disposeMesh(this.frameWallBase);    this.frameWallBase = null;
+    disposeMesh(this.frameWallShadow);  this.frameWallShadow = null;
   }
 
   private async applyVideoBackgroundLayers(layers: VideoBackgroundLayer[]): Promise<void> {

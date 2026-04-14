@@ -36,7 +36,7 @@ export default function LoginPage() {
           </div>
           <CardTitle className="text-2xl">Cue Customizer</CardTitle>
           <CardDescription>
-            {isSignUp ? "Create an account to get started" : "Sign in to your account"}
+            {isSignUp ? "Tạo tài khoản để bắt đầu" : "Đăng nhập vào tài khoản của bạn"}
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-4">
@@ -53,7 +53,7 @@ export default function LoginPage() {
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">Mật khẩu</Label>
               <Input
                 id="password"
                 name="password"
@@ -76,16 +76,16 @@ export default function LoginPage() {
               {loading ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading...
+                  Đang tải...
                 </>
               ) : (
-                isSignUp ? "Create Account" : "Sign In"
+                isSignUp ? "Tạo Tài Khoản" : "Đăng Nhập"
               )}
             </Button>
           </form>
 
           <div className="mt-6 text-center text-sm text-muted-foreground">
-            {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
+            {isSignUp ? "Đã có tài khoản?" : "Chưa có tài khoản?"}{" "}
             <button
               type="button"
               onClick={() => {
@@ -94,7 +94,7 @@ export default function LoginPage() {
               }}
               className="text-primary hover:underline font-medium cursor-pointer"
             >
-              {isSignUp ? "Sign In" : "Sign Up"}
+              {isSignUp ? "Đăng Nhập" : "Đăng Ký"}
             </button>
           </div>
         </CardContent>

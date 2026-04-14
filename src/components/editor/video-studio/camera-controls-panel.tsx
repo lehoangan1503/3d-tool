@@ -100,7 +100,7 @@ function KeyframeSection({
           className="h-6 text-xs px-2"
           onClick={onSet}
         >
-          <Crosshair className="h-3 w-3 mr-1" /> Set
+          <Crosshair className="h-3 w-3 mr-1" /> Đặt
         </Button>
       </div>
       <PositionSlider
@@ -184,7 +184,7 @@ export function CameraControlsPanel({
       {/* Direction Preset */}
       <div className="space-y-1.5">
         <Label className="text-xs text-muted-foreground flex items-center gap-1">
-          <Video className="h-3 w-3" /> Direction
+          <Video className="h-3 w-3" /> Hướng
         </Label>
         <Select
           value={cameraDirection}
@@ -205,7 +205,7 @@ export function CameraControlsPanel({
 
       {/* Start Position */}
       <KeyframeSection
-        title="Start Position"
+        title="Vị trí bắt đầu"
         keyframe={cameraStart}
         onChange={onStartChange}
         onSet={onSetStart}
@@ -213,7 +213,7 @@ export function CameraControlsPanel({
 
       {/* End Position */}
       <KeyframeSection
-        title="End Position"
+        title="Vị trí kết thúc"
         keyframe={cameraEnd}
         onChange={onEndChange}
         onSet={onSetEnd}
@@ -221,7 +221,7 @@ export function CameraControlsPanel({
 
       {/* Camera Speed */}
       <PositionSlider
-        label="Camera Speed"
+        label="Tốc độ máy ảnh"
         value={cameraSpeed}
         onChange={onSpeedChange}
         min={0.1}
@@ -233,14 +233,14 @@ export function CameraControlsPanel({
       {/* Easing */}
       <div className="space-y-1.5">
         <Label className="text-xs text-muted-foreground flex items-center gap-1">
-          <Gauge className="h-3 w-3" /> Easing
+          <Gauge className="h-3 w-3" /> Chuyển động
         </Label>
         <Select
           value={easing.type === "preset" ? easing.preset : undefined}
           onValueChange={handleEasingChange}
         >
           <SelectTrigger className="h-8">
-            <SelectValue placeholder="Select easing…" />
+            <SelectValue placeholder="Chọn chuyển động…" />
           </SelectTrigger>
           <SelectContent>
             {EASING_PRESETS.map((p) => (
@@ -254,7 +254,7 @@ export function CameraControlsPanel({
 
       {/* Computed Duration */}
       <div className="flex items-center justify-between rounded-md bg-muted px-3 py-2">
-        <Label className="text-xs text-muted-foreground">Duration</Label>
+        <Label className="text-xs text-muted-foreground">Thời lượng</Label>
         <span className="text-sm font-medium tabular-nums">
           {(() => {
             const sec = computeVideoDuration(cameraStart, cameraEnd, cameraSpeed, cameraDirection);

@@ -4,9 +4,7 @@ import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
-import {
-  RotateCcw, Plus, Trash2, ChevronDown, ChevronUp,
-} from "lucide-react";
+import { RotateCcw, Plus, Trash2, ChevronDown, ChevronUp } from "lucide-react";
 import type { CueConfig, CueInstance } from "@/types/video-studio";
 import { createCueInstance, MAX_CUE_INSTANCES } from "@/types/video-studio";
 
@@ -16,9 +14,7 @@ interface CueSetupPanelProps {
 }
 
 export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
-  const [expandedPanels, setExpandedPanels] = useState<Set<string>>(
-    new Set(["main"]),
-  );
+  const [expandedPanels, setExpandedPanels] = useState<Set<string>>(new Set(["main"]));
 
   const togglePanel = useCallback((id: string) => {
     setExpandedPanels((prev) => {
@@ -31,12 +27,10 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
 
   const updateInstance = useCallback(
     (index: number, partial: Partial<CueInstance>) => {
-      const instances = cueConfig.instances.map((inst, i) =>
-        i === index ? { ...inst, ...partial } : inst,
-      );
+      const instances = cueConfig.instances.map((inst, i) => (i === index ? { ...inst, ...partial } : inst));
       onChange({ ...cueConfig, instances });
     },
-    [cueConfig, onChange],
+    [cueConfig, onChange]
   );
 
   const deleteInstance = useCallback(
@@ -47,7 +41,7 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
         instances: cueConfig.instances.filter((_, i) => i !== index),
       });
     },
-    [cueConfig, onChange],
+    [cueConfig, onChange]
   );
 
   const addInstance = useCallback(() => {
@@ -68,116 +62,61 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <Label className="text-xs text-muted-foreground flex items-center gap-1">
-            <RotateCcw className="h-3 w-3" /> Spin Y
+            <RotateCcw className="h-3 w-3" /> Xoay Y
           </Label>
-          <span className="text-xs text-muted-foreground tabular-nums">
-            {spinYDeg}°
-          </span>
+          <span className="text-xs text-muted-foreground tabular-nums">{spinYDeg}°</span>
         </div>
-        <Slider
-          value={[spinYDeg]}
-          onValueChange={([v]) =>
-            onChange({ ...cueConfig, spinY: v * (Math.PI / 180) })
-          }
-          min={0}
-          max={360}
-          step={1}
-        />
+        <Slider value={[spinYDeg]} onValueChange={([v]) => onChange({ ...cueConfig, spinY: v * (Math.PI / 180) })} min={0} max={360} step={1} />
       </div>
 
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <Label className="text-xs text-muted-foreground flex items-center gap-1">
-            <RotateCcw className="h-3 w-3" /> Speed Y
+            <RotateCcw className="h-3 w-3" /> Tốc độ xoay Y
           </Label>
-          <span className="text-xs text-muted-foreground tabular-nums">
-            {cueConfig.spinSpeed.toFixed(2)}
-          </span>
+          <span className="text-xs text-muted-foreground tabular-nums">{cueConfig.spinSpeed.toFixed(2)}</span>
         </div>
-        <Slider
-          value={[cueConfig.spinSpeed]}
-          onValueChange={([v]) => onChange({ ...cueConfig, spinSpeed: v })}
-          min={0}
-          max={1}
-          step={0.05}
-        />
+        <Slider value={[cueConfig.spinSpeed]} onValueChange={([v]) => onChange({ ...cueConfig, spinSpeed: v })} min={0} max={1} step={0.05} />
       </div>
 
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <Label className="text-xs text-muted-foreground flex items-center gap-1">
-            <RotateCcw className="h-3 w-3" /> Spin X
+            <RotateCcw className="h-3 w-3" /> Xoay X
           </Label>
-          <span className="text-xs text-muted-foreground tabular-nums">
-            {spinXDeg}°
-          </span>
+          <span className="text-xs text-muted-foreground tabular-nums">{spinXDeg}°</span>
         </div>
-        <Slider
-          value={[spinXDeg]}
-          onValueChange={([v]) =>
-            onChange({ ...cueConfig, spinX: v * (Math.PI / 180) })
-          }
-          min={0}
-          max={360}
-          step={1}
-        />
+        <Slider value={[spinXDeg]} onValueChange={([v]) => onChange({ ...cueConfig, spinX: v * (Math.PI / 180) })} min={0} max={360} step={1} />
       </div>
 
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <Label className="text-xs text-muted-foreground flex items-center gap-1">
-            <RotateCcw className="h-3 w-3" /> Speed X
+            <RotateCcw className="h-3 w-3" /> Tốc độ xoay X
           </Label>
-          <span className="text-xs text-muted-foreground tabular-nums">
-            {(cueConfig.spinSpeedX || 0).toFixed(2)}
-          </span>
+          <span className="text-xs text-muted-foreground tabular-nums">{(cueConfig.spinSpeedX || 0).toFixed(2)}</span>
         </div>
-        <Slider
-          value={[cueConfig.spinSpeedX || 0]}
-          onValueChange={([v]) => onChange({ ...cueConfig, spinSpeedX: v })}
-          min={0}
-          max={1}
-          step={0.05}
-        />
+        <Slider value={[cueConfig.spinSpeedX || 0]} onValueChange={([v]) => onChange({ ...cueConfig, spinSpeedX: v })} min={0} max={1} step={0.05} />
       </div>
 
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <Label className="text-xs text-muted-foreground flex items-center gap-1">
-            <RotateCcw className="h-3 w-3" /> Spin Z
+            <RotateCcw className="h-3 w-3" /> Xoay Z
           </Label>
-          <span className="text-xs text-muted-foreground tabular-nums">
-            {spinZDeg}°
-          </span>
+          <span className="text-xs text-muted-foreground tabular-nums">{spinZDeg}°</span>
         </div>
-        <Slider
-          value={[spinZDeg]}
-          onValueChange={([v]) =>
-            onChange({ ...cueConfig, spinZ: v * (Math.PI / 180) })
-          }
-          min={0}
-          max={360}
-          step={1}
-        />
+        <Slider value={[spinZDeg]} onValueChange={([v]) => onChange({ ...cueConfig, spinZ: v * (Math.PI / 180) })} min={0} max={360} step={1} />
       </div>
 
       {/* ── Per-instance panels ── */}
       {cueConfig.instances.map((instance, i) => {
         const expanded = expandedPanels.has(instance.id);
         return (
-          <div
-            key={instance.id}
-            className="rounded-lg border border-border/50 overflow-hidden"
-          >
+          <div key={instance.id} className="rounded-lg border border-border/50 overflow-hidden">
             {/* Header */}
-            <button
-              type="button"
-              className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium hover:bg-muted/50"
-              onClick={() => togglePanel(instance.id)}
-            >
-              <span>
-                {instance.isMain ? "Main Cue" : `Cue ${i + 1}`}
-              </span>
+            <button type="button" className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium hover:bg-muted/50" onClick={() => togglePanel(instance.id)}>
+              <span>{instance.isMain ? "Cơ chính" : `Cơ ${i + 1}`}</span>
               <span className="flex items-center gap-1">
                 {!instance.isMain && (
                   <span
@@ -198,11 +137,7 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
                     <Trash2 className="size-3 text-destructive" />
                   </span>
                 )}
-                {expanded ? (
-                  <ChevronUp className="size-3" />
-                ) : (
-                  <ChevronDown className="size-3" />
-                )}
+                {expanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
               </span>
             </button>
 
@@ -212,83 +147,37 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
                 {/* Position X */}
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <Label className="text-xs text-muted-foreground">
-                      Position X
-                    </Label>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {instance.positionX.toFixed(1)}
-                    </span>
+                    <Label className="text-xs text-muted-foreground">Vị trí X</Label>
+                    <span className="text-xs text-muted-foreground tabular-nums">{instance.positionX.toFixed(1)}</span>
                   </div>
-                  <Slider
-                    value={[instance.positionX]}
-                    onValueChange={([v]) =>
-                      updateInstance(i, { positionX: v })
-                    }
-                    min={-14}
-                    max={14}
-                    step={0.1}
-                  />
+                  <Slider value={[instance.positionX]} onValueChange={([v]) => updateInstance(i, { positionX: v })} min={-14} max={14} step={0.1} />
                 </div>
 
                 {/* Position Y */}
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <Label className="text-xs text-muted-foreground">
-                      Position Y
-                    </Label>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {instance.positionY.toFixed(1)}
-                    </span>
+                    <Label className="text-xs text-muted-foreground">Vị trí Y</Label>
+                    <span className="text-xs text-muted-foreground tabular-nums">{instance.positionY.toFixed(1)}</span>
                   </div>
-                  <Slider
-                    value={[instance.positionY]}
-                    onValueChange={([v]) =>
-                      updateInstance(i, { positionY: v })
-                    }
-                    min={-10}
-                    max={10}
-                    step={0.1}
-                  />
+                  <Slider value={[instance.positionY]} onValueChange={([v]) => updateInstance(i, { positionY: v })} min={-10} max={10} step={0.1} />
                 </div>
 
                 {/* Position Z */}
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <Label className="text-xs text-muted-foreground">
-                      Position Z
-                    </Label>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {instance.positionZ.toFixed(1)}
-                    </span>
+                    <Label className="text-xs text-muted-foreground">Vị trí Z</Label>
+                    <span className="text-xs text-muted-foreground tabular-nums">{instance.positionZ.toFixed(1)}</span>
                   </div>
-                  <Slider
-                    value={[instance.positionZ]}
-                    onValueChange={([v]) =>
-                      updateInstance(i, { positionZ: v })
-                    }
-                    min={-5}
-                    max={3}
-                    step={0.1}
-                  />
+                  <Slider value={[instance.positionZ]} onValueChange={([v]) => updateInstance(i, { positionZ: v })} min={-5} max={3} step={0.1} />
                 </div>
 
                 {/* Scale */}
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <Label className="text-xs text-muted-foreground">
-                      Scale
-                    </Label>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {instance.scale.toFixed(1)}
-                    </span>
+                    <Label className="text-xs text-muted-foreground">Tỷ lệ</Label>
+                    <span className="text-xs text-muted-foreground tabular-nums">{instance.scale.toFixed(1)}</span>
                   </div>
-                  <Slider
-                    value={[instance.scale]}
-                    onValueChange={([v]) => updateInstance(i, { scale: v })}
-                    min={4}
-                    max={12}
-                    step={0.5}
-                  />
+                  <Slider value={[instance.scale]} onValueChange={([v]) => updateInstance(i, { scale: v })} min={4} max={12} step={0.5} />
                 </div>
               </div>
             )}

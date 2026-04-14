@@ -809,7 +809,17 @@ export function FrameControlsPanel({
                   onCheckedChange={(checked) => {
                     const enabled = !!checked;
                     updateShadow({ enabled });
-                    if (enabled) setShadowSimulateOpen(true);
+                    // Auto-resize frame to 2048×2048 at (0,0) when enabling shadow
+                    if (enabled && selectedFrame) {
+                      onFrameChange({
+                        ...selectedFrame,
+                        transform: {
+                          ...(selectedFrame.transform ?? {}),
+                          x: 0, y: 0, width: 2048, height: 2048,
+                        },
+                      } as typeof selectedFrame);
+                      setShadowSimulateOpen(true);
+                    }
                   }}
                 />
                 <label htmlFor="shadow-enabled" className="text-xs text-muted-foreground cursor-pointer select-none">

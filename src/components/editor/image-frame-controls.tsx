@@ -19,9 +19,9 @@ interface ImageFrameControlsProps {
 }
 
 const OBJECT_FIT_OPTIONS: { value: ObjectFit; label: string }[] = [
-  { value: 'cover', label: 'Cover' },
-  { value: 'contain', label: 'Contain' },
-  { value: 'custom', label: 'Custom' },
+  { value: 'cover', label: 'Phủ' },
+  { value: 'contain', label: 'Vừa khung' },
+  { value: 'custom', label: 'Tùy chỉnh' },
 ];
 
 export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsProps) {
@@ -88,7 +88,7 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
 
       {/* Image Upload */}
       <div className="space-y-2">
-        <Label className="text-xs font-medium text-muted-foreground">Image</Label>
+        <Label className="text-xs font-medium text-muted-foreground">Ảnh</Label>
         <div className="flex gap-2">
           <Button
             variant="outline"
@@ -97,7 +97,7 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
             onClick={() => setPickerOpen(true)}
           >
             <Images className="h-3.5 w-3.5 mr-2" />
-            {imageSettings.imageUrl ? "Replace Image" : "Choose Image"}
+            {imageSettings.imageUrl ? "Thay thế ảnh" : "Chọn ảnh"}
           </Button>
           {imageSettings.imageUrl && (
             <Button variant="outline" size="sm" onClick={handleRemoveImage}>
@@ -109,7 +109,7 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
           <div className="rounded border overflow-hidden bg-muted/30">
             <img
               src={resolveStorageUrl(imageSettings.imageUrl)!}
-              alt="Preview"
+              alt="Xem trước"
               className="w-full h-16 object-cover"
             />
           </div>
@@ -120,7 +120,7 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
       {imageSettings.imageUrl && (
         <div className="space-y-1.5">
           <div className="flex justify-between text-xs">
-            <Label className="font-medium text-muted-foreground">Image Opacity</Label>
+            <Label className="font-medium text-muted-foreground">Độ mờ ảnh</Label>
             <span className="text-muted-foreground">{Math.round(imageOpacity * 100)}%</span>
           </div>
           <Slider
@@ -136,7 +136,7 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
       {/* Image Fit */}
       {imageSettings.imageUrl && (
         <div className="space-y-1.5">
-          <Label className="text-xs font-medium text-muted-foreground">Image Fit</Label>
+          <Label className="text-xs font-medium text-muted-foreground">Khớp ảnh</Label>
           <Select value={imageSettings.objectFit} onValueChange={handleObjectFitChange}>
             <SelectTrigger className="h-8">
               <SelectValue />
@@ -155,7 +155,7 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
       {/* Background — Color / Gradient */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
-          <Label className="text-xs font-medium text-muted-foreground">Background</Label>
+          <Label className="text-xs font-medium text-muted-foreground">Nền</Label>
           <button
             type="button"
             onClick={() => updateImageSettings({ backgroundEnabled: !bgEnabled })}
@@ -164,7 +164,7 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
                 ? "bg-primary border-primary text-primary-foreground"
                 : "border-muted-foreground/40 hover:border-muted-foreground"
             }`}
-            title={bgEnabled ? "Remove background" : "Add background"}
+            title={bgEnabled ? "Xóa nền" : "Thêm nền"}
           >
             {bgEnabled && <Check className="w-3 h-3" />}
           </button>
@@ -182,7 +182,7 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
                 }`}
                 onClick={() => updateImageSettings({ backgroundType: "color" })}
               >
-                <Palette className="w-3 h-3" /> Color
+                <Palette className="w-3 h-3" /> Màu sắc
               </button>
               <button
                 type="button"
@@ -196,7 +196,7 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
                   ...(!imageSettings.backgroundGradient ? { backgroundGradient: DEFAULT_GRADIENT } : {}),
                 })}
               >
-                <Blend className="w-3 h-3" /> Gradient
+                <Blend className="w-3 h-3" /> Độ chuyển màu
               </button>
             </div>
 
@@ -224,7 +224,7 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
                   type="button"
                   className="w-full h-10 rounded-md border border-border overflow-hidden hover:border-primary/60 transition-colors"
                   onClick={() => setGradientPickerOpen(true)}
-                  title={imageSettings.backgroundGradient?.name ?? "Choose gradient"}
+                  title="Chọn độ chuyển màu"
                 >
                   <div
                     className="w-full h-full"
@@ -243,7 +243,7 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
                 {/* Angle slider */}
                 <div className="space-y-1">
                   <div className="flex justify-between text-xs">
-                    <span className="text-muted-foreground">Angle</span>
+                    <span className="text-muted-foreground">Góc</span>
                     <span className="text-muted-foreground">{imageSettings.backgroundGradient?.angle ?? 90}°</span>
                   </div>
                   <Slider
@@ -267,7 +267,7 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
             {/* Opacity — shared by both modes */}
             <div className="space-y-1">
               <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Opacity</span>
+                <span className="text-muted-foreground">Độ mờ</span>
                 <span className="text-muted-foreground">{Math.round(backgroundOpacity * 100)}%</span>
               </div>
               <Slider
@@ -293,7 +293,7 @@ export function ImageFrameControls({ frame, onFrameChange }: ImageFrameControlsP
       {/* Dimensions */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
-          <Label className="text-xs font-medium text-muted-foreground">Dimensions</Label>
+          <Label className="text-xs font-medium text-muted-foreground">Kích thước</Label>
           <Button
             variant="ghost"
             size="sm"

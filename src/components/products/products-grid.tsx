@@ -94,9 +94,9 @@ export function ProductsGrid() {
   }, []);
 
   const filters: { value: FilterType; label: string }[] = [
-    { value: "all", label: "All" },
-    { value: "smooth", label: "Smooth" },
-    { value: "leather", label: "Leather" },
+    { value: "all", label: "Tất Cả" },
+    { value: "smooth", label: "Trơn" },
+    { value: "leather", label: "Da" },
   ];
 
   const sortOptions: { value: "asc" | "desc"; label: string }[] = [
@@ -113,14 +113,14 @@ export function ProductsGrid() {
         style={{ borderColor: "rgba(255, 255, 255, 0) !important" }}
       >
         <div className="flex items-center justify-between gap-3 pt-4">
-          <h2 className="text-2xl font-bold shrink-0">My Products</h2>
+          <h2 className="text-2xl font-bold shrink-0">Sản Phẩm Của Tôi</h2>
           <CreateProductDialog onCreated={handleProductCreated} />
         </div>
-        <p className="text-muted-foreground text-sm mt-0.5">Create and customize your pool cue designs</p>
+        <p className="text-muted-foreground text-sm mt-0.5">Tạo và tùy chỉnh thiết kế cơ bi-da của bạn</p>
         <div className="flex items-center gap-2 mt-3">
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input type="text" placeholder="Search by name..." value={search} onChange={(e) => setSearchRaw(e.target.value)} className="pl-8" />
+            <Input type="text" placeholder="Tìm theo tên..." value={search} onChange={(e) => setSearchRaw(e.target.value)} className="pl-8" />
           </div>
           <div className="flex gap-2">
             {filters.map((f) => (
@@ -154,16 +154,16 @@ export function ProductsGrid() {
             <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 rounded-full bg-muted">
               <Search className="h-8 w-8 text-muted-foreground" />
             </div>
-            <h3 className="text-lg font-semibold mb-2 text-foreground">No products match your search</h3>
-            <p className="text-muted-foreground max-w-sm mx-auto">Try adjusting your search or filter to find what you&apos;re looking for</p>
+            <h3 className="text-lg font-semibold mb-2 text-foreground">Không tìm thấy sản phẩm nào</h3>
+            <p className="text-muted-foreground max-w-sm mx-auto">Thử thay đổi từ khóa hoặc bộ lọc để tìm kiếm</p>
           </div>
         ) : (
           <div className="text-center py-16 bg-card rounded-xl border">
             <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 rounded-full bg-primary/10">
               <Package className="h-8 w-8 text-primary" />
             </div>
-            <h3 className="text-lg font-semibold mb-2 text-foreground">No products yet</h3>
-            <p className="text-muted-foreground mb-6 max-w-sm mx-auto">Create your first custom cue design to get started</p>
+            <h3 className="text-lg font-semibold mb-2 text-foreground">Chưa có sản phẩm</h3>
+            <p className="text-muted-foreground mb-6 max-w-sm mx-auto">Tạo thiết kế cơ tùy chỉnh đầu tiên của bạn để bắt đầu</p>
             <CreateProductDialog onCreated={handleProductCreated} />
           </div>
         )

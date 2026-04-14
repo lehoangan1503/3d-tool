@@ -24,7 +24,7 @@ export function ProductCard({ product, onDeleted }: ProductCardProps) {
     e.preventDefault();
     e.stopPropagation();
 
-    if (!confirm(`Delete "${product.name}"? This cannot be undone.`)) return;
+    if (!confirm(`Xóa "${product.name}"? Hành động này không thể hoàn tác.`)) return;
 
     try {
       const res = await fetch(`/api/products/${product.id}`, { method: "DELETE" });
@@ -33,7 +33,7 @@ export function ProductCard({ product, onDeleted }: ProductCardProps) {
       router.refresh();
     } catch (error) {
       console.error("Delete error:", error);
-      alert("Failed to delete product");
+      alert("Không thể xóa sản phẩm");
     }
   }
 
@@ -72,7 +72,7 @@ export function ProductCard({ product, onDeleted }: ProductCardProps) {
                 <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-muted/60">
                   <ImageOff className="h-6 w-6 text-muted-foreground/40" />
                   <span className="text-[11px] text-muted-foreground/60 text-center leading-tight px-3">
-                    No surface yet
+                    Chưa có bề mặt
                   </span>
                 </div>
               )}
@@ -117,7 +117,7 @@ export function ProductCard({ product, onDeleted }: ProductCardProps) {
                   {new Date(product.updated_at).toLocaleDateString()}
                 </span>
                 <span className="flex items-center gap-1 text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                  Edit
+                  Chỉnh sửa
                   <ArrowRight className="h-3 w-3" />
                 </span>
               </div>

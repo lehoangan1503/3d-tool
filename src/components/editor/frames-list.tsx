@@ -84,7 +84,7 @@ function SortableFrameItem({
 
   const isCue = isCueFrame(frame);
 
-  const defaultLabel = `Frame ${index + 1} · ${isCue ? "Cue" : "Image"}`;
+  const defaultLabel = `Khung ${index + 1} · ${isCue ? "Cơ" : "Ảnh"}`;
   const displayLabel = frame.name || defaultLabel;
 
   const commitRename = () => {
@@ -173,7 +173,7 @@ function SortableFrameItem({
           {onRename && (
             <button
               className="opacity-0 group-hover:opacity-100 shrink-0 text-muted-foreground hover:text-foreground transition-opacity"
-              title="Rename frame"
+              title="Đổi tên khung"
               onClick={(e) => {
                 e.stopPropagation();
                 setRenameValue(frame.name || "");
@@ -196,7 +196,7 @@ function SortableFrameItem({
           size="icon"
           className="h-5 w-5"
           onClick={onToggleVisibility}
-          title={isHidden ? "Show frame" : "Hide frame"}
+          title={isHidden ? "Hiện khung" : "Ẩn khung"}
         >
           {isHidden ? (
             <EyeOff className="w-2.5 h-2.5 text-muted-foreground" />
@@ -209,7 +209,7 @@ function SortableFrameItem({
           size="icon"
           className="h-5 w-5 text-destructive hover:text-destructive hover:bg-destructive/10"
           onClick={onDelete}
-          title="Delete frame"
+          title="Xóa khung"
         >
           <Trash2 className="w-2.5 h-2.5" />
         </Button>
@@ -280,7 +280,7 @@ export function FramesList({
     return (
       <div className="border-t bg-muted/30 p-4">
         <div className="text-center text-sm text-muted-foreground">
-          No frames yet. Click &ldquo;Add Frame&rdquo; to get started.
+          Chưa có khung nào. Nhấn &ldquo;Thêm Khung&rdquo; để bắt đầu.
         </div>
       </div>
     );
@@ -319,21 +319,20 @@ export function FramesList({
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete Frame</DialogTitle>
+            <DialogTitle>Xóa Khung</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete this frame? This action cannot be
-              undone.
+              Bạn có chắc muốn xóa khung này? Hành động này không thể hoàn tác.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>
-              Cancel
+              Hủy
             </Button>
             <Button
               variant="destructive"
               onClick={confirmDelete}
             >
-              Delete
+              Xóa
             </Button>
           </DialogFooter>
         </DialogContent>

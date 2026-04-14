@@ -140,7 +140,7 @@ export function ImagePickerDialog({
       onSelect(url);
       onClose();
     } catch {
-      setUploadError("Upload failed. Please try again.");
+      setUploadError("Tải lên thất bại. Vui lòng thử lại.");
     } finally {
       setIsUploading(false);
     }
@@ -180,7 +180,7 @@ export function ImagePickerDialog({
         <DialogHeader className="px-6 pt-5 pb-4 border-b flex-shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <ImageIcon className="h-5 w-5" />
-            Image Library
+            Thư Viện Ảnh
           </DialogTitle>
         </DialogHeader>
 
@@ -203,19 +203,19 @@ export function ImagePickerDialog({
                 className="flex-shrink-0"
               >
                 <Upload className="h-4 w-4 mr-2" />
-                {uploadFile ? "Change File" : "Upload New Image"}
+                {uploadFile ? "Đổi tệp" : "Tải lên ảnh mới"}
               </Button>
 
               {uploadFile && (
                 <>
                   <div className="flex-1 min-w-[160px]">
                     <Label className="text-xs text-muted-foreground mb-1 block">
-                      File Name <span className="text-muted-foreground/60">(rename before upload)</span>
+                      Tên tệp <span className="text-muted-foreground/60">(đổi tên trước khi tải lên)</span>
                     </Label>
                     <Input
                       value={uploadName}
                       onChange={(e) => setUploadName(e.target.value)}
-                      placeholder="Enter file name..."
+                      placeholder="Nhập tên tệp..."
                       className="h-8 text-sm"
                       onKeyDown={(e) => e.key === "Enter" && handleUpload()}
                     />
@@ -229,12 +229,12 @@ export function ImagePickerDialog({
                     {isUploading ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Uploading…
+                        Đang tải lên…
                       </>
                     ) : (
                       <>
                         <Check className="h-4 w-4 mr-2" />
-                        Upload
+                        Tải lên
                       </>
                     )}
                   </Button>
@@ -257,7 +257,7 @@ export function ImagePickerDialog({
 
             {uploadFile && uploadName.trim() && (
               <p className="text-[11px] text-muted-foreground/70 mt-1.5">
-                Will save as:{" "}
+                Sẽ lưu thành:{" "}
                 <span className="font-mono text-muted-foreground">
                   {uploadName.replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "") || "image"}
                   _{"{timestamp}"}.{uploadExt}
@@ -276,7 +276,7 @@ export function ImagePickerDialog({
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search images by name…"
+                placeholder="Tìm kiếm ảnh theo tên…"
                 className="pl-9 h-9"
               />
             </div>
@@ -292,10 +292,10 @@ export function ImagePickerDialog({
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <ImageIcon className="h-12 w-12 text-muted-foreground/25 mb-3" />
                 <p className="text-sm text-muted-foreground">
-                  {search ? "No images match your search" : "No images uploaded yet"}
+                  {search ? "Không tìm thấy ảnh nào" : "Chưa có ảnh nào"}
                 </p>
                 <p className="text-xs text-muted-foreground/60 mt-1">
-                  Use &ldquo;Upload New Image&rdquo; above to add your first image
+                  Dùng &ldquo;Tải lên ảnh mới&rdquo; ở trên để thêm ảnh đầu tiên
                 </p>
               </div>
             ) : (
@@ -339,7 +339,7 @@ export function ImagePickerDialog({
                           className="absolute top-1.5 left-1.5 w-6 h-6 rounded bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 focus:opacity-100"
                           onClick={(e) => handleDelete(e, img)}
                           disabled={isDeleting}
-                          title="Delete image"
+                          title="Xóa ảnh"
                         >
                           {isDeleting ? (
                             <Loader2 className="h-3 w-3 animate-spin" />
@@ -365,10 +365,10 @@ export function ImagePickerDialog({
                       {isFetchingMore ? (
                         <>
                           <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          Loading…
+                          Đang tải…
                         </>
                       ) : (
-                        `Load More (${total - images.length} remaining)`
+                        `Tải thêm (còn ${total - images.length})`
                       )}
                     </Button>
                   </div>

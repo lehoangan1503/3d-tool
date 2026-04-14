@@ -30,7 +30,7 @@ export default async function DashboardPage() {
               <form action={logout}>
                 <Button variant="ghost" size="sm" type="submit">
                   <LogOut className="h-4 w-4" />
-                  <span className="hidden sm:inline">Sign Out</span>
+                  <span className="hidden sm:inline">Đăng Xuất</span>
                 </Button>
               </form>
             </div>

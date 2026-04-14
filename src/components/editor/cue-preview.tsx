@@ -111,7 +111,7 @@ export function CuePreview({ product, config, settings, onSceneReady }: CuePrevi
       } catch (err) {
         console.error("[CuePreview] Failed to initialize 3D scene:", err);
         if (!disposed) {
-          setError(err instanceof Error ? err.message : "Failed to load 3D preview");
+          setError(err instanceof Error ? err.message : "Không thể tải Xem trước 3D");
           setLoading(false);
         }
       }
@@ -181,7 +181,7 @@ export function CuePreview({ product, config, settings, onSceneReady }: CuePrevi
         <div className="absolute inset-0 flex items-center justify-center bg-background/80">
           <div className="text-center text-foreground">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-foreground mx-auto mb-4" />
-            <p>Loading 3D Preview...</p>
+            <p>Đang tải Xem trước 3D...</p>
           </div>
         </div>
       )}
@@ -196,7 +196,7 @@ export function CuePreview({ product, config, settings, onSceneReady }: CuePrevi
               onClick={handleRetry}
               className="mt-4 px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90"
             >
-              Retry
+              Thử lại
             </button>
           </div>
         </div>

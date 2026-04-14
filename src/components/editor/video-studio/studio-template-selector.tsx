@@ -157,7 +157,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
     if (!template) return;
 
     const confirmed = window.confirm(
-      `Delete template "${template.name}"? This cannot be undone.`,
+      `Xóa mẫu "${template.name}"? Hành động này không thể hoàn tác.`,
     );
     if (!confirmed) return;
 
@@ -184,7 +184,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
     <div className="space-y-2">
       <Label className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
         <FolderOpen className="h-3.5 w-3.5" />
-        Studio Templates
+        Mẫu Studio
       </Label>
 
       <div className="flex items-center gap-2">
@@ -193,13 +193,13 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
           onValueChange={handleSelectChange}
         >
           <SelectTrigger className="h-8 flex-1">
-            <SelectValue placeholder="Select template…" />
+            <SelectValue placeholder="Chọn mẫu…" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={NEW_TEMPLATE_VALUE}>
               <span className="flex items-center gap-1.5">
                 <Plus className="h-3.5 w-3.5" />
-                New Template…
+                Mẫu mới…
               </span>
             </SelectItem>
             {templates.map((t) => (
@@ -216,7 +216,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
           className="h-8 w-8"
           disabled={isLoading || isSaving}
           onClick={handleSaveClick}
-          title={selectedId ? "Save template" : "Save as new template"}
+          title={selectedId ? "Lưu mẫu" : "Lưu thành mẫu mới"}
         >
           <Save className="h-4 w-4" />
         </Button>
@@ -227,7 +227,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
           className="h-8 w-8"
           disabled={!selectedId || isLoading || isSaving}
           onClick={handleDelete}
-          title="Delete template"
+          title="Xóa mẫu"
         >
           <Trash2 className="h-4 w-4" />
         </Button>
@@ -237,7 +237,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
       <Dialog open={showSaveChoiceDialog} onOpenChange={setShowSaveChoiceDialog}>
         <DialogContent className="sm:max-w-xs">
           <DialogHeader>
-            <DialogTitle>Save Template</DialogTitle>
+            <DialogTitle>Lưu Mẫu</DialogTitle>
           </DialogHeader>
           <div className="space-y-2 py-2">
             <Button
@@ -247,7 +247,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
               disabled={isSaving}
             >
               <Save className="h-4 w-4 mr-2" />
-              {isSaving ? "Saving…" : `Update "${selectedTemplateName}"`}
+              {isSaving ? "Đang lưu…" : `Cập nhật "${selectedTemplateName}"`}
             </Button>
             <Button
               className="w-full justify-start"
@@ -256,7 +256,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
               disabled={isSaving}
             >
               <Plus className="h-4 w-4 mr-2" />
-              Save as New Template
+              Lưu thành Mẫu mới
             </Button>
           </div>
         </DialogContent>
@@ -266,18 +266,18 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
       <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Save Template</DialogTitle>
+            <DialogTitle>Lưu Mẫu</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="space-y-1.5">
               <Label htmlFor="template-name" className="text-sm">
-                Name
+                Tên
               </Label>
               <Input
                 id="template-name"
                 value={saveName}
                 onChange={(e) => setSaveName(e.target.value)}
-                placeholder="My template"
+                placeholder="Mẫu của tôi"
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && saveName.trim()) handleSaveNew();
                 }}
@@ -290,13 +290,13 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
               onClick={() => setShowSaveDialog(false)}
               disabled={isSaving}
             >
-              Cancel
+              Hủy
             </Button>
             <Button
               onClick={handleSaveNew}
               disabled={!saveName.trim() || isSaving}
             >
-              {isSaving ? "Saving…" : "Save"}
+              {isSaving ? "Đang lưu…" : "Lưu"}
             </Button>
           </DialogFooter>
         </DialogContent>

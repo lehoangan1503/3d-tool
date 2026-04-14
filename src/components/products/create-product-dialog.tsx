@@ -56,7 +56,7 @@ export function CreateProductDialog({ onCreated }: { onCreated?: () => void }) {
       router.refresh();
     } catch (error) {
       console.error("Create product error:", error);
-      alert(error instanceof Error ? error.message : "Failed to create product");
+      alert(error instanceof Error ? error.message : "Không thể tạo sản phẩm");
     } finally {
       setLoading(false);
     }
@@ -67,34 +67,34 @@ export function CreateProductDialog({ onCreated }: { onCreated?: () => void }) {
       <DialogTrigger asChild>
         <Button>
           <Plus className="h-4 w-4" />
-          New Product
+          Sản Phẩm Mới
         </Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create New Product</DialogTitle>
+          <DialogTitle>Tạo Sản Phẩm Mới</DialogTitle>
           <DialogDescription>
-            Choose a cue type to start customizing your design.
+            Chọn loại cơ để bắt đầu tùy chỉnh thiết kế của bạn.
           </DialogDescription>
         </DialogHeader>
         
         <div className="flex flex-col gap-5">
           <div className="flex flex-col gap-2">
-            <Label htmlFor="name" className="dark:text-white">Product Name</Label>
+            <Label htmlFor="name" className="dark:text-white">Tên Sản Phẩm</Label>
             <Input
               id="name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="My Custom Cue"
+              placeholder="Cơ tùy chỉnh của tôi"
               className="dark:bg-white/5 dark:border-white/20 dark:text-white dark:placeholder:text-white/40"
             />
           </div>
           
           <div className="flex flex-col gap-2">
-            <Label htmlFor="type" className="dark:text-white">Cue Type</Label>
+            <Label htmlFor="type" className="dark:text-white">Loại Cơ</Label>
             <Select value={type} onValueChange={(v) => setType(v as ProductType)}>
               <SelectTrigger id="type" className="dark:bg-white/5 dark:border-white/20 dark:text-white">
-                <SelectValue placeholder="Select type" />
+                <SelectValue placeholder="Chọn loại" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="smooth">
@@ -103,8 +103,8 @@ export function CreateProductDialog({ onCreated }: { onCreated?: () => void }) {
                       <Sparkles className="h-4 w-4 text-white/80" />
                     </div>
                     <div className="flex flex-col gap-0.5">
-                      <span className="font-medium">Smooth</span>
-                      <span className="text-xs text-white/60">Classic smooth finish</span>
+                      <span className="font-medium">Trơn</span>
+                      <span className="text-xs text-white/60">Bề mặt trơn cổ điển</span>
                     </div>
                   </div>
                 </SelectItem>
@@ -114,8 +114,8 @@ export function CreateProductDialog({ onCreated }: { onCreated?: () => void }) {
                       <Layers className="h-4 w-4 text-white/80" />
                     </div>
                     <div className="flex flex-col gap-0.5">
-                      <span className="font-medium">Leather</span>
-                      <span className="text-xs text-white/60">Textured leather wrap</span>
+                      <span className="font-medium">Da</span>
+                      <span className="text-xs text-white/60">Bọc da vân</span>
                     </div>
                   </div>
                 </SelectItem>
@@ -126,10 +126,10 @@ export function CreateProductDialog({ onCreated }: { onCreated?: () => void }) {
         
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>
-            Cancel
+            Hủy
           </Button>
           <Button onClick={handleCreate} disabled={loading || !name.trim()}>
-            {loading ? "Creating..." : "Create Product"}
+            {loading ? "Đang tạo..." : "Tạo Sản Phẩm"}
           </Button>
         </DialogFooter>
       </DialogContent>

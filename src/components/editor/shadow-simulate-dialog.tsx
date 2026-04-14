@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import type { CueShadowConfig } from "@/types/extractor";
 import type { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
-import { Save, Lightbulb, RefreshCw, Palette } from "lucide-react";
+import { Save, Lightbulb, Palette } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -117,6 +117,8 @@ export function ShadowSimulateDialog({
 
   const [localCfg, setLocalCfg] = useState<CueShadowConfig>(() => ({ ...shadowConfig }));
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const setPreviewUrlRef = useRef(setPreviewUrl);
+  useEffect(() => { setPreviewUrlRef.current = setPreviewUrl; }, []);
   const [showGradient, setShowGradient] = useState(false);
   const [activeSelect, setActiveSelect] = useState<"light" | "camera" | "cue" | null>(null);
   const [activeHotkeyText, setActiveHotkeyText] = useState<string | null>(null);
@@ -560,6 +562,10 @@ export function ShadowSimulateDialog({
       shadowLight.shadow.camera.updateProjectionMatrix();
 
       // ── Render loop ───────────────────────────────────────────────────────────
+      // Preview is captured by rendering from recordingCam into the same renderer
+      // (within one rAF callback — browser composites only the final godCam render).
+      let lastPreviewMs = 0;
+
       simObj = {
         renderer, scene, camera, orbitControls, transformControls,
         shadowLight, lightSphere, cameraGizmo, recordingCam, camHelper,
@@ -571,6 +577,19 @@ export function ShadowSimulateDialog({
         if (simObj!.isDisposed) return;
         simObj!.animFrameId = requestAnimationFrame(animate);
         orbitControls.update();
+
+        // Throttle preview capture to ~5fps (every 200ms)
+        const now = performance.now();
+        if (now - lastPreviewMs > 200) {
+          lastPreviewMs = now;
+          // Render from recordingCam (1:1 aspect) for the 2D preview panel
+          renderer.render(scene, recordingCam);
+          try {
+            setPreviewUrlRef.current(renderer.domElement.toDataURL("image/jpeg", 0.88));
+          } catch { /* ignore tainted canvas */ }
+        }
+
+        // Always render main god-camera view last — this is what the user sees
         renderer.render(scene, camera);
       };
       animate();
@@ -658,27 +677,11 @@ export function ShadowSimulateDialog({
     applyStudioColor(sim.wallBase.material as THREE.MeshBasicMaterial, localCfg.wallColor ?? "#ffffff", localCfg.wallGradientEnd);
   }, [localCfg.wallColor, localCfg.wallGradientEnd]);
 
-  // ─── 2D preview capture ──────────────────────────────────────────────────────
-  const capturePreview = useCallback(() => {
-    try {
-      const canvas = extractorRef.current?.getCanvas();
-      if (!canvas) return;
-      setPreviewUrl(canvas.toDataURL("image/jpeg", 0.88));
-    } catch { /* cross-origin taint — ignore */ }
-  }, [extractorRef]);
-
+  // Preview is now captured live from recordingCam inside the animate loop.
+  // Clear preview when dialog closes.
   useEffect(() => {
-    if (!open) return;
-    const id = setTimeout(capturePreview, 200);
-    return () => clearTimeout(id);
-  }, [open, localCfg, capturePreview]);
-
-  useEffect(() => {
-    if (open) {
-      const id = setTimeout(capturePreview, 450);
-      return () => clearTimeout(id);
-    }
-  }, [open, capturePreview]);
+    if (!open) setPreviewUrl(null);
+  }, [open]);
 
   // ─── Handlers ────────────────────────────────────────────────────────────────
   const handleSlider = (field: keyof CueShadowConfig, value: number) => {
@@ -770,17 +773,10 @@ export function ShadowSimulateDialog({
           <div className="w-[268px] shrink-0 flex flex-col border-l bg-background overflow-y-auto">
             {/* 2D preview */}
             <div className="p-3 border-b shrink-0">
-              <div className="flex items-center justify-between mb-1.5">
+              <div className="mb-1.5">
                 <Label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
                   Cue Frame Result
                 </Label>
-                <button
-                  onClick={capturePreview}
-                  title="Refresh preview"
-                  className="text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <RefreshCw className="w-3 h-3" />
-                </button>
               </div>
               <div className="aspect-square bg-muted/40 rounded-md overflow-hidden border">
                 {previewUrl ? (

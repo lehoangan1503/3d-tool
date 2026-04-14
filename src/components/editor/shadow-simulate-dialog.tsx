@@ -63,206 +63,234 @@ export function ShadowSimulateDialog({
 
   // ─── Build / destroy Three.js simulation scene ───────────────────────────
   useEffect(() => {
-    if (!open || !simContainerRef.current) return;
-    const container = simContainerRef.current;
+    if (!open) return;
 
-    // Ensure main extractor is rendering so the 2D preview is fresh
-    extractorRef.current?.startLivePreview?.();
+    // Track cleanup state for the async rAF retry loop
+    let cancelled = false;
+    let rafId: number;
+    let simObj: SimScene | null = null;
 
-    const W = container.clientWidth || 640;
-    const H = container.clientHeight || 520;
+    const doInit = (container: HTMLDivElement) => {
+      // Ensure main extractor is rendering so the 2D preview is fresh
+      extractorRef.current?.startLivePreview?.();
 
-    // Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(W, H);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.setClearColor(0xdfe4ea);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    container.appendChild(renderer.domElement);
+      const W = container.clientWidth;
+      const H = container.clientHeight;
 
-    // Scene
-    const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0xdfe4ea, 30, 60);
+      // Renderer — use CSS to fill the container; internal resolution = actual px
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(W, H);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.setClearColor(0xdfe4ea);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      // Make canvas fill parent absolutely
+      renderer.domElement.style.cssText =
+        "display:block;position:absolute;top:0;left:0;width:100%;height:100%;";
+      container.appendChild(renderer.domElement);
 
-    // Camera
-    const camera = new THREE.PerspectiveCamera(45, W / H, 0.1, 200);
-    camera.position.set(8, 10, 16);
-    camera.lookAt(0, 1.5, 0);
+      // Scene
+      const scene = new THREE.Scene();
+      scene.fog = new THREE.Fog(0xdfe4ea, 30, 60);
 
-    // Orbit controls
-    const orbitControls = new OrbitControls(camera, renderer.domElement);
-    orbitControls.target.set(0, 1.5, 0);
-    orbitControls.enableDamping = true;
-    orbitControls.dampingFactor = 0.12;
-    orbitControls.minDistance = 4;
-    orbitControls.maxDistance = 40;
-    orbitControls.maxPolarAngle = Math.PI * 0.85;
+      // Camera
+      const camera = new THREE.PerspectiveCamera(45, W / H, 0.1, 200);
+      camera.position.set(8, 10, 16);
+      camera.lookAt(0, 1.5, 0);
 
-    // ── Lighting ────────────────────────────────────────────────────────────
-    const ambient = new THREE.AmbientLight(0xffffff, 0.55);
-    scene.add(ambient);
+      // Orbit controls
+      const orbitControls = new OrbitControls(camera, renderer.domElement);
+      orbitControls.target.set(0, 1.5, 0);
+      orbitControls.enableDamping = true;
+      orbitControls.dampingFactor = 0.12;
+      orbitControls.minDistance = 4;
+      orbitControls.maxDistance = 40;
+      orbitControls.maxPolarAngle = Math.PI * 0.85;
 
-    const shadowLight = new THREE.DirectionalLight(0xfffdf5, 2.2);
-    shadowLight.castShadow = true;
-    shadowLight.shadow.mapSize.set(2048, 2048);
-    shadowLight.shadow.camera.near = 0.1;
-    shadowLight.shadow.camera.far = 80;
-    shadowLight.shadow.camera.left = -16;
-    shadowLight.shadow.camera.right = 16;
-    shadowLight.shadow.camera.top = 16;
-    shadowLight.shadow.camera.bottom = -16;
-    shadowLight.shadow.bias = 0.0001;
-    shadowLight.shadow.normalBias = 0.02;
-    shadowLight.target.position.set(0, 0, 0);
-    scene.add(shadowLight);
-    scene.add(shadowLight.target);
+      // ── Lighting ────────────────────────────────────────────────────────────
+      const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+      scene.add(ambient);
 
-    // ── Studio room geometry ──────────────────────────────────────────────
-    const roomMat = new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.9, side: THREE.FrontSide });
+      const shadowLight = new THREE.DirectionalLight(0xfffdf5, 2.2);
+      shadowLight.castShadow = true;
+      shadowLight.shadow.mapSize.set(2048, 2048);
+      shadowLight.shadow.camera.near = 0.1;
+      shadowLight.shadow.camera.far = 80;
+      shadowLight.shadow.camera.left = -16;
+      shadowLight.shadow.camera.right = 16;
+      shadowLight.shadow.camera.top = 16;
+      shadowLight.shadow.camera.bottom = -16;
+      shadowLight.shadow.bias = 0.0001;
+      shadowLight.shadow.normalBias = 0.02;
+      shadowLight.target.position.set(0, 0, 0);
+      scene.add(shadowLight);
+      scene.add(shadowLight.target);
 
-    // Floor
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(32, 32), roomMat.clone());
-    floor.rotation.x = -Math.PI / 2;
-    floor.receiveShadow = true;
-    scene.add(floor);
+      // ── Studio room geometry ──────────────────────────────────────────────
+      const roomMat = new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.9, side: THREE.FrontSide });
 
-    // Back wall
-    const backWall = new THREE.Mesh(new THREE.PlaneGeometry(32, 18), roomMat.clone());
-    backWall.position.set(0, 9, -11);
-    backWall.receiveShadow = true;
-    scene.add(backWall);
+      // Floor
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(32, 32), roomMat.clone());
+      floor.rotation.x = -Math.PI / 2;
+      floor.receiveShadow = true;
+      scene.add(floor);
 
-    // Left wall (faint, helps with depth)
-    const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(22, 18), roomMat.clone());
-    leftWall.position.set(-11, 9, 0);
-    leftWall.rotation.y = Math.PI / 2;
-    leftWall.receiveShadow = true;
-    scene.add(leftWall);
+      // Back wall
+      const backWall = new THREE.Mesh(new THREE.PlaneGeometry(32, 18), roomMat.clone());
+      backWall.position.set(0, 9, -11);
+      backWall.receiveShadow = true;
+      scene.add(backWall);
 
-    // ── Cue placeholder box ───────────────────────────────────────────────
-    const cueMat = new THREE.MeshStandardMaterial({ color: 0xc8cdd5, roughness: 0.5, metalness: 0.1 });
-    const cueBody = new THREE.Mesh(new THREE.BoxGeometry(1.6, 3.2, 0.45), cueMat);
-    cueBody.position.set(0, 1.6, 0);
-    cueBody.castShadow = true;
-    scene.add(cueBody);
+      // Left wall (faint, helps with depth)
+      const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(22, 18), roomMat.clone());
+      leftWall.position.set(-11, 9, 0);
+      leftWall.rotation.y = Math.PI / 2;
+      leftWall.receiveShadow = true;
+      scene.add(leftWall);
 
-    // Small base
-    const cueBase = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.85, 0.18, 24), cueMat.clone());
-    cueBase.position.set(0, 0.09, 0);
-    cueBase.castShadow = true;
-    scene.add(cueBase);
+      // ── Cue placeholder box ───────────────────────────────────────────────
+      const cueMat = new THREE.MeshStandardMaterial({ color: 0xc8cdd5, roughness: 0.5, metalness: 0.1 });
+      const cueBody = new THREE.Mesh(new THREE.BoxGeometry(1.6, 3.2, 0.45), cueMat);
+      cueBody.position.set(0, 1.6, 0);
+      cueBody.castShadow = true;
+      scene.add(cueBody);
 
-    // ── Light sphere (draggable indicator) ────────────────────────────────
-    const sphereMat = new THREE.MeshStandardMaterial({
-      color: 0xffcc00,
-      emissive: 0xff9900,
-      emissiveIntensity: 0.9,
-      roughness: 0.2,
-    });
-    const lightSphere = new THREE.Mesh(new THREE.SphereGeometry(0.38, 24, 24), sphereMat);
-    lightSphere.name = "lightSphere";
-    scene.add(lightSphere);
+      // Small base
+      const cueBase = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.85, 0.18, 24), cueMat.clone());
+      cueBase.position.set(0, 0.09, 0);
+      cueBase.castShadow = true;
+      scene.add(cueBase);
 
-    // Glow halo (sprite-like ring behind sphere)
-    const haloMat = new THREE.MeshBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.18, side: THREE.DoubleSide });
-    const halo = new THREE.Mesh(new THREE.SphereGeometry(0.62, 16, 16), haloMat);
-    lightSphere.add(halo);
-
-    // Dashed vertical line from sphere to floor (visual guide)
-    const lineGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(0, -20, 0), // will be clipped by floor
-    ]);
-    const lineMat = new THREE.LineBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.35 });
-    const dropLine = new THREE.Line(lineGeo, lineMat);
-    lightSphere.add(dropLine);
-
-    // ── TransformControls ─────────────────────────────────────────────────
-    const transformControls = new TransformControls(camera, renderer.domElement);
-    transformControls.setMode("translate");
-    transformControls.setSize(0.75);
-    transformControls.attach(lightSphere);
-    scene.add(transformControls.getHelper());
-
-    transformControls.addEventListener("dragging-changed", (event: { value: unknown }) => {
-      orbitControls.enabled = !event.value;
-    });
-
-    transformControls.addEventListener("objectChange", () => {
-      const { x, y, z } = lightSphere.position;
-      // Clamp to allowed ranges
-      const cx = Math.max(-10, Math.min(10, x));
-      const cy = Math.max(1, Math.min(20, y));
-      const cz = Math.max(-10, Math.min(10, z));
-      if (cx !== x || cy !== y || cz !== z) {
-        lightSphere.position.set(cx, cy, cz);
-      }
-      shadowLight.position.set(cx, cy, cz);
-      shadowLight.shadow.camera.updateProjectionMatrix();
-
-      setLocalCfg(prev => {
-        const next = { ...prev, lightX: cx, lightY: cy, lightZ: cz };
-        // Propagate to main extractor scene after state schedules
-        setTimeout(() => onConfigChangeRef.current(next), 0);
-        return next;
+      // ── Light sphere (draggable indicator) ────────────────────────────────
+      const sphereMat = new THREE.MeshStandardMaterial({
+        color: 0xffcc00,
+        emissive: 0xff9900,
+        emissiveIntensity: 0.9,
+        roughness: 0.2,
       });
-    });
+      const lightSphere = new THREE.Mesh(new THREE.SphereGeometry(0.38, 24, 24), sphereMat);
+      lightSphere.name = "lightSphere";
+      scene.add(lightSphere);
 
-    // ── Set initial light position ────────────────────────────────────────
-    const initCfg = shadowConfig; // captured at mount
-    lightSphere.position.set(initCfg.lightX, initCfg.lightY, initCfg.lightZ);
-    shadowLight.position.set(initCfg.lightX, initCfg.lightY, initCfg.lightZ);
-    shadowLight.shadow.radius = initCfg.blur;
+      // Glow halo
+      const haloMat = new THREE.MeshBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.18, side: THREE.DoubleSide });
+      const halo = new THREE.Mesh(new THREE.SphereGeometry(0.62, 16, 16), haloMat);
+      lightSphere.add(halo);
 
-    // ── Animation loop ────────────────────────────────────────────────────
-    const simObj: SimScene = {
-      renderer,
-      scene,
-      camera,
-      orbitControls,
-      transformControls,
-      shadowLight,
-      lightSphere,
-      animFrameId: null,
-      isDisposed: false,
+      // Drop-line guide
+      const lineGeo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0, -20, 0),
+      ]);
+      const lineMat = new THREE.LineBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.35 });
+      const dropLine = new THREE.Line(lineGeo, lineMat);
+      lightSphere.add(dropLine);
+
+      // ── TransformControls ─────────────────────────────────────────────────
+      const transformControls = new TransformControls(camera, renderer.domElement);
+      transformControls.setMode("translate");
+      transformControls.setSize(0.75);
+      transformControls.attach(lightSphere);
+      scene.add(transformControls.getHelper());
+
+      transformControls.addEventListener("dragging-changed", (event: { value: unknown }) => {
+        orbitControls.enabled = !event.value;
+      });
+
+      transformControls.addEventListener("objectChange", () => {
+        const { x, y, z } = lightSphere.position;
+        const cx = Math.max(-10, Math.min(10, x));
+        const cy = Math.max(1, Math.min(20, y));
+        const cz = Math.max(-10, Math.min(10, z));
+        if (cx !== x || cy !== y || cz !== z) lightSphere.position.set(cx, cy, cz);
+        shadowLight.position.set(cx, cy, cz);
+        shadowLight.shadow.camera.updateProjectionMatrix();
+        setLocalCfg(prev => {
+          const next = { ...prev, lightX: cx, lightY: cy, lightZ: cz };
+          setTimeout(() => onConfigChangeRef.current(next), 0);
+          return next;
+        });
+      });
+
+      // ── Initial light position ────────────────────────────────────────────
+      const initCfg = shadowConfig;
+      lightSphere.position.set(initCfg.lightX, initCfg.lightY, initCfg.lightZ);
+      shadowLight.position.set(initCfg.lightX, initCfg.lightY, initCfg.lightZ);
+      shadowLight.shadow.radius = initCfg.blur;
+
+      // ── Animation loop ────────────────────────────────────────────────────
+      simObj = {
+        renderer,
+        scene,
+        camera,
+        orbitControls,
+        transformControls,
+        shadowLight,
+        lightSphere,
+        animFrameId: null,
+        isDisposed: false,
+      };
+
+      const animate = () => {
+        if (simObj!.isDisposed) return;
+        simObj!.animFrameId = requestAnimationFrame(animate);
+        orbitControls.update();
+        renderer.render(scene, camera);
+      };
+      animate();
+
+      simRef.current = simObj;
+
+      // Resize observer
+      const resizeObserver = new ResizeObserver(() => {
+        if (!simObj || simObj.isDisposed) return;
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+        if (w === 0 || h === 0) return;
+        renderer.setSize(w, h);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+      });
+      resizeObserver.observe(container);
+
+      // Store cleanup
+      (simObj as SimScene & { _resizeObs: ResizeObserver })._resizeObs = resizeObserver;
     };
 
-    const animate = () => {
-      if (simObj.isDisposed) return;
-      simObj.animFrameId = requestAnimationFrame(animate);
-      orbitControls.update();
-      renderer.render(scene, camera);
+    // Retry via rAF until the container has real dimensions (dialog may be animating in)
+    let retries = 0;
+    const tryInit = () => {
+      if (cancelled) return;
+      const container = simContainerRef.current;
+      if (!container || simRef.current) return;
+      if (container.clientWidth === 0 || container.clientHeight === 0) {
+        if (retries < 30) {
+          retries++;
+          rafId = requestAnimationFrame(tryInit);
+          return;
+        }
+      }
+      doInit(container);
     };
-    animate();
-
-    simRef.current = simObj;
-
-    // Resize observer
-    const resizeObserver = new ResizeObserver(() => {
-      if (simObj.isDisposed || !container) return;
-      const w = container.clientWidth;
-      const h = container.clientHeight;
-      if (w === 0 || h === 0) return;
-      renderer.setSize(w, h);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-    });
-    resizeObserver.observe(container);
+    rafId = requestAnimationFrame(tryInit);
 
     return () => {
-      resizeObserver.disconnect();
-      simObj.isDisposed = true;
-      if (simObj.animFrameId !== null) cancelAnimationFrame(simObj.animFrameId);
-      transformControls.detach();
-      orbitControls.dispose();
-      transformControls.dispose();
-      renderer.dispose();
-      if (container.contains(renderer.domElement)) {
-        container.removeChild(renderer.domElement);
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+      if (simObj) {
+        const s = simObj as SimScene & { _resizeObs?: ResizeObserver };
+        s._resizeObs?.disconnect();
+        s.isDisposed = true;
+        if (s.animFrameId !== null) cancelAnimationFrame(s.animFrameId);
+        s.transformControls.detach();
+        s.orbitControls.dispose();
+        s.transformControls.dispose();
+        s.renderer.dispose();
+        const c = simContainerRef.current;
+        if (c && c.contains(s.renderer.domElement)) c.removeChild(s.renderer.domElement);
+        simRef.current = null;
       }
-      simRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);

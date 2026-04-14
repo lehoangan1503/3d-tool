@@ -12,7 +12,7 @@ import { FrameCanvas, CANVAS_SIZE } from "./frame-canvas";
 import { FrameControlsPanel } from "./frame-controls-panel";
 import { DownloadMultipleDialog } from "./download-multiple-dialog";
 import type { ExtractorFrame, ExtractorReference, TemplateKey, CueFrame, ImageFrame, ImageGradient, HdriLayer } from "@/types/extractor";
-import { createDefaultFrame, createDefaultImageFrame, FRAME_TEMPLATES, isCueFrame, isImageFrame, STUDIO_WHITE_HDRI } from "@/types/extractor";
+import { createDefaultFrame, createDefaultImageFrame, DEFAULT_CUE_SHADOW, FRAME_TEMPLATES, isCueFrame, isImageFrame, STUDIO_WHITE_HDRI } from "@/types/extractor";
 import type { CueHdriConfig } from "@/types/video-studio";
 import { DEFAULT_CUE_HDRI } from "@/types/video-studio";
 import { resolveStorageUrl } from "@/lib/resolve-storage-url";
@@ -632,6 +632,9 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
             exportExtractor.setHdriRotation(frame.cue.lightAngle);
           }
 
+          // Apply studio shadow config (floor/wall planes + shadow light)
+          exportExtractor.setFrameShadow(frame.cue.studioShadow ?? DEFAULT_CUE_SHADOW);
+
           // Capture frame
           const frameDataUrl = exportExtractor.captureFrame("png");
           const img = new Image();
@@ -764,6 +767,9 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
             } else if (frame.cue.lightAngle !== undefined) {
               exportExtractor.setHdriRotation(frame.cue.lightAngle);
             }
+
+            // Apply studio shadow config (floor/wall planes + shadow light)
+            exportExtractor.setFrameShadow(frame.cue.studioShadow ?? DEFAULT_CUE_SHADOW);
 
             // Capture frame
             const frameDataUrl = exportExtractor.captureFrame("png");

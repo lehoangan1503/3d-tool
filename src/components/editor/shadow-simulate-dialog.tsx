@@ -278,11 +278,12 @@ export function ShadowSimulateDialog({
       camLens.position.z = 0.45;
       camLens.userData.selectType = "camera";
       cameraGizmo.add(camLens);
-      cameraGizmo.position.set(0, 0, 3);
+      // Extractor default camera: phi=PI/2, dist=2 → (0,0,2). Scale ×SCALE → (0,0,SCALE*2)
+      cameraGizmo.position.set(0, 0, SCALE * 2);
       scene.add(cameraGizmo);
 
       // CameraHelper shows recording camera frustum lines
-      const recordingCam = new THREE.PerspectiveCamera(50, 1, 0.3, 14);
+      const recordingCam = new THREE.PerspectiveCamera(50, 1, 0.5, 100);
       recordingCam.position.copy(cameraGizmo.position);
       recordingCam.lookAt(0, 0, 0);
       recordingCam.updateProjectionMatrix();

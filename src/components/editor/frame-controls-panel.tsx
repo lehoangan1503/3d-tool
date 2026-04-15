@@ -854,6 +854,13 @@ export function FrameControlsPanel({
                   setShadowSimulateOpen(false);
                 }}
                 extractorRef={extractorRef}
+                cueSettings={{
+                  phi: selectedFrame.cue.phi,
+                  zoom: selectedFrame.cue.zoom,
+                  offsetX: selectedFrame.cue.offsetX,
+                  offsetY: selectedFrame.cue.offsetY,
+                  spinY: selectedFrame.cue.spinY,
+                }}
               />
             )}
           </div>

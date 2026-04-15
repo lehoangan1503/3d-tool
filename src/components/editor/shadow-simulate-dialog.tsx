@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -41,6 +42,8 @@ interface ShadowSimulateDialogProps {
   onConfigChange: (cfg: CueShadowConfig) => void;
   onSave: (cfg: CueShadowConfig) => void;
   extractorRef: React.MutableRefObject<ExtractorSceneManager | null>;
+  /** Frame camera/model settings so the preview matches the final output 1:1 */
+  cueSettings: { phi: number; zoom: number; offsetX: number; offsetY: number; spinY: number };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -108,6 +111,7 @@ export function ShadowSimulateDialog({
   onConfigChange,
   onSave,
   extractorRef,
+  cueSettings,
 }: ShadowSimulateDialogProps) {
   const simContainerRef = useRef<HTMLDivElement>(null);
   const simRef = useRef<SimScene | null>(null);
@@ -164,16 +168,16 @@ export function ShadowSimulateDialog({
         "display:block;position:absolute;top:0;left:0;width:100%;height:100%;";
       container.appendChild(renderer.domElement);
 
-      // Scene — same light-gray background as video studio god-camera view
+      // ── Scene ─────────────────────────────────────────────────────────────────
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0xd4d4d4);
 
-      // ── God camera — same position as video studio initSceneView() ──────────
+      // ── God camera — orbitable view of the whole scene ────────────────────────
       const camera = new THREE.PerspectiveCamera(60, W / H, 0.1, 500);
       camera.position.set(0, 6, 22);
       camera.lookAt(0, 3, 0);
 
-      // OrbitControls — same target as studio scene view
+      // OrbitControls
       const orbitControls = new OrbitControls(camera, renderer.domElement);
       orbitControls.target.set(0, 3, 0);
       orbitControls.enableDamping = true;
@@ -183,12 +187,9 @@ export function ShadowSimulateDialog({
       orbitControls.maxPolarAngle = Math.PI * 0.85;
 
       // ── Lighting ─────────────────────────────────────────────────────────────
-      // HemisphereLight provides even ambient illumination for the cue
       const hemi = new THREE.HemisphereLight(0xffffff, 0x888888, 2.0);
       scene.add(hemi);
 
-      // Shadow-casting directional light — intensity=0 (shadow only, no colour tint)
-      // 4096 map + tight frustum (±25, far=150) gives high-quality sharp shadows
       const cfg = shadowConfig;
       const shadowLight = new THREE.DirectionalLight(0xfffdf5, 0);
       shadowLight.castShadow = true;
@@ -206,20 +207,21 @@ export function ShadowSimulateDialog({
       scene.add(shadowLight);
       scene.add(shadowLight.target);
 
-      // ── True-white studio surfaces — MeshBasicMaterial, unlit ────────────────
+      // ── Studio surfaces — match extractor setFrameShadow positions × SCALE ───
       const wallColor = cfg.wallColor ?? "#ffffff";
       const wallGradientEnd = cfg.wallGradientEnd;
 
-      // Floor and wall positions match extractor's setFrameShadow × SCALE
-      // Extractor: floor y=-1.18, wall z=-3, wall y_center=4.8
-      // Simulator at SCALE=7: floor y=-8.26, wall z=-21, wall y_center=33.6
-      const floorY = -1.18 * SCALE;   // -8.26
-      const wallZ = -3 * SCALE;        // -21
-      const wallYCenter = 4.8 * SCALE; // 33.6
-      const planeSize = 30 * SCALE;    // 210 — large enough to cover the view
+      // Floor: extractor y=-1.18, no z-offset → scaled: y = -1.18×SCALE
+      // Wall: extractor z=-3, y_center=4.8 → scaled: z=-3×SCALE, y_center=4.8×SCALE
+      const floorY = -1.18 * SCALE;
+      const wallZ = -3 * SCALE;
+      const wallYCenter = 4.8 * SCALE;
+      // Plane sizes: just large enough to fill recordingCam view frustum + margin
+      const floorSize = 60;  // recordingCam at z=14 sees ~21 units wide at y=-8.26 → 60 is ample
+      const wallSize = 80;   // wall at z=-21 sees ~33 units wide → 80 is ample
 
       const floorBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(planeSize, planeSize),
+        new THREE.PlaneGeometry(floorSize, floorSize),
         makeStudioMat(wallColor, wallGradientEnd)
       );
       floorBase.rotation.x = -Math.PI / 2;
@@ -227,7 +229,7 @@ export function ShadowSimulateDialog({
       scene.add(floorBase);
 
       const floorShadow = new THREE.Mesh(
-        new THREE.PlaneGeometry(planeSize, planeSize),
+        new THREE.PlaneGeometry(floorSize, floorSize),
         new THREE.ShadowMaterial({ opacity: cfg.intensity, transparent: true, depthWrite: false })
       );
       floorShadow.rotation.x = -Math.PI / 2;
@@ -235,16 +237,15 @@ export function ShadowSimulateDialog({
       floorShadow.receiveShadow = true;
       scene.add(floorShadow);
 
-      // Back wall — matches extractor wall × SCALE
       const wallBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(planeSize, planeSize),
+        new THREE.PlaneGeometry(wallSize, wallSize),
         makeStudioMat(wallColor, wallGradientEnd)
       );
       wallBase.position.set(0, wallYCenter, wallZ - 0.002);
       scene.add(wallBase);
 
       const wallShadow = new THREE.Mesh(
-        new THREE.PlaneGeometry(planeSize, planeSize),
+        new THREE.PlaneGeometry(wallSize, wallSize),
         new THREE.ShadowMaterial({ opacity: cfg.intensity, transparent: true, depthWrite: false })
       );
       wallShadow.position.set(0, wallYCenter, wallZ);
@@ -264,10 +265,42 @@ export function ShadowSimulateDialog({
             child.userData.selectType = "cue";
           }
         });
+        // Apply frame's model rotation and offset (so preview matches final output)
+        modelClone.rotation.y = cueSettings.spinY;
+        modelClone.position.set(cueSettings.offsetX * SCALE, cueSettings.offsetY * SCALE, 0);
         scene.add(modelClone);
       }
 
-      // ── Camera gizmo — orange box+cone at recording-camera start position ──────
+      // ── Load HDRI from extractor into this scene (same renderer context) ──────
+      const hdriUrl = extractorRef.current?.getCurrentHdriUrl?.();
+      if (hdriUrl) {
+        const pmrem = new THREE.PMREMGenerator(renderer);
+        pmrem.compileEquirectangularShader();
+        new RGBELoader().load(hdriUrl, (tex) => {
+          if (cancelled) { tex.dispose(); pmrem.dispose(); return; }
+          tex.mapping = THREE.EquirectangularReflectionMapping;
+          const rt = pmrem.fromEquirectangular(tex);
+          scene.environment = rt.texture;
+          tex.dispose();
+          pmrem.dispose();
+        });
+      }
+
+      // ── RecordingCam — fixed to frame's camera settings (1:1 with extractor) ──
+      // Extractor: camera at y=2*cos(phi), z=2*sin(phi) looking at (offsetX, offsetY, 0)
+      // Simulator at SCALE: y×SCALE, z×SCALE, lookAt (offsetX×SCALE, offsetY×SCALE, 0)
+      const clampedPhi = Math.max(0.1, Math.min(Math.PI - 0.1, cueSettings.phi));
+      const camDist = 2; // extractor fixed distance
+      const camY = camDist * Math.cos(clampedPhi) * SCALE;
+      const camZ = camDist * Math.sin(clampedPhi) * SCALE;
+      const camFov = 50 / Math.max(0.1, cueSettings.zoom);
+      const camLookAt = new THREE.Vector3(
+        cueSettings.offsetX * SCALE,
+        cueSettings.offsetY * SCALE,
+        0
+      );
+
+      // Camera gizmo shown for reference at recording cam position
       const cameraGizmo = new THREE.Group();
       cameraGizmo.userData.selectType = "camera";
       const camBody = new THREE.Mesh(
@@ -284,26 +317,22 @@ export function ShadowSimulateDialog({
       camLens.position.z = 0.45;
       camLens.userData.selectType = "camera";
       cameraGizmo.add(camLens);
-      // Extractor default camera: phi=PI/2, dist=2 → (0,0,2). Scale ×SCALE → (0,0,SCALE*2)
-      cameraGizmo.position.set(0, 0, SCALE * 2);
+      cameraGizmo.position.set(0, camY, camZ);
+      cameraGizmo.lookAt(camLookAt);
       scene.add(cameraGizmo);
 
-      // CameraHelper shows recording camera frustum lines
-      const recordingCam = new THREE.PerspectiveCamera(50, 1, 0.5, 100);
-      recordingCam.position.copy(cameraGizmo.position);
-      recordingCam.lookAt(0, 0, 0);
+      // RecordingCam locked to frame camera — NOT user-controllable
+      const recordingCam = new THREE.PerspectiveCamera(camFov, 1, 0.5, 100);
+      recordingCam.position.set(0, camY, camZ);
+      recordingCam.lookAt(camLookAt);
       recordingCam.updateProjectionMatrix();
       recordingCam.updateMatrixWorld(true);
       const camHelper = new THREE.CameraHelper(recordingCam);
       scene.add(camHelper);
 
-      /** Sync recordingCam from gizmo position/rotation + update helper */
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const syncCameraFromGizmo = () => {
-        recordingCam.position.copy(cameraGizmo.position);
-        recordingCam.quaternion.copy(cameraGizmo.quaternion);
-        recordingCam.updateProjectionMatrix();
-        recordingCam.updateMatrixWorld(true);
-        camHelper.update();
+        // No-op: recordingCam is fixed to frame camera settings
       };
 
       // ── Light sphere ──────────────────────────────────────────────────────────
@@ -355,8 +384,9 @@ export function ShadowSimulateDialog({
       };
 
       // ── Selection + Blender-style G/R/S hotkeys ────────────────────────────────
+      // Camera gizmo is not selectable — it's locked to the frame's camera settings
       const selectableRoots: THREE.Object3D[] = [
-        lightSphere, cameraGizmo, ...(modelClone ? [modelClone] : []),
+        lightSphere, ...(modelClone ? [modelClone] : []),
       ];
 
       let selectedObj: THREE.Object3D | null = null;
@@ -374,7 +404,7 @@ export function ShadowSimulateDialog({
       const syncLightPos = () => {
         const { x, y, z } = lightSphere.position;
         const cx = Math.max(-80, Math.min(80, x));
-        const cy = Math.max(0.5, Math.min(150, y));
+        const cy = Math.max(-SCALE * 5, Math.min(150, y));  // allow below cue
         const cz = Math.max(-80, Math.min(80, z));
         if (cx !== x || cy !== y || cz !== z) lightSphere.position.set(cx, cy, cz);
         shadowLight.position.set(cx, cy, cz);

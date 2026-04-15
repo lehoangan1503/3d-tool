@@ -862,8 +862,11 @@ export function FrameControlsPanel({
                   spinY: selectedFrame.cue.spinY,
                 }}
                 onCameraChange={(phi, zoom) => {
-                  updateCue("phi", phi);
-                  updateCue("zoom", zoom);
+                  // Batch both updates in a single state change
+                  onFrameChange({
+                    ...selectedFrame,
+                    cue: { ...selectedFrame.cue, phi, zoom },
+                  });
                 }}
               />
             )}

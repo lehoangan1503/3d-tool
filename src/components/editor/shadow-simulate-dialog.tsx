@@ -356,6 +356,7 @@ export function ShadowSimulateDialog({
         const camY = cameraGizmo.position.y / SCALE;
         const camZ = cameraGizmo.position.z / SCALE;
         const dist = Math.sqrt(camY * camY + camZ * camZ);
+        if (dist < 0.001) return; // Avoid division by zero at origin
         const newPhi = Math.acos(Math.max(-1, Math.min(1, camY / dist)));
         // Derive zoom from distance change (original dist was 2)
         const newZoom = 2 / dist;

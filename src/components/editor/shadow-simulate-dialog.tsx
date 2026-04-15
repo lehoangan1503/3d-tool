@@ -122,6 +122,9 @@ export function ShadowSimulateDialog({
   const [showGradient, setShowGradient] = useState(false);
   const [activeSelect, setActiveSelect] = useState<"light" | "camera" | "cue" | null>(null);
   const [activeHotkeyText, setActiveHotkeyText] = useState<string | null>(null);
+  const [activeHotkeyAxis, setActiveHotkeyAxisState] = useState<"x" | "y" | "z" | null>(null);
+  const setActiveHotkeyAxisRef = useRef(setActiveHotkeyAxisState);
+  useEffect(() => { setActiveHotkeyAxisRef.current = setActiveHotkeyAxisState; }, []);
 
   // Sync localCfg when dialog opens
   useEffect(() => {
@@ -207,41 +210,44 @@ export function ShadowSimulateDialog({
       const wallColor = cfg.wallColor ?? "#ffffff";
       const wallGradientEnd = cfg.wallGradientEnd;
 
-      // Table / floor — same Y as studio (tableY = -7.5)
-      const tableY = -7.5;
-      const tableDepth = 14;
-      const wallZ = -5.5;
+      // Floor and wall positions match extractor's setFrameShadow × SCALE
+      // Extractor: floor y=-1.18, wall z=-3, wall y_center=4.8
+      // Simulator at SCALE=7: floor y=-8.26, wall z=-21, wall y_center=33.6
+      const floorY = -1.18 * SCALE;   // -8.26
+      const wallZ = -3 * SCALE;        // -21
+      const wallYCenter = 4.8 * SCALE; // 33.6
+      const planeSize = 30 * SCALE;    // 210 — large enough to cover the view
 
       const floorBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(44, tableDepth + 2),
+        new THREE.PlaneGeometry(planeSize, planeSize),
         makeStudioMat(wallColor, wallGradientEnd)
       );
       floorBase.rotation.x = -Math.PI / 2;
-      floorBase.position.set(0, tableY - 0.002, wallZ + (tableDepth + 2) / 2);
+      floorBase.position.set(0, floorY - 0.002, 0);
       scene.add(floorBase);
 
       const floorShadow = new THREE.Mesh(
-        new THREE.PlaneGeometry(44, tableDepth + 2),
+        new THREE.PlaneGeometry(planeSize, planeSize),
         new THREE.ShadowMaterial({ opacity: cfg.intensity, transparent: true, depthWrite: false })
       );
       floorShadow.rotation.x = -Math.PI / 2;
-      floorShadow.position.set(0, tableY, wallZ + (tableDepth + 2) / 2);
+      floorShadow.position.set(0, floorY, 0);
       floorShadow.receiveShadow = true;
       scene.add(floorShadow);
 
-      // Back wall — same Z / Y as studio backdrop
+      // Back wall — matches extractor wall × SCALE
       const wallBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(44, 26),
+        new THREE.PlaneGeometry(planeSize, planeSize),
         makeStudioMat(wallColor, wallGradientEnd)
       );
-      wallBase.position.set(0, 4.5, wallZ - 0.002);
+      wallBase.position.set(0, wallYCenter, wallZ - 0.002);
       scene.add(wallBase);
 
       const wallShadow = new THREE.Mesh(
-        new THREE.PlaneGeometry(44, 26),
+        new THREE.PlaneGeometry(planeSize, planeSize),
         new THREE.ShadowMaterial({ opacity: cfg.intensity, transparent: true, depthWrite: false })
       );
-      wallShadow.position.set(0, 4.5, wallZ);
+      wallShadow.position.set(0, wallYCenter, wallZ);
       wallShadow.receiveShadow = true;
       scene.add(wallShadow);
 
@@ -396,11 +402,17 @@ export function ShadowSimulateDialog({
         }
         setActiveSelect(type);
         setActiveHotkeyText(null);
+        setActiveHotkeyAxisRef.current(null);
       };
 
       const buildHotkeyText = (hk: "g" | "r" | "s", axis: "x" | "y" | "z" | null): string => {
         const action = hk === "g" ? "Moving" : hk === "r" ? "Rotating" : "Scaling";
         return axis ? `${action}: ${axis.toUpperCase()} axis` : `${action}: free`;
+      };
+
+      const setHotkeyState = (hk: "g" | "r" | "s" | null, axis: "x" | "y" | "z" | null) => {
+        setActiveHotkeyText(hk ? buildHotkeyText(hk, axis) : null);
+        setActiveHotkeyAxisRef.current(axis);
       };
 
       // Raycaster click selection
@@ -438,7 +450,7 @@ export function ShadowSimulateDialog({
         if ((key === "x" || key === "y" || key === "z") && activeHotkey && selectedObj) {
           hotkeyAxisLock = key as "x" | "y" | "z";
           setAxisLock(key as "x" | "y" | "z");
-          setActiveHotkeyText(buildHotkeyText(activeHotkey, key as "x" | "y" | "z"));
+          setHotkeyState(activeHotkey, key as "x" | "y" | "z");
           return;
         }
 
@@ -454,7 +466,7 @@ export function ShadowSimulateDialog({
           orbitControls.enabled = false;
           transformControls.setMode(key === "g" ? "translate" : key === "r" ? "rotate" : "scale");
           resetAxisLock();
-          setActiveHotkeyText(buildHotkeyText(key, null));
+          setHotkeyState(key, null);
           e.preventDefault();
           return;
         }
@@ -502,7 +514,7 @@ export function ShadowSimulateDialog({
           const axis = hotkeyAxisLock;
           if (!axis || axis === "x") pos.x += dx * speed;
           if (!axis || axis === "y") pos.y -= dy * speed;
-          if (axis === "z") pos.z += dx * speed;
+          if (axis === "z") pos.z -= dx * speed;
           obj.position.copy(pos);
           if (selectedType === "light") {
             shadowLight.position.copy(pos);
@@ -545,7 +557,7 @@ export function ShadowSimulateDialog({
         transformControls.enabled = true;
         orbitControls.enabled = true;
         resetAxisLock();
-        setActiveHotkeyText(null);
+        setHotkeyState(null, null);
       };
 
       window.addEventListener("mousedown", onMouseDown);
@@ -747,7 +759,15 @@ export function ShadowSimulateDialog({
               </span>
             )}
             {activeHotkeyText && (
-              <span className="text-[11px] font-normal px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-600 border border-blue-400/40">
+              <span className={`text-[11px] font-normal px-2 py-0.5 rounded-full border ${
+                activeHotkeyAxis === "x"
+                  ? "bg-red-500/20 text-red-500 border-red-400/40"
+                  : activeHotkeyAxis === "y"
+                  ? "bg-green-500/20 text-green-500 border-green-400/40"
+                  : activeHotkeyAxis === "z"
+                  ? "bg-blue-500/20 text-blue-500 border-blue-400/40"
+                  : "bg-white/20 text-foreground border-border/40"
+              }`}>
                 {activeHotkeyText}
               </span>
             )}
@@ -781,7 +801,7 @@ export function ShadowSimulateDialog({
               </div>
               <div className="aspect-square bg-muted/40 rounded-md overflow-hidden border">
                 {previewUrl ? (
-                  <img src={previewUrl} alt="Shadow preview" className="w-full h-full object-contain" />
+                  <img src={previewUrl} alt="Shadow preview" className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-[11px] text-muted-foreground">
                     Loading…

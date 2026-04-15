@@ -121,7 +121,14 @@ export class ExtractorSceneManager {
   // White studio backdrop (floor base + back wall) shown when shadow is enabled
   private frameFloorBase: THREE.Mesh | null = null;
   private frameWallBase: THREE.Mesh | null = null;
-  private frameWallShadow: THREE.Mesh | null = null;
+
+  // Frame shadow studio dimensions (match video studio for consistency)
+  private static readonly FRAME_STUDIO_WIDTH = 36;
+  private static readonly FRAME_STUDIO_WALL_HEIGHT = 24;
+  private static readonly FRAME_STUDIO_FLOOR_DEPTH = 14;
+  private static readonly FRAME_STUDIO_CORNER_Y = -1.18;
+  private static readonly FRAME_STUDIO_WALL_Z = -3;
+  private static readonly FRAME_SHADOW_FRUSTUM = 20;
 
   // Track last loaded HDRI file for change detection
   private lastLoadedHdriFile: string = '';
@@ -1575,15 +1582,18 @@ export class ExtractorSceneManager {
 
     const wallColor = config.wallColor ?? '#ffffff';
     const wallGradientEnd = config.wallGradientEnd;
+    const { FRAME_STUDIO_WIDTH, FRAME_STUDIO_WALL_HEIGHT, FRAME_STUDIO_FLOOR_DEPTH, 
+            FRAME_STUDIO_CORNER_Y, FRAME_STUDIO_WALL_Z, FRAME_SHADOW_FRUSTUM } = ExtractorSceneManager;
 
     // ── White floor base (MeshBasicMaterial behind shadow overlay) ───────────
     if (!this.frameFloorBase) {
       this.frameFloorBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(36, 14),  // Match video studio: width=36, depth=14
+        new THREE.PlaneGeometry(FRAME_STUDIO_WIDTH, FRAME_STUDIO_FLOOR_DEPTH),
         new THREE.MeshBasicMaterial({ color: new THREE.Color(wallColor) })
       );
       this.frameFloorBase.rotation.x = -Math.PI / 2;
-      this.frameFloorBase.position.set(0, -1.182, 4);  // Centered floor with depth offset
+      // Floor center Z offset: FLOOR_DEPTH/2 - (WALL_Z offset) = 14/2 - (-3) = 7 - 3 = 4
+      this.frameFloorBase.position.set(0, FRAME_STUDIO_CORNER_Y, FRAME_STUDIO_FLOOR_DEPTH / 2 + FRAME_STUDIO_WALL_Z);
       this.scene.add(this.frameFloorBase);
     } else {
       this.applyStudioColor(
@@ -1596,11 +1606,11 @@ export class ExtractorSceneManager {
     if (!this.frameShadowFloor) {
       // Use L-shaped shadow mesh for seamless wall+floor shadow
       this.frameShadowFloor = createLShapedShadowMesh(
-        36,      // width (matching floor/wall)
-        24,      // wall height
-        14,      // floor depth
-        -1.18,   // corner Y (where wall meets floor)
-        -3,      // wall Z position
+        FRAME_STUDIO_WIDTH,
+        FRAME_STUDIO_WALL_HEIGHT,
+        FRAME_STUDIO_FLOOR_DEPTH,
+        FRAME_STUDIO_CORNER_Y,
+        FRAME_STUDIO_WALL_Z,
         config.intensity
       );
       this.scene.add(this.frameShadowFloor);
@@ -1609,11 +1619,12 @@ export class ExtractorSceneManager {
 
     // ── White back wall ───────────────────────────────────────────────────────
     if (!this.frameWallBase) {
+      const wallCenterY = FRAME_STUDIO_CORNER_Y + FRAME_STUDIO_WALL_HEIGHT / 2;
       this.frameWallBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(36, 24),  // Match video studio: width=36, height=24
+        new THREE.PlaneGeometry(FRAME_STUDIO_WIDTH, FRAME_STUDIO_WALL_HEIGHT),
         new THREE.MeshBasicMaterial({ color: new THREE.Color(wallColor) })
       );
-      this.frameWallBase.position.set(0, 10.82, -3);  // Y = -1.18 + 24/2 = 10.82 (wall center)
+      this.frameWallBase.position.set(0, wallCenterY, FRAME_STUDIO_WALL_Z);
       this.scene.add(this.frameWallBase);
     } else {
       this.applyStudioColor(
@@ -1629,10 +1640,10 @@ export class ExtractorSceneManager {
       this.frameShadowLight.shadow.mapSize.set(2048, 2048);
       this.frameShadowLight.shadow.camera.near = 0.1;
       this.frameShadowLight.shadow.camera.far = 50;
-      this.frameShadowLight.shadow.camera.left = -20;
-      this.frameShadowLight.shadow.camera.right = 20;
-      this.frameShadowLight.shadow.camera.top = 20;
-      this.frameShadowLight.shadow.camera.bottom = -20;
+      this.frameShadowLight.shadow.camera.left = -FRAME_SHADOW_FRUSTUM;
+      this.frameShadowLight.shadow.camera.right = FRAME_SHADOW_FRUSTUM;
+      this.frameShadowLight.shadow.camera.top = FRAME_SHADOW_FRUSTUM;
+      this.frameShadowLight.shadow.camera.bottom = -FRAME_SHADOW_FRUSTUM;
       this.frameShadowLight.shadow.bias = 0.0001;
       this.frameShadowLight.shadow.normalBias = 0.02;
       this.frameShadowLight.target.position.set(0, 0, 0);
@@ -1726,7 +1737,6 @@ export class ExtractorSceneManager {
     disposeMesh(this.frameShadowFloor); this.frameShadowFloor = null;
     disposeMesh(this.frameFloorBase);   this.frameFloorBase = null;
     disposeMesh(this.frameWallBase);    this.frameWallBase = null;
-    disposeMesh(this.frameWallShadow);  this.frameWallShadow = null;
   }
 
   private async applyVideoBackgroundLayers(layers: VideoBackgroundLayer[]): Promise<void> {

@@ -30,12 +30,17 @@ interface SimScene {
   modelClone: THREE.Object3D | null;
   floorBase: THREE.Mesh;
   wallBase: THREE.Mesh;
-  floorShadow: THREE.Mesh;
-  wallShadow: THREE.Mesh;
-  lShapeShadow: THREE.Mesh;
+  lShapeShadow: THREE.Mesh;  // Single L-shaped shadow mesh for seamless wall+floor shadow
   animFrameId: number | null;
   isDisposed: boolean;
 }
+
+// Studio dimensions matching ExtractorSceneManager.FRAME_STUDIO_* constants
+const STUDIO_WIDTH = 36;
+const STUDIO_WALL_HEIGHT = 24;
+const STUDIO_FLOOR_DEPTH = 14;
+const STUDIO_CORNER_Y = -1.18;
+const STUDIO_WALL_Z = -3;
 
 interface ShadowSimulateDialogProps {
   open: boolean;
@@ -213,12 +218,12 @@ export function ShadowSimulateDialog({
       const wallColor = cfg.wallColor ?? "#ffffff";
       const wallGradientEnd = cfg.wallGradientEnd;
 
-      // L-shaped shadow dimensions matching extractor (36x24 wall, 36x14 floor)
-      const wallWidth = 36 * SCALE;
-      const wallHeight = 24 * SCALE;
-      const floorDepth = 14 * SCALE;
-      const cornerY = -1.18 * SCALE;
-      const wallZ = -3 * SCALE;
+      // Use shared constants × SCALE for positions
+      const wallWidth = STUDIO_WIDTH * SCALE;
+      const wallHeight = STUDIO_WALL_HEIGHT * SCALE;
+      const floorDepth = STUDIO_FLOOR_DEPTH * SCALE;
+      const cornerY = STUDIO_CORNER_Y * SCALE;
+      const wallZ = STUDIO_WALL_Z * SCALE;
 
       // Floor base: white plane behind L-shaped shadow
       const floorBase = new THREE.Mesh(
@@ -239,19 +244,15 @@ export function ShadowSimulateDialog({
 
       // Single L-shaped shadow mesh (replaces separate floor/wall shadows)
       const lShapeShadow = createLShapedShadowMesh(
-        36,    // width in scene units (will be scaled)
-        24,    // wall height
-        14,    // floor depth
-        -1.18, // corner Y
-        -3,    // wall Z
+        STUDIO_WIDTH,
+        STUDIO_WALL_HEIGHT,
+        STUDIO_FLOOR_DEPTH,
+        STUDIO_CORNER_Y,
+        STUDIO_WALL_Z,
         cfg.intensity
       );
       lShapeShadow.scale.setScalar(SCALE);
       scene.add(lShapeShadow);
-
-      // Use lShapeShadow as the shadow receiver for intensity updates
-      const floorShadow = lShapeShadow;
-      const wallShadow = lShapeShadow; // Same reference - L-shape handles both
 
       // ── Cue model at studio scale ─────────────────────────────────────────────
       const modelClone: THREE.Object3D | null = extractorRef.current?.getModelClone?.() ?? null;
@@ -613,7 +614,7 @@ export function ShadowSimulateDialog({
       simObj = {
         renderer, scene, camera, orbitControls, transformControls,
         shadowLight, lightSphere, cameraGizmo, recordingCam, camHelper,
-        modelClone, floorBase, wallBase, floorShadow, wallShadow, lShapeShadow,
+        modelClone, floorBase, wallBase, lShapeShadow,
         animFrameId: null, isDisposed: false,
       };
 

@@ -1579,11 +1579,11 @@ export class ExtractorSceneManager {
     // ── White floor base (MeshBasicMaterial behind shadow overlay) ───────────
     if (!this.frameFloorBase) {
       this.frameFloorBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(30, 30),
+        new THREE.PlaneGeometry(36, 14),  // Match video studio: width=36, depth=14
         new THREE.MeshBasicMaterial({ color: new THREE.Color(wallColor) })
       );
       this.frameFloorBase.rotation.x = -Math.PI / 2;
-      this.frameFloorBase.position.y = -1.182; // Slightly below shadow floor to avoid z-fight
+      this.frameFloorBase.position.set(0, -1.182, 4);  // Centered floor with depth offset
       this.scene.add(this.frameFloorBase);
     } else {
       this.applyStudioColor(
@@ -1594,8 +1594,15 @@ export class ExtractorSceneManager {
 
     // ── Shadow-receiving floor (ShadowMaterial overlay) ───────────────────────
     if (!this.frameShadowFloor) {
-      this.frameShadowFloor = createShadowFloor(30, 30);
-      this.frameShadowFloor.position.y = -1.18;
+      // Use L-shaped shadow mesh for seamless wall+floor shadow
+      this.frameShadowFloor = createLShapedShadowMesh(
+        36,      // width (matching floor/wall)
+        24,      // wall height
+        14,      // floor depth
+        -1.18,   // corner Y (where wall meets floor)
+        -3,      // wall Z position
+        config.intensity
+      );
       this.scene.add(this.frameShadowFloor);
     }
     (this.frameShadowFloor.material as THREE.ShadowMaterial).opacity = config.intensity;
@@ -1603,27 +1610,16 @@ export class ExtractorSceneManager {
     // ── White back wall ───────────────────────────────────────────────────────
     if (!this.frameWallBase) {
       this.frameWallBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(30, 20),
+        new THREE.PlaneGeometry(36, 24),  // Match video studio: width=36, height=24
         new THREE.MeshBasicMaterial({ color: new THREE.Color(wallColor) })
       );
-      this.frameWallBase.position.set(0, 4.8, -3);
+      this.frameWallBase.position.set(0, 10.82, -3);  // Y = -1.18 + 24/2 = 10.82 (wall center)
       this.scene.add(this.frameWallBase);
     } else {
       this.applyStudioColor(
         this.frameWallBase.material as THREE.MeshBasicMaterial,
         wallColor, wallGradientEnd
       );
-    }
-
-    // ── Shadow overlay on back wall ───────────────────────────────────────────
-    if (!this.frameWallShadow) {
-      const wallShadowMat = new THREE.ShadowMaterial({ opacity: config.intensity, transparent: true, depthWrite: false });
-      this.frameWallShadow = new THREE.Mesh(new THREE.PlaneGeometry(30, 20), wallShadowMat);
-      this.frameWallShadow.position.set(0, 4.8, -2.99);
-      this.frameWallShadow.receiveShadow = true;
-      this.scene.add(this.frameWallShadow);
-    } else {
-      (this.frameWallShadow.material as THREE.ShadowMaterial).opacity = config.intensity;
     }
 
     // ── Shadow-casting DirectionalLight ──────────────────────────────────────
@@ -1633,10 +1629,10 @@ export class ExtractorSceneManager {
       this.frameShadowLight.shadow.mapSize.set(2048, 2048);
       this.frameShadowLight.shadow.camera.near = 0.1;
       this.frameShadowLight.shadow.camera.far = 50;
-      this.frameShadowLight.shadow.camera.left = -12;
-      this.frameShadowLight.shadow.camera.right = 12;
-      this.frameShadowLight.shadow.camera.top = 12;
-      this.frameShadowLight.shadow.camera.bottom = -12;
+      this.frameShadowLight.shadow.camera.left = -20;
+      this.frameShadowLight.shadow.camera.right = 20;
+      this.frameShadowLight.shadow.camera.top = 20;
+      this.frameShadowLight.shadow.camera.bottom = -20;
       this.frameShadowLight.shadow.bias = 0.0001;
       this.frameShadowLight.shadow.normalBias = 0.02;
       this.frameShadowLight.target.position.set(0, 0, 0);

@@ -720,6 +720,19 @@ export function ShadowSimulateDialog({
         s.transformControls.detach();
         s.orbitControls.dispose();
         s.transformControls.dispose();
+        
+        // Dispose all geometries and materials to prevent GPU memory leaks
+        s.scene.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            obj.geometry?.dispose();
+            if (Array.isArray(obj.material)) {
+              obj.material.forEach((m) => m.dispose());
+            } else if (obj.material) {
+              obj.material.dispose();
+            }
+          }
+        });
+        
         s.renderer.dispose();
         const c = simContainerRef.current;
         if (c && c.contains(s.renderer.domElement)) c.removeChild(s.renderer.domElement);

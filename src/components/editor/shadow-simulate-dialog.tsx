@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import type { CueShadowConfig } from "@/types/extractor";
 import type { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
+import { createLShapedShadowMesh } from "@/lib/three/studio-background";
 import { Save, Lightbulb, Palette } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -31,6 +32,7 @@ interface SimScene {
   wallBase: THREE.Mesh;
   floorShadow: THREE.Mesh;
   wallShadow: THREE.Mesh;
+  lShapeShadow: THREE.Mesh;
   animFrameId: number | null;
   isDisposed: boolean;
 }
@@ -207,50 +209,49 @@ export function ShadowSimulateDialog({
       scene.add(shadowLight);
       scene.add(shadowLight.target);
 
-      // ── Studio surfaces — match extractor setFrameShadow positions × SCALE ───
+      // ── Studio surfaces — match extractor L-shaped shadow dimensions × SCALE ───
       const wallColor = cfg.wallColor ?? "#ffffff";
       const wallGradientEnd = cfg.wallGradientEnd;
 
-      // Floor: extractor y=-1.18, no z-offset → scaled: y = -1.18×SCALE
-      // Wall: extractor z=-3, y_center=4.8 → scaled: z=-3×SCALE, y_center=4.8×SCALE
-      const floorY = -1.18 * SCALE;
+      // L-shaped shadow dimensions matching extractor (36x24 wall, 36x14 floor)
+      const wallWidth = 36 * SCALE;
+      const wallHeight = 24 * SCALE;
+      const floorDepth = 14 * SCALE;
+      const cornerY = -1.18 * SCALE;
       const wallZ = -3 * SCALE;
-      const wallYCenter = 4.8 * SCALE;
-      // Plane sizes: just large enough to fill recordingCam view frustum + margin
-      const floorSize = 60;  // recordingCam at z=14 sees ~21 units wide at y=-8.26 → 60 is ample
-      const wallSize = 80;   // wall at z=-21 sees ~33 units wide → 80 is ample
 
+      // Floor base: white plane behind L-shaped shadow
       const floorBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(floorSize, floorSize),
+        new THREE.PlaneGeometry(wallWidth, floorDepth),
         makeStudioMat(wallColor, wallGradientEnd)
       );
       floorBase.rotation.x = -Math.PI / 2;
-      floorBase.position.set(0, floorY - 0.002, 0);
+      floorBase.position.set(0, cornerY - 0.002, wallZ + floorDepth / 2);
       scene.add(floorBase);
 
-      const floorShadow = new THREE.Mesh(
-        new THREE.PlaneGeometry(floorSize, floorSize),
-        new THREE.ShadowMaterial({ opacity: cfg.intensity, transparent: true, depthWrite: false })
-      );
-      floorShadow.rotation.x = -Math.PI / 2;
-      floorShadow.position.set(0, floorY, 0);
-      floorShadow.receiveShadow = true;
-      scene.add(floorShadow);
-
+      // Wall base: white plane behind L-shaped shadow
       const wallBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(wallSize, wallSize),
+        new THREE.PlaneGeometry(wallWidth, wallHeight),
         makeStudioMat(wallColor, wallGradientEnd)
       );
-      wallBase.position.set(0, wallYCenter, wallZ - 0.002);
+      wallBase.position.set(0, cornerY + wallHeight / 2, wallZ - 0.002);
       scene.add(wallBase);
 
-      const wallShadow = new THREE.Mesh(
-        new THREE.PlaneGeometry(wallSize, wallSize),
-        new THREE.ShadowMaterial({ opacity: cfg.intensity, transparent: true, depthWrite: false })
+      // Single L-shaped shadow mesh (replaces separate floor/wall shadows)
+      const lShapeShadow = createLShapedShadowMesh(
+        36,    // width in scene units (will be scaled)
+        24,    // wall height
+        14,    // floor depth
+        -1.18, // corner Y
+        -3,    // wall Z
+        cfg.intensity
       );
-      wallShadow.position.set(0, wallYCenter, wallZ);
-      wallShadow.receiveShadow = true;
-      scene.add(wallShadow);
+      lShapeShadow.scale.setScalar(SCALE);
+      scene.add(lShapeShadow);
+
+      // Use lShapeShadow as the shadow receiver for intensity updates
+      const floorShadow = lShapeShadow;
+      const wallShadow = lShapeShadow; // Same reference - L-shape handles both
 
       // ── Cue model at studio scale ─────────────────────────────────────────────
       const modelClone: THREE.Object3D | null = extractorRef.current?.getModelClone?.() ?? null;
@@ -612,7 +613,7 @@ export function ShadowSimulateDialog({
       simObj = {
         renderer, scene, camera, orbitControls, transformControls,
         shadowLight, lightSphere, cameraGizmo, recordingCam, camHelper,
-        modelClone, floorBase, wallBase, floorShadow, wallShadow,
+        modelClone, floorBase, wallBase, floorShadow, wallShadow, lShapeShadow,
         animFrameId: null, isDisposed: false,
       };
 
@@ -704,12 +705,11 @@ export function ShadowSimulateDialog({
     sim.shadowLight.shadow.radius = localCfg.blur;
   }, [localCfg.blur]);
 
-  // Sync shadow intensity to sim scene overlay planes
+  // Sync shadow intensity to L-shaped shadow mesh
   useEffect(() => {
     const sim = simRef.current;
     if (!sim) return;
-    (sim.floorShadow.material as THREE.ShadowMaterial).opacity = localCfg.intensity;
-    (sim.wallShadow.material as THREE.ShadowMaterial).opacity = localCfg.intensity;
+    (sim.lShapeShadow.material as THREE.ShadowMaterial).opacity = localCfg.intensity;
   }, [localCfg.intensity]);
 
   // Sync wall/floor color to sim scene

@@ -861,6 +861,10 @@ export function FrameControlsPanel({
                   offsetY: selectedFrame.cue.offsetY,
                   spinY: selectedFrame.cue.spinY,
                 }}
+                onCameraChange={(phi, zoom) => {
+                  updateCue("phi", phi);
+                  updateCue("zoom", zoom);
+                }}
               />
             )}
           </div>

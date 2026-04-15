@@ -51,6 +51,8 @@ interface ShadowSimulateDialogProps {
   extractorRef: React.MutableRefObject<ExtractorSceneManager | null>;
   /** Frame camera/model settings so the preview matches the final output 1:1 */
   cueSettings: { phi: number; zoom: number; offsetX: number; offsetY: number; spinY: number };
+  /** Optional callback when camera position is changed via gizmo */
+  onCameraChange?: (phi: number, zoom: number) => void;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -119,12 +121,16 @@ export function ShadowSimulateDialog({
   onSave,
   extractorRef,
   cueSettings,
+  onCameraChange,
 }: ShadowSimulateDialogProps) {
   const simContainerRef = useRef<HTMLDivElement>(null);
   const simRef = useRef<SimScene | null>(null);
 
   const onConfigChangeRef = useRef(onConfigChange);
   useEffect(() => { onConfigChangeRef.current = onConfigChange; }, [onConfigChange]);
+
+  const onCameraChangeRef = useRef(onCameraChange);
+  useEffect(() => { onCameraChangeRef.current = onCameraChange; }, [onCameraChange]);
 
   const [localCfg, setLocalCfg] = useState<CueShadowConfig>(() => ({ ...shadowConfig }));
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -345,6 +351,19 @@ export function ShadowSimulateDialog({
         cameraGizmo.lookAt(lookTarget);
         recordingCam.updateProjectionMatrix();
         camHelper.update();
+
+        // Derive new phi from camera position
+        const camY = cameraGizmo.position.y / SCALE;
+        const camZ = cameraGizmo.position.z / SCALE;
+        const dist = Math.sqrt(camY * camY + camZ * camZ);
+        const newPhi = Math.acos(Math.max(-1, Math.min(1, camY / dist)));
+        // Derive zoom from distance change (original dist was 2)
+        const newZoom = 2 / dist;
+
+        // Notify parent of camera changes
+        if (onCameraChangeRef.current) {
+          onCameraChangeRef.current(newPhi, newZoom);
+        }
       };
 
       // ── Light sphere ──────────────────────────────────────────────────────────

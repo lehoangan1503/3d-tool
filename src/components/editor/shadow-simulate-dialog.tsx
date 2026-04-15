@@ -332,9 +332,19 @@ export function ShadowSimulateDialog({
       const camHelper = new THREE.CameraHelper(recordingCam);
       scene.add(camHelper);
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const syncCameraFromGizmo = () => {
-        // No-op: recordingCam is fixed to frame camera settings
+        // Update recording camera to match gizmo position
+        recordingCam.position.copy(cameraGizmo.position);
+        // Recompute lookAt to maintain focus on model center
+        const lookTarget = new THREE.Vector3(
+          cueSettings.offsetX * SCALE,
+          cueSettings.offsetY * SCALE,
+          0
+        );
+        recordingCam.lookAt(lookTarget);
+        cameraGizmo.lookAt(lookTarget);
+        recordingCam.updateProjectionMatrix();
+        camHelper.update();
       };
 
       // ── Light sphere ──────────────────────────────────────────────────────────
@@ -386,9 +396,9 @@ export function ShadowSimulateDialog({
       };
 
       // ── Selection + Blender-style G/R/S hotkeys ────────────────────────────────
-      // Camera gizmo is not selectable — it's locked to the frame's camera settings
+      // All gizmos are now selectable and controllable
       const selectableRoots: THREE.Object3D[] = [
-        lightSphere, ...(modelClone ? [modelClone] : []),
+        lightSphere, cameraGizmo, ...(modelClone ? [modelClone] : []),
       ];
 
       let selectedObj: THREE.Object3D | null = null;

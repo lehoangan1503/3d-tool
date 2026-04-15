@@ -633,7 +633,10 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           }
 
           // Apply studio shadow config (floor/wall planes + shadow light)
-          exportExtractor.setFrameShadow(frame.cue.studioShadow ?? DEFAULT_CUE_SHADOW);
+          const shadow = frame.cue.studioShadow ?? DEFAULT_CUE_SHADOW;
+          exportExtractor.setFrameShadow(shadow);
+          exportExtractor.setFrameShadowQuality(4096);
+          exportExtractor.render();
 
           // Capture frame
           const frameDataUrl = exportExtractor.captureFrame("png");
@@ -769,7 +772,10 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
             }
 
             // Apply studio shadow config (floor/wall planes + shadow light)
-            exportExtractor.setFrameShadow(frame.cue.studioShadow ?? DEFAULT_CUE_SHADOW);
+            const shadow = frame.cue.studioShadow ?? DEFAULT_CUE_SHADOW;
+            exportExtractor.setFrameShadow(shadow);
+            exportExtractor.setFrameShadowQuality(4096);
+            exportExtractor.render();
 
             // Capture frame
             const frameDataUrl = exportExtractor.captureFrame("png");

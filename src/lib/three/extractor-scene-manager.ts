@@ -1657,6 +1657,16 @@ export class ExtractorSceneManager {
     this.frameShadowLight.shadow.camera.updateProjectionMatrix();
   }
 
+  /** Set shadow map resolution for frame shadow light */
+  setFrameShadowQuality(size: number): void {
+    if (this.frameShadowLight) {
+      this.frameShadowLight.shadow.mapSize.set(size, size);
+      this.frameShadowLight.shadow.map?.dispose();
+      this.frameShadowLight.shadow.map = null; // Force recreation
+      this.frameShadowLight.shadow.camera.updateProjectionMatrix();
+    }
+  }
+
   /** Update only the wall/floor color without re-creating all shadow objects. */
   setFrameShadowWallColor(wallColor: string, wallGradientEnd?: string): void {
     if (this.frameFloorBase) {

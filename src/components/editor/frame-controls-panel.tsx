@@ -115,6 +115,9 @@ interface FrameControlsPanelProps {
 
   /** Live extractor scene manager — used by shadow simulator dialog */
   extractorRef?: React.MutableRefObject<ExtractorSceneManager | null>;
+
+  /** Callback to set a frame's screenshot (used by simulator to push studio capture) */
+  onScreenshotCapture?: (frameId: string, dataUrl: string) => void;
 }
 
 // Persistent frames list pinned at the bottom of the panel
@@ -186,6 +189,7 @@ export function FrameControlsPanel({
   onRenameFrame,
   onRenderReference,
   extractorRef,
+  onScreenshotCapture,
 }: FrameControlsPanelProps) {
   // Track which HDRI layer is being edited (by layer id)
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
@@ -851,6 +855,10 @@ export function FrameControlsPanel({
                 onConfigChange={(cfg) => updateShadow(cfg)}
                 onSave={(cfg) => {
                   updateShadow(cfg);
+                  // Push studio capture as frame screenshot so it shows in the canvas
+                  if (cfg.studioCapture && selectedFrame && onScreenshotCapture) {
+                    onScreenshotCapture(selectedFrame.id, cfg.studioCapture);
+                  }
                   setShadowSimulateOpen(false);
                 }}
                 extractorRef={extractorRef}
@@ -860,13 +868,6 @@ export function FrameControlsPanel({
                   offsetX: selectedFrame.cue.offsetX,
                   offsetY: selectedFrame.cue.offsetY,
                   spinY: selectedFrame.cue.spinY,
-                }}
-                onCameraChange={(phi, zoom) => {
-                  // Batch both updates in a single state change
-                  onFrameChange({
-                    ...selectedFrame,
-                    cue: { ...selectedFrame.cue, phi, zoom },
-                  });
                 }}
               />
             )}

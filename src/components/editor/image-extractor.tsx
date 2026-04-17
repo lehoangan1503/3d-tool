@@ -17,6 +17,7 @@ import type { CueHdriConfig } from "@/types/video-studio";
 import { DEFAULT_CUE_HDRI } from "@/types/video-studio";
 import { resolveStorageUrl } from "@/lib/resolve-storage-url";
 import { useUndoable } from "@/hooks/use-undoable";
+import { forceWhiteWalls } from "@/lib/three/studio-helpers";
 
 /** Convert an HdriLayer[] (used by Image Extractor frames) into a CueHdriConfig
  *  so that `setCueHdri()` can apply the HDRI environment map directly to cue
@@ -33,6 +34,60 @@ function hdriLayersToCueHdri(layers: HdriLayer[]): CueHdriConfig {
     };
   }
   return { ...DEFAULT_CUE_HDRI };
+}
+
+/**
+ * Render a cue frame using the full studio pipeline (matches the simulator's "Xem trước kết quả").
+ * Sets up the studio scene from the saved snapshot, renders, and captures.
+ * Returns a data URL. Caller must provide a cloned model.
+ * If `reuseEsm` is provided, reuses it instead of creating/disposing a new ESM per frame.
+ */
+async function renderCueFrameViaStudio(
+  model: ReturnType<SceneManager["getModelForClone"]>,
+  snapshot: import("@/types/video-studio").VideoStudioConfig,
+  width: number,
+  height: number,
+  reuseEsm?: ExtractorSceneManager,
+  wallsTransparent?: boolean,
+): Promise<string> {
+  const size = Math.max(2048, width, height);
+  const studioEsm = reuseEsm ?? new ExtractorSceneManager(size, size);
+  try {
+    if (reuseEsm) studioEsm.resize(size, size);
+    if (model) studioEsm.setModel(model);
+
+    // Setup the full studio scene (walls, lights, shadow floor, camera)
+    await studioEsm.setupStudioFromStudioConfig(snapshot);
+    forceWhiteWalls(studioEsm);
+
+    // Apply all config properties (cue transforms, shadow, HDRI, camera)
+    studioEsm.updateStudioPreviewConfig(snapshot);
+    // forceWhiteWalls again in case updateSurfaceHdri replaced materials
+    forceWhiteWalls(studioEsm);
+
+    // Explicitly await async HDRI operations that updateStudioPreviewConfig fires without awaiting.
+    // Wall/surface lights:
+    const layers = snapshot.hdriConfig?.layers ?? [];
+    if (layers.length > 0) {
+      await studioEsm.setHdriLayers(layers);
+    }
+    // Cue HDRI — use multi-layer blend when available (matches simulator preview),
+    // fall back to legacy single-HDRI for old snapshots that don't have cueHdriLayers.
+    if (snapshot.cueHdriLayers && snapshot.cueHdriLayers.length > 0) {
+      await studioEsm.setCueHdriLayers(snapshot.cueHdriLayers);
+    } else {
+      const cueHdri = snapshot.cueHdri ?? DEFAULT_CUE_HDRI;
+      await studioEsm.setCueHdri(cueHdri);
+    }
+    forceWhiteWalls(studioEsm);
+
+    studioEsm.render();
+
+    return studioEsm.captureCleanFrame(size, "png", wallsTransparent ?? false);
+  } finally {
+    // Only dispose if we created it (not reusing)
+    if (!reuseEsm) studioEsm.dispose();
+  }
 }
 
 /**
@@ -225,6 +280,11 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       extractor.stopLivePreview();
       const screenshots: Record<string, string> = {};
       for (const frame of cueFrames) {
+        // If this frame has shadow enabled with a captured result, reuse it directly
+        if (frame.cue.studioShadow?.enabled && frame.cue.studioShadow?.studioCapture) {
+          screenshots[frame.id] = frame.cue.studioShadow.studioCapture;
+          continue;
+        }
         extractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
         extractor.setModelRotation(frame.cue.spinY);
         extractor.setCameraPhi(frame.cue.phi, 2);
@@ -289,6 +349,11 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           const screenshots: Record<string, string> = {};
           for (const frame of data.frames) {
             if (!isCueFrame(frame)) continue;
+            // Reuse shadow capture if this frame has shadow enabled
+            if (frame.cue.studioShadow?.enabled && frame.cue.studioShadow?.studioCapture) {
+              screenshots[frame.id] = frame.cue.studioShadow.studioCapture;
+              continue;
+            }
             extractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
             extractor.setModelRotation(frame.cue.spinY);
             extractor.setCameraPhi(frame.cue.phi, 2);
@@ -346,6 +411,23 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
     setFrameScreenshots((prev) => ({ ...prev, [frameId]: dataUrl }));
   }, []);
 
+  // Release memory for screenshots that belong to deleted frames.
+  useEffect(() => {
+    const frameIds = new Set(frames.map((frame) => frame.id));
+    setFrameScreenshots((prev) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+      for (const [id, dataUrl] of Object.entries(prev)) {
+        if (frameIds.has(id)) {
+          next[id] = dataUrl;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [frames]);
+
   const handleAddFrame = () => {
     const newFrame = createDefaultFrame(undefined, frames.length);
     // Offset new frame slightly to avoid overlap
@@ -376,6 +458,12 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
 
   const handleDeleteFrame = (id: string) => {
     setFrames((prev) => prev.filter((f) => f.id !== id)); // discrete — undoable
+    setFrameScreenshots((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     if (selectedFrameId === id) {
       setSelectedFrameId(null);
     }
@@ -610,36 +698,47 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       await exportExtractor.loadHDRI(defaultHdriUrl);
       exportExtractor.setTransparentBackground(true);
 
+      // Create a reusable studio ESM for renderCueFrameViaStudio (avoids new WebGL context per frame)
+      const studioEsm = new ExtractorSceneManager(2048, 2048);
+
       // Render all frames in order (cue frames via 3D extractor, image frames drawn directly)
       for (const frame of frames) {
         if (isCueFrame(frame)) {
-          // Resize extractor for this frame's dimensions
-          exportExtractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
+          const shadow = frame.cue.studioShadow ?? DEFAULT_CUE_SHADOW;
+          let frameDataUrl: string;
 
-          // Apply frame's cue settings (new control scheme)
-          exportExtractor.setModelRotation(frame.cue.spinY);
-          exportExtractor.setCameraPhi(frame.cue.phi, 2);
-          exportExtractor.setCameraZoom(frame.cue.zoom);
-          exportExtractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
+          // Use studio pipeline when a snapshot config exists (matches simulator preview)
+          if (shadow.studioConfigSnapshot) {
+            const model = sceneManager.getModelForClone();
+            frameDataUrl = await renderCueFrameViaStudio(
+              model,
+              shadow.studioConfigSnapshot,
+              Math.round(frame.transform.width),
+              Math.round(frame.transform.height),
+              studioEsm,
+              shadow.wallsTransparent,
+            );
+          } else {
+            // Legacy export path — no studio snapshot
+            exportExtractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
+            exportExtractor.setModelRotation(frame.cue.spinY);
+            exportExtractor.setCameraPhi(frame.cue.phi, 2);
+            exportExtractor.setCameraZoom(frame.cue.zoom);
+            exportExtractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
 
-          // Apply HDRI layers (new multi-HDRI system)
-          if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
-            await exportExtractor.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
-            // setCueHdri is skipped when applyCueEnv is true (setHdriLayers handles cue)
-            await exportExtractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
-          } else if (frame.cue.lightAngle !== undefined) {
-            // Legacy fallback
-            exportExtractor.setHdriRotation(frame.cue.lightAngle);
+            if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
+              await exportExtractor.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
+              await exportExtractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
+            } else if (frame.cue.lightAngle !== undefined) {
+              exportExtractor.setHdriRotation(frame.cue.lightAngle);
+            }
+
+            exportExtractor.setFrameShadow(shadow);
+            exportExtractor.setFrameShadowQuality(4096);
+            exportExtractor.render();
+            frameDataUrl = exportExtractor.captureFrame("png");
           }
 
-          // Apply studio shadow config (floor/wall planes + shadow light)
-          const shadow = frame.cue.studioShadow ?? DEFAULT_CUE_SHADOW;
-          exportExtractor.setFrameShadow(shadow);
-          exportExtractor.setFrameShadowQuality(4096);
-          exportExtractor.render();
-
-          // Capture frame
-          const frameDataUrl = exportExtractor.captureFrame("png");
           const img = new Image();
           img.src = frameDataUrl;
           await new Promise((r) => (img.onload = r));
@@ -695,7 +794,8 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
         }
       }
 
-      // Dispose export extractor before restarting live preview
+      // Dispose export extractors before restarting live preview
+      studioEsm.dispose();
       exportExtractor.dispose();
 
       // Download
@@ -750,35 +850,46 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
       }
 
       // Render all frames in order (cue frames via 3D extractor, image frames drawn directly)
+      // Create a reusable studio ESM for renderCueFrameViaStudio (avoids new WebGL context per frame)
+      const studioEsm = new ExtractorSceneManager(2048, 2048);
       try {
         for (const frame of reference.frames) {
           if (isCueFrame(frame)) {
-            // Resize extractor for this frame's dimensions
-            exportExtractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
+            const shadow = frame.cue.studioShadow ?? DEFAULT_CUE_SHADOW;
+            let frameDataUrl: string;
 
-            // Apply frame's cue settings
-            exportExtractor.setModelRotation(frame.cue.spinY);
-            exportExtractor.setCameraPhi(frame.cue.phi, 2);
-            exportExtractor.setCameraZoom(frame.cue.zoom);
-            exportExtractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
+            // Use studio pipeline when a snapshot config exists (matches simulator preview)
+            if (shadow.studioConfigSnapshot) {
+              const model = sceneManager.getModelForClone();
+              frameDataUrl = await renderCueFrameViaStudio(
+                model,
+                shadow.studioConfigSnapshot,
+                Math.round(frame.transform.width),
+                Math.round(frame.transform.height),
+                studioEsm,
+                shadow.wallsTransparent,
+              );
+            } else {
+              // Legacy export path
+              exportExtractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
+              exportExtractor.setModelRotation(frame.cue.spinY);
+              exportExtractor.setCameraPhi(frame.cue.phi, 2);
+              exportExtractor.setCameraZoom(frame.cue.zoom);
+              exportExtractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
 
-            // Apply HDRI layers
-            if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
-              await exportExtractor.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
-              // setCueHdri is skipped when applyCueEnv is true (setHdriLayers handles cue)
-              await exportExtractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
-            } else if (frame.cue.lightAngle !== undefined) {
-              exportExtractor.setHdriRotation(frame.cue.lightAngle);
+              if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
+                await exportExtractor.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
+                await exportExtractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
+              } else if (frame.cue.lightAngle !== undefined) {
+                exportExtractor.setHdriRotation(frame.cue.lightAngle);
+              }
+
+              exportExtractor.setFrameShadow(shadow);
+              exportExtractor.setFrameShadowQuality(4096);
+              exportExtractor.render();
+              frameDataUrl = exportExtractor.captureFrame("png");
             }
 
-            // Apply studio shadow config (floor/wall planes + shadow light)
-            const shadow = frame.cue.studioShadow ?? DEFAULT_CUE_SHADOW;
-            exportExtractor.setFrameShadow(shadow);
-            exportExtractor.setFrameShadowQuality(4096);
-            exportExtractor.render();
-
-            // Capture frame
-            const frameDataUrl = exportExtractor.captureFrame("png");
             const img = new Image();
             img.src = frameDataUrl;
             await new Promise((r) => (img.onload = r));
@@ -834,6 +945,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
           }
         }
       } finally {
+        studioEsm.dispose();
         if (ownExtractor) {
           // Dispose the single-use export extractor and restore live preview
           exportExtractor.dispose();
@@ -1072,6 +1184,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
                   onRenameFrame={handleRenameFrame}
                   onRenderReference={handleRenderReference}
                   extractorRef={extractorRef}
+                  onScreenshotCapture={handleScreenshotCapture}
                 />
               </div>
             </div>

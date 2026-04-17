@@ -299,6 +299,15 @@ export interface CueShadowConfig {
   blur: number;      // Shadow softness / PCF radius (0–20)
   wallColor: string;       // Wall + floor background color (hex, default #ffffff)
   wallGradientEnd?: string; // Optional second color for a top→bottom gradient
+  studioCapture?: string;   // 2048×2048 studio capture data URL (set on Save)
+  /** Saved studio config snapshot — restores camera/cue/light positions on reopen */
+  studioConfigSnapshot?: import("@/types/video-studio").VideoStudioConfig;
+  shadowOffsetX?: number;   // Shadow plane X offset (default 0)
+  shadowOffsetY?: number;   // Shadow plane Y offset from base height (default 0)
+  shadowOffsetZ?: number;   // Shadow plane Z offset (default 0)
+  shadowScale?: number;     // Shadow plane scale multiplier (default 1)
+  shadowRotationY?: number; // Shadow plane Y rotation in radians (default 0)
+  wallsTransparent?: boolean; // Hide wall/surface, keep only shadow + cue (PNG export with alpha)
 }
 
 export const DEFAULT_CUE_SHADOW: CueShadowConfig = {

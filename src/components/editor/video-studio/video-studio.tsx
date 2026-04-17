@@ -507,6 +507,11 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     setVideoUrl(null);
     sceneViewControlsRef.current?.setEnabled(false);
 
+    // Cancel any pending debounced preview/rebuild updates so they don't
+    // interfere with the recording pipeline's own setup.
+    if (updateTimerRef.current) { clearTimeout(updateTimerRef.current); updateTimerRef.current = null; }
+    if (rebuildTimerRef.current) { clearTimeout(rebuildTimerRef.current); rebuildTimerRef.current = null; }
+
     // Force camera view during recording so user sees the camera path animation
     const prevViewMode = viewMode;
     if (viewMode !== "camera") {

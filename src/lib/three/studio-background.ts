@@ -60,6 +60,7 @@ function loadTex(url: string, tiling: [number, number]): Promise<THREE.Texture> 
         tex.generateMipmaps = true;
         tex.minFilter = THREE.LinearMipmapLinearFilter;
         tex.magFilter = THREE.LinearFilter;
+        tex.anisotropy = 8;
         resolve(tex);
       },
       undefined,
@@ -80,6 +81,7 @@ function loadTexLinear(url: string, tiling: [number, number]): Promise<THREE.Tex
         tex.generateMipmaps = true;
         tex.minFilter = THREE.LinearMipmapLinearFilter;
         tex.magFilter = THREE.LinearFilter;
+        tex.anisotropy = 8;
         resolve(tex);
       },
       undefined,
@@ -101,6 +103,7 @@ function loadExrTex(url: string, tiling: [number, number]): Promise<THREE.Textur
         tex.minFilter = THREE.LinearMipmapLinearFilter;
         tex.magFilter = THREE.LinearFilter;
         tex.generateMipmaps = true;
+        tex.anisotropy = 8;
         resolve(tex);
       },
       undefined,
@@ -410,7 +413,9 @@ export function createWallShadowPlane(width: number = 30, height: number = 14): 
  * Single L-shaped shadow receiver spanning both wall and table surface.
  * Eliminates the seam between separate floor/wall shadow planes and ensures
  * uniform shadow intensity across the corner.
- * Small offsets are baked into vertices to avoid z-fighting with the actual surfaces.
+ * 
+ * Uses a curved corner section (like a photo studio cyclorama backdrop) to
+ * create a smooth seamless transition between wall and floor with no visible seam.
  */
 export function createLShapedShadowMesh(
   wallWidth: number,
@@ -422,43 +427,87 @@ export function createLShapedShadowMesh(
 ): THREE.Mesh {
   const hw = wallWidth / 2;
   const floorFrontZ = wallZ + floorDepth;
-  // Z-fighting offsets: wall pushed slightly forward, floor pushed slightly up
-  const wallOff = 0.15;   // wall face z offset
-  const floorOff = 0.02;  // floor face y offset
-
-  // Wall face vertices (offset forward in Z)
-  const w0 = [-hw, cornerY,              wallZ + wallOff];
-  const w1 = [ hw, cornerY,              wallZ + wallOff];
-  const w2 = [-hw, cornerY + wallHeight, wallZ + wallOff];
-  const w3 = [ hw, cornerY + wallHeight, wallZ + wallOff];
-
-  // Floor face vertices (offset up in Y)
-  const f0 = [-hw, cornerY + floorOff, wallZ];
-  const f1 = [ hw, cornerY + floorOff, wallZ];
-  const f2 = [-hw, cornerY + floorOff, floorFrontZ];
-  const f3 = [ hw, cornerY + floorOff, floorFrontZ];
-
-  const vertices = new Float32Array([
-    // Wall face (2 triangles) — facing +Z
-    ...w0, ...w1, ...w3,
-    ...w0, ...w3, ...w2,
-    // Floor face (2 triangles) — facing +Y
-    ...f0, ...f3, ...f1,
-    ...f0, ...f2, ...f3,
-  ]);
-
-  const normals = new Float32Array([
-    // Wall face normals
-    0, 0, 1,  0, 0, 1,  0, 0, 1,
-    0, 0, 1,  0, 0, 1,  0, 0, 1,
-    // Floor face normals
-    0, 1, 0,  0, 1, 0,  0, 1, 0,
-    0, 1, 0,  0, 1, 0,  0, 1, 0,
-  ]);
+  
+  // Z-fighting offsets to sit slightly in front of base surfaces
+  const surfaceOff = 0.01;
+  
+  // Curved corner parameters (cyclorama-style smooth transition)
+  const cornerRadius = 0.8;  // Radius of the curved corner section
+  const cornerSegments = 8;  // Number of segments in the curve
+  
+  // Calculate positions with offset
+  const wallFaceZ = wallZ + surfaceOff;
+  const floorFaceY = cornerY + surfaceOff;
+  
+  // Build vertices array dynamically
+  const positions: number[] = [];
+  const normals: number[] = [];
+  
+  // Wall face (from corner up to top) — facing +Z
+  const wallBottom = cornerY + cornerRadius;  // Wall starts above corner curve
+  const w0 = [-hw, wallBottom, wallFaceZ];
+  const w1 = [ hw, wallBottom, wallFaceZ];
+  const w2 = [-hw, cornerY + wallHeight, wallFaceZ];
+  const w3 = [ hw, cornerY + wallHeight, wallFaceZ];
+  
+  // Wall triangles
+  positions.push(...w0, ...w1, ...w3);
+  positions.push(...w0, ...w3, ...w2);
+  normals.push(0, 0, 1, 0, 0, 1, 0, 0, 1);
+  normals.push(0, 0, 1, 0, 0, 1, 0, 0, 1);
+  
+  // Curved corner section (quarter circle from wall to floor)
+  // Goes from (wallZ, cornerY + cornerRadius) to (wallZ + cornerRadius, cornerY)
+  for (let i = 0; i < cornerSegments; i++) {
+    const angle0 = (i / cornerSegments) * (Math.PI / 2);
+    const angle1 = ((i + 1) / cornerSegments) * (Math.PI / 2);
+    
+    // Corner curve center is at (wallZ + cornerRadius, cornerY + cornerRadius)
+    const centerZ = wallZ + cornerRadius;
+    const centerY = cornerY + cornerRadius;
+    
+    // Points on the curve (offset slightly for z-fighting)
+    const y0 = centerY - cornerRadius * Math.cos(angle0);
+    const z0 = centerZ - cornerRadius * Math.sin(angle0) + surfaceOff;
+    const y1 = centerY - cornerRadius * Math.cos(angle1);
+    const z1 = centerZ - cornerRadius * Math.sin(angle1) + surfaceOff;
+    
+    // Normal direction (pointing outward from curve center)
+    const nx0 = 0;
+    const ny0 = Math.cos(angle0);
+    const nz0 = Math.sin(angle0);
+    const nx1 = 0;
+    const ny1 = Math.cos(angle1);
+    const nz1 = Math.sin(angle1);
+    
+    // Two triangles per segment (left edge to right edge)
+    const c0L = [-hw, y0, z0];
+    const c0R = [ hw, y0, z0];
+    const c1L = [-hw, y1, z1];
+    const c1R = [ hw, y1, z1];
+    
+    positions.push(...c0L, ...c0R, ...c1R);
+    positions.push(...c0L, ...c1R, ...c1L);
+    normals.push(nx0, ny0, nz0, nx0, ny0, nz0, nx1, ny1, nz1);
+    normals.push(nx0, ny0, nz0, nx1, ny1, nz1, nx1, ny1, nz1);
+  }
+  
+  // Floor face (from corner curve to front) — facing +Y
+  const floorBackZ = wallZ + cornerRadius;  // Floor starts after corner curve
+  const f0 = [-hw, floorFaceY, floorBackZ];
+  const f1 = [ hw, floorFaceY, floorBackZ];
+  const f2 = [-hw, floorFaceY, floorFrontZ];
+  const f3 = [ hw, floorFaceY, floorFrontZ];
+  
+  // Floor triangles
+  positions.push(...f0, ...f3, ...f1);
+  positions.push(...f0, ...f2, ...f3);
+  normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0);
+  normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0);
 
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+  geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normals), 3));
 
   const material = new THREE.ShadowMaterial({ opacity });
   const mesh = new THREE.Mesh(geometry, material);
@@ -489,6 +538,103 @@ export function createTableSurface(
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.y = yPosition;
   mesh.receiveShadow = true;
+  return mesh;
+}
+
+/**
+ * Create a cyclorama-style studio backdrop mesh with wall, curved corner, and floor.
+ * Uses MeshBasicMaterial so it's unaffected by HDRI lighting (pure white/colored backdrop).
+ * The geometry has a smooth curved transition at the wall-floor corner.
+ */
+export function createCycloramaBackdrop(
+  wallWidth: number,
+  wallHeight: number,
+  floorDepth: number,
+  cornerY: number,
+  wallZ: number,
+  color: THREE.Color | string = '#ffffff'
+): THREE.Mesh {
+  const hw = wallWidth / 2;
+  const floorFrontZ = wallZ + floorDepth;
+  
+  // Curved corner parameters (must match L-shaped shadow mesh)
+  const cornerRadius = 0.8;
+  const cornerSegments = 8;
+  
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  
+  // Wall face (from corner curve up to top)
+  const wallBottom = cornerY + cornerRadius;
+  const wallTop = cornerY + wallHeight;
+  
+  // Wall quad (2 triangles)
+  positions.push(-hw, wallBottom, wallZ);
+  positions.push( hw, wallBottom, wallZ);
+  positions.push( hw, wallTop, wallZ);
+  positions.push(-hw, wallBottom, wallZ);
+  positions.push( hw, wallTop, wallZ);
+  positions.push(-hw, wallTop, wallZ);
+  for (let i = 0; i < 6; i++) normals.push(0, 0, 1);
+  uvs.push(0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1);
+  
+  // Curved corner section
+  for (let i = 0; i < cornerSegments; i++) {
+    const angle0 = (i / cornerSegments) * (Math.PI / 2);
+    const angle1 = ((i + 1) / cornerSegments) * (Math.PI / 2);
+    
+    const centerZ = wallZ + cornerRadius;
+    const centerY = cornerY + cornerRadius;
+    
+    const y0 = centerY - cornerRadius * Math.cos(angle0);
+    const z0 = centerZ - cornerRadius * Math.sin(angle0);
+    const y1 = centerY - cornerRadius * Math.cos(angle1);
+    const z1 = centerZ - cornerRadius * Math.sin(angle1);
+    
+    const ny0 = Math.cos(angle0);
+    const nz0 = Math.sin(angle0);
+    const ny1 = Math.cos(angle1);
+    const nz1 = Math.sin(angle1);
+    
+    // Two triangles per segment
+    positions.push(-hw, y0, z0);
+    positions.push( hw, y0, z0);
+    positions.push( hw, y1, z1);
+    positions.push(-hw, y0, z0);
+    positions.push( hw, y1, z1);
+    positions.push(-hw, y1, z1);
+    
+    normals.push(0, ny0, nz0, 0, ny0, nz0, 0, ny1, nz1);
+    normals.push(0, ny0, nz0, 0, ny1, nz1, 0, ny1, nz1);
+    
+    const u0 = i / cornerSegments;
+    const u1 = (i + 1) / cornerSegments;
+    uvs.push(0, u0, 1, u0, 1, u1, 0, u0, 1, u1, 0, u1);
+  }
+  
+  // Floor face
+  const floorBackZ = wallZ + cornerRadius;
+  positions.push(-hw, cornerY, floorBackZ);
+  positions.push( hw, cornerY, floorFrontZ);
+  positions.push( hw, cornerY, floorBackZ);
+  positions.push(-hw, cornerY, floorBackZ);
+  positions.push(-hw, cornerY, floorFrontZ);
+  positions.push( hw, cornerY, floorFrontZ);
+  for (let i = 0; i < 6; i++) normals.push(0, 1, 0);
+  uvs.push(0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1);
+  
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+  geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normals), 3));
+  geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+  
+  const material = new THREE.MeshBasicMaterial({
+    color: typeof color === 'string' ? new THREE.Color(color) : color,
+    side: THREE.FrontSide,
+  });
+  
+  const mesh = new THREE.Mesh(geometry, material);
   return mesh;
 }
 

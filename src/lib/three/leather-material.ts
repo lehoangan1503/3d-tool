@@ -824,6 +824,12 @@ export function applyLogoToExistingMaterial(mat: THREE.Material, type: "rubber" 
   const physMat = mat as THREE.MeshStandardMaterial;
   const originalMap = physMat.map;
 
+  // Top cap face is a flat disc — make it double-sided so the logo remains visible
+  // when the cue is rotated and the face ends up pointing away from the camera.
+  if (type === "topCapFace") {
+    physMat.side = THREE.DoubleSide;
+  }
+
   if (!originalMap) {
     // No texture map (e.g. solid-color "Plastic Black" material) — create one with logo
     console.log(`[applyLogo] No map texture on "${mat.name}", creating solid color canvas with logo`);
@@ -982,32 +988,39 @@ export function applyLogoToExistingMaterial(mat: THREE.Material, type: "rubber" 
 // =====================================================
 
 /**
- * Apply shader mask to bumper material so emissive only shows on downward-facing
- * surfaces (bottom face), preventing logo from appearing on the cylinder side.
+ * Apply shader mask to bumper material so emissive only shows on the flat bottom face,
+ * preventing the logo from appearing on the cylinder side.
+ *
+ * Uses object-space normal Y (not world-space) so the mask is rotation-independent:
+ * the flat end face always has objectNormal.y ≈ -1 in local model space regardless of
+ * how the cue is oriented in the world.
+ *
  * Exported so the extractor can re-apply after cloning (clone() drops onBeforeCompile).
  */
 export function applyBumperEmissiveShaderMask(physMat: THREE.MeshPhysicalMaterial): void {
   physMat.onBeforeCompile = (shader: { vertexShader: string; fragmentShader: string }) => {
+    // Pass object-space normal Y as a varying — objectNormal is the raw geometry
+    // normal before any model transform, so it is unaffected by cue rotation.
     shader.vertexShader = shader.vertexShader.replace(
       "void main() {",
-      "varying vec3 vBumperWorldNormal;\nvoid main() {"
+      "varying float vBumperObjNormalY;\nvoid main() {"
     );
     shader.vertexShader = shader.vertexShader.replace(
       "#include <begin_vertex>",
-      "#include <begin_vertex>\nvBumperWorldNormal = normalize((modelMatrix * vec4(objectNormal, 0.0)).xyz);"
+      "#include <begin_vertex>\nvBumperObjNormalY = objectNormal.y;"
     );
     shader.fragmentShader = shader.fragmentShader.replace(
       "void main() {",
-      "varying vec3 vBumperWorldNormal;\nvoid main() {"
+      "varying float vBumperObjNormalY;\nvoid main() {"
     );
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <emissivemap_fragment>",
       `#include <emissivemap_fragment>
-      float bumperMask = smoothstep(-0.85, -0.95, vBumperWorldNormal.y);
+      float bumperMask = smoothstep(-0.85, -0.95, vBumperObjNormalY);
       totalEmissiveRadiance *= bumperMask;`
     );
   };
-  physMat.customProgramCacheKey = () => "bumperEmissiveMask";
+  physMat.customProgramCacheKey = () => "bumperEmissiveMaskV2";
   physMat.needsUpdate = true;
 }
 

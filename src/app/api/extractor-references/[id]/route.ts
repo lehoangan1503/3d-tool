@@ -88,6 +88,7 @@ export async function GET(request: Request, { params }: RouteParams) {
               offsetY: f.cue_offset_y, 
               hdriLayers,
               lightAngle: f.light_angle,
+              studioShadow: f.shadow_config ?? undefined,
             },
           } as CueFrame;
         }),
@@ -164,6 +165,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
             light_angle: f.cue.hdriLayers?.[0]?.rotationY ?? f.cue.lightAngle ?? 0,
             hdri_layers: f.cue.hdriLayers,
             image_settings: null,
+            shadow_config: f.cue.studioShadow ?? null,
           };
         } else if (isImageFrame(f)) {
           return {

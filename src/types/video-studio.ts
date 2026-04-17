@@ -247,6 +247,9 @@ export interface VideoStudioConfig {
   tableSurface: SurfaceConfig;
   hdriConfig: { layers: HdriLayer[] };
   hdriIntensity: number;               // Environment intensity (0–3, default 1.0)
+  /** Mixed cue HDRI — up to 2 HdriLayers blended and applied only to the cue model.
+   *  When non-empty, takes precedence over the legacy `cueHdri` field. */
+  cueHdriLayers?: HdriLayer[];
   cueHdri: CueHdriConfig;             // Cue-only HDRI lighting (separate from studio surface light)
   quality: "2k" | "2k120";
   shadow: { enabled: boolean; intensity: number; blur: number; softness: number; offsetX: number; offsetY: number };

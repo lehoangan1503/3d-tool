@@ -45,7 +45,8 @@ export async function GET(request: Request) {
           cue_offset_y,
           light_angle,
           hdri_layers,
-          image_settings
+          image_settings,
+          shadow_config
         )
       `, { count: "exact" })
       .eq("user_id", user.id)
@@ -127,6 +128,7 @@ export async function GET(request: Request) {
               offsetY: f.cue_offset_y,
               hdriLayers,
               lightAngle: f.light_angle,
+              studioShadow: f.shadow_config ?? undefined,
             },
           } as CueFrame;
         }),
@@ -193,6 +195,7 @@ export async function POST(request: Request) {
           light_angle: f.cue.hdriLayers?.[0]?.rotationY ?? f.cue.lightAngle ?? 0,
           hdri_layers: f.cue.hdriLayers,
           image_settings: null,
+          shadow_config: f.cue.studioShadow ?? null,
         };
       } else if (isImageFrame(f)) {
         return {

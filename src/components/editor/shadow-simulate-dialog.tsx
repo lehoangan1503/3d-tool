@@ -1,46 +1,145 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
-import type { CueShadowConfig } from "@/types/extractor";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ChevronsUpDown } from "lucide-react";
+import { SceneViewControls, type SelectionInfo } from "./video-studio/scene-view-controls";
+import type { CueShadowConfig, HdriLayer } from "@/types/extractor";
+import { createDefaultHdriLayer, DEFAULT_CUE_SHADOW, STUDIO_WHITE_HDRI } from "@/types/extractor";
 import type { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
-import { createLShapedShadowMesh } from "@/lib/three/studio-background";
-import { Save, Lightbulb, Palette } from "lucide-react";
+import { ExtractorSceneManager as ESMClass, HDRI_OPTIONS_FALLBACK } from "@/lib/three/extractor-scene-manager";
+import type { VideoStudioConfig, CameraKeyframe } from "@/types/video-studio";
+import { DEFAULT_STUDIO_CONFIG, DEFAULT_CUE_HDRI } from "@/types/video-studio";
+import { forceWhiteWalls } from "@/lib/three/studio-helpers";
+import { Lightbulb, Move, RotateCcw, Maximize2, Loader2, Download, FileUp, CheckCircle2, XCircle, Eye, EyeOff, Pencil, Trash2, Check, X, Undo2, Redo2, Sun, ChevronDown, ChevronUp, Plus } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface SimScene {
-  renderer: THREE.WebGLRenderer;
-  scene: THREE.Scene;
-  camera: THREE.PerspectiveCamera;
-  orbitControls: OrbitControls;
-  transformControls: TransformControls;
-  shadowLight: THREE.DirectionalLight;
-  lightSphere: THREE.Mesh;
-  cameraGizmo: THREE.Group;
-  recordingCam: THREE.PerspectiveCamera;
-  camHelper: THREE.CameraHelper;
-  modelClone: THREE.Object3D | null;
-  floorBase: THREE.Mesh;
-  wallBase: THREE.Mesh;
-  lShapeShadow: THREE.Mesh;  // Single L-shaped shadow mesh for seamless wall+floor shadow
-  animFrameId: number | null;
-  isDisposed: boolean;
+// ─── Shadow Template type ────────────────────────────────────────────────────
+interface ShadowTemplate {
+  id: string;
+  name: string;
+  config: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
 }
 
-// Studio dimensions matching ExtractorSceneManager.FRAME_STUDIO_* constants
-const STUDIO_WIDTH = 36;
-const STUDIO_WALL_HEIGHT = 24;
-const STUDIO_FLOOR_DEPTH = 14;
-const STUDIO_CORNER_Y = -1.18;
-const STUDIO_WALL_Z = -3;
+interface ShadowTemplateListResponse {
+  items?: ShadowTemplate[];
+  unavailable?: boolean;
+}
+
+const LOCAL_SHADOW_TEMPLATES_KEY = "cue-shadow-templates-v1";
+
+function parseShadowTemplateList(payload: unknown): { items: ShadowTemplate[] } {
+  if (Array.isArray(payload)) return { items: payload as ShadowTemplate[] };
+  if (payload && typeof payload === "object") {
+    const data = payload as ShadowTemplateListResponse;
+    const items = Array.isArray(data.items) ? data.items : [];
+    return { items };
+  }
+  return { items: [] };
+}
+
+function loadLocalShadowTemplates(): ShadowTemplate[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(LOCAL_SHADOW_TEMPLATES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ShadowTemplate[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+const CAPTURE_SIZE = 2048;
+const PREVIEW_CANVAS_SIZE = 512;
+
+/** Axis label colors matching Three.js TransformControls (R=X, G=Y, B=Z) */
+const AXIS_COLORS: Record<string, string> = { X: "#ff4444", Y: "#44bb44", Z: "#4488ff" };
+
+const MODE_LABELS_VN: Record<string, string> = {
+  translate: "Di chuyển",
+  rotate: "Xoay",
+  scale: "Tỷ lệ",
+};
+
+const SELECTION_LABELS_VN: Record<string, string> = {
+  camera: "Camera",
+  cue: "Mô hình",
+  wall: "Tường",
+  table: "Bàn",
+  wallFrame: "Khung tường",
+  tableFrame: "Khung bàn",
+  hdriLight: "Đèn",
+};
+
+/** Build a white-studio config, restoring from a saved snapshot if available */
+function buildWhiteStudioConfig(shadowCfg: CueShadowConfig): VideoStudioConfig {
+  if (shadowCfg.studioConfigSnapshot) {
+    // Restore from saved snapshot — just sync shadow intensity/blur
+    const snap = structuredClone(shadowCfg.studioConfigSnapshot);
+    snap.shadow = { ...snap.shadow, intensity: shadowCfg.intensity, blur: shadowCfg.blur };
+    // Migrate old snapshots that only have cueHdri (no cueHdriLayers)
+    if (!snap.cueHdriLayers || snap.cueHdriLayers.length === 0) {
+      const legacy = snap.cueHdri ?? DEFAULT_CUE_HDRI;
+      snap.cueHdriLayers = [{
+        id: crypto.randomUUID(),
+        hdriType: legacy.hdriType,
+        rotationX: legacy.rotationX,
+        rotationY: legacy.rotationY,
+        intensity: legacy.intensity,
+        enabled: true,
+      }];
+    }
+    return snap;
+  }
+  const defaultLayer = createDefaultHdriLayer();
+  defaultLayer.rotationY = DEFAULT_CUE_HDRI.rotationY;
+  return {
+    ...structuredClone(DEFAULT_STUDIO_CONFIG),
+    wallSurface: { texturePreset: "white_studio", envMapIntensity: 0, frames: [] },
+    tableSurface: { texturePreset: "white_studio", envMapIntensity: 0, frames: [] },
+    hdriConfig: { layers: [createDefaultHdriLayer(STUDIO_WHITE_HDRI)] },
+    hdriIntensity: 0,
+    cueHdri: { ...DEFAULT_CUE_HDRI },
+    cueHdriLayers: [defaultLayer],
+    shadow: {
+      enabled: true,
+      intensity: shadowCfg.intensity,
+      blur: shadowCfg.blur,
+      softness: 0.5,
+      offsetX: 0,
+      offsetY: 0,
+    },
+  };
+}
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+interface TransformValues {
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number };
+  scale: { x: number; y: number; z: number };
+}
+
+
+
+// ─── Undo/Redo history entry ──────────────────────────────────────────────────
+interface ShadowHistoryEntry {
+  studioConfig: VideoStudioConfig;
+  intensity: number;
+  blur: number;
+  wallsTransparent: boolean;
+}
 
 interface ShadowSimulateDialogProps {
   open: boolean;
@@ -49,953 +148,1335 @@ interface ShadowSimulateDialogProps {
   onConfigChange: (cfg: CueShadowConfig) => void;
   onSave: (cfg: CueShadowConfig) => void;
   extractorRef: React.MutableRefObject<ExtractorSceneManager | null>;
-  /** Frame camera/model settings so the preview matches the final output 1:1 */
   cueSettings: { phi: number; zoom: number; offsetX: number; offsetY: number; spinY: number };
-  /** Optional callback when camera position is changed via gizmo */
-  onCameraChange?: (phi: number, zoom: number) => void;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/** Create a MeshBasicMaterial that can be either solid-color or a canvas gradient. */
-function makeStudioMat(colorHex: string, gradientEnd?: string): THREE.MeshBasicMaterial {
-  if (gradientEnd) {
-    const canvas = document.createElement("canvas");
-    canvas.width = 256; canvas.height = 256;
-    const ctx = canvas.getContext("2d")!;
-    const grad = ctx.createLinearGradient(0, 0, 0, 256);
-    grad.addColorStop(0, colorHex);
-    grad.addColorStop(1, gradientEnd);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 256, 256);
-    const tex = new THREE.CanvasTexture(canvas);
-    return new THREE.MeshBasicMaterial({ map: tex });
-  }
-  return new THREE.MeshBasicMaterial({ color: new THREE.Color(colorHex) });
-}
-
-/** Update an existing MeshBasicMaterial in-place with new color / gradient. */
-function applyStudioColor(mat: THREE.MeshBasicMaterial, colorHex: string, gradientEnd?: string): void {
-  if (gradientEnd) {
-    const canvas = document.createElement("canvas");
-    canvas.width = 256; canvas.height = 256;
-    const ctx = canvas.getContext("2d")!;
-    const grad = ctx.createLinearGradient(0, 0, 0, 256);
-    grad.addColorStop(0, colorHex);
-    grad.addColorStop(1, gradientEnd);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 256, 256);
-    if (mat.map) mat.map.dispose();
-    mat.map = new THREE.CanvasTexture(canvas);
-    mat.color.set(0xffffff);
-  } else {
-    if (mat.map) { mat.map.dispose(); mat.map = null; }
-    mat.color.set(new THREE.Color(colorHex));
-  }
-  mat.needsUpdate = true;
-}
-
-/** Walk parent chain to find which selectable root object belongs to. */
-function findSelectableRoot(
-  obj: THREE.Object3D,
-  roots: THREE.Object3D[]
-): THREE.Object3D | null {
-  let node: THREE.Object3D | null = obj;
-  while (node) {
-    if (roots.includes(node)) return node;
-    node = node.parent;
-  }
-  return null;
-}
-
-// ─── Main Component ───────────────────────────────────────────────────────────
-
-/** Studio scale multiplier — matches video studio model scale */
-const SCALE = 7;
-
-export function ShadowSimulateDialog({
-  open,
-  onOpenChange,
-  shadowConfig,
-  onConfigChange,
-  onSave,
-  extractorRef,
-  cueSettings,
-  onCameraChange,
-}: ShadowSimulateDialogProps) {
-  const simContainerRef = useRef<HTMLDivElement>(null);
-  const simRef = useRef<SimScene | null>(null);
-
-  const onConfigChangeRef = useRef(onConfigChange);
-  useEffect(() => { onConfigChangeRef.current = onConfigChange; }, [onConfigChange]);
-
-  const onCameraChangeRef = useRef(onCameraChange);
-  useEffect(() => { onCameraChangeRef.current = onCameraChange; }, [onCameraChange]);
-
-  const [localCfg, setLocalCfg] = useState<CueShadowConfig>(() => ({ ...shadowConfig }));
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const setPreviewUrlRef = useRef(setPreviewUrl);
-  useEffect(() => { setPreviewUrlRef.current = setPreviewUrl; }, []);
-  const [showGradient, setShowGradient] = useState(false);
-  const [activeSelect, setActiveSelect] = useState<"light" | "camera" | "cue" | null>(null);
-  const [activeHotkeyText, setActiveHotkeyText] = useState<string | null>(null);
-  const [activeHotkeyAxis, setActiveHotkeyAxisState] = useState<"x" | "y" | "z" | null>(null);
-  const setActiveHotkeyAxisRef = useRef(setActiveHotkeyAxisState);
-  useEffect(() => { setActiveHotkeyAxisRef.current = setActiveHotkeyAxisState; }, []);
-
-  // Sync localCfg when dialog opens
-  useEffect(() => {
-    if (open) {
-      setLocalCfg({ ...shadowConfig });
-      setShowGradient(!!shadowConfig.wallGradientEnd);
-      setActiveSelect(null);
-      setActiveHotkeyText(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
-  // ─── Build / destroy Three.js simulation scene ──────────────────────────────
-  useEffect(() => {
-    if (!open) return;
-
-    let cancelled = false;
-    let rafId: number;
-    let simObj: SimScene | null = null;
-
-    const doInit = (container: HTMLDivElement) => {
-      extractorRef.current?.startLivePreview?.();
-
-      const W = container.clientWidth;
-      const H = container.clientHeight;
-
-      // ── Renderer ──────────────────────────────────────────────────────────────
-      const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-      renderer.setSize(W, H);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      renderer.shadowMap.enabled = true;
-      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-      renderer.outputColorSpace = THREE.SRGBColorSpace;
-      renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.3;
-      renderer.domElement.style.cssText =
-        "display:block;position:absolute;top:0;left:0;width:100%;height:100%;";
-      container.appendChild(renderer.domElement);
-
-      // ── Scene ─────────────────────────────────────────────────────────────────
-      const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0xd4d4d4);
-
-      // ── God camera — orbitable view of the whole scene ────────────────────────
-      const camera = new THREE.PerspectiveCamera(60, W / H, 0.1, 500);
-      camera.position.set(0, 6, 22);
-      camera.lookAt(0, 3, 0);
-
-      // OrbitControls
-      const orbitControls = new OrbitControls(camera, renderer.domElement);
-      orbitControls.target.set(0, 3, 0);
-      orbitControls.enableDamping = true;
-      orbitControls.dampingFactor = 0.1;
-      orbitControls.minDistance = 4;
-      orbitControls.maxDistance = 80;
-      orbitControls.maxPolarAngle = Math.PI * 0.85;
-
-      // ── Lighting ─────────────────────────────────────────────────────────────
-      const hemi = new THREE.HemisphereLight(0xffffff, 0x888888, 2.0);
-      scene.add(hemi);
-
-      const cfg = shadowConfig;
-      const shadowLight = new THREE.DirectionalLight(0xfffdf5, 0);
-      shadowLight.castShadow = true;
-      shadowLight.shadow.mapSize.set(4096, 4096);
-      shadowLight.shadow.camera.near = 0.5;
-      shadowLight.shadow.camera.far = 150;
-      shadowLight.shadow.camera.left = -25;
-      shadowLight.shadow.camera.right = 25;
-      shadowLight.shadow.camera.top = 25;
-      shadowLight.shadow.camera.bottom = -25;
-      shadowLight.shadow.bias = 0.0001;
-      shadowLight.shadow.normalBias = 0.02;
-      shadowLight.shadow.radius = cfg.blur;
-      shadowLight.target.position.set(0, 0, 0);
-      scene.add(shadowLight);
-      scene.add(shadowLight.target);
-
-      // ── Studio surfaces — match extractor L-shaped shadow dimensions × SCALE ───
-      const wallColor = cfg.wallColor ?? "#ffffff";
-      const wallGradientEnd = cfg.wallGradientEnd;
-
-      // Use shared constants × SCALE for positions
-      const wallWidth = STUDIO_WIDTH * SCALE;
-      const wallHeight = STUDIO_WALL_HEIGHT * SCALE;
-      const floorDepth = STUDIO_FLOOR_DEPTH * SCALE;
-      const cornerY = STUDIO_CORNER_Y * SCALE;
-      const wallZ = STUDIO_WALL_Z * SCALE;
-
-      // Floor base: white plane behind L-shaped shadow
-      const floorBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(wallWidth, floorDepth),
-        makeStudioMat(wallColor, wallGradientEnd)
-      );
-      floorBase.rotation.x = -Math.PI / 2;
-      floorBase.position.set(0, cornerY - 0.002, wallZ + floorDepth / 2);
-      scene.add(floorBase);
-
-      // Wall base: white plane behind L-shaped shadow
-      const wallBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(wallWidth, wallHeight),
-        makeStudioMat(wallColor, wallGradientEnd)
-      );
-      wallBase.position.set(0, cornerY + wallHeight / 2, wallZ - 0.002);
-      scene.add(wallBase);
-
-      // Single L-shaped shadow mesh (replaces separate floor/wall shadows)
-      const lShapeShadow = createLShapedShadowMesh(
-        STUDIO_WIDTH,
-        STUDIO_WALL_HEIGHT,
-        STUDIO_FLOOR_DEPTH,
-        STUDIO_CORNER_Y,
-        STUDIO_WALL_Z,
-        cfg.intensity
-      );
-      lShapeShadow.scale.setScalar(SCALE);
-      scene.add(lShapeShadow);
-
-      // ── Cue model at studio scale ─────────────────────────────────────────────
-      const modelClone: THREE.Object3D | null = extractorRef.current?.getModelClone?.() ?? null;
-      if (modelClone) {
-        modelClone.scale.setScalar(SCALE);
-        modelClone.position.set(0, 0, 0);
-        modelClone.userData.selectType = "cue";
-        modelClone.traverse((child) => {
-          if (child instanceof THREE.Mesh) {
-            child.castShadow = true;
-            child.receiveShadow = false;
-            child.userData.selectType = "cue";
-          }
-        });
-        // Apply frame's model rotation and offset (so preview matches final output)
-        modelClone.rotation.y = cueSettings.spinY;
-        modelClone.position.set(cueSettings.offsetX * SCALE, cueSettings.offsetY * SCALE, 0);
-        scene.add(modelClone);
-      }
-
-      // ── Load HDRI from extractor into this scene (same renderer context) ──────
-      const hdriUrl = extractorRef.current?.getCurrentHdriUrl?.();
-      if (hdriUrl) {
-        const pmrem = new THREE.PMREMGenerator(renderer);
-        pmrem.compileEquirectangularShader();
-        new RGBELoader().load(hdriUrl, (tex) => {
-          if (cancelled) { tex.dispose(); pmrem.dispose(); return; }
-          tex.mapping = THREE.EquirectangularReflectionMapping;
-          const rt = pmrem.fromEquirectangular(tex);
-          scene.environment = rt.texture;
-          tex.dispose();
-          pmrem.dispose();
-        });
-      }
-
-      // ── RecordingCam — fixed to frame's camera settings (1:1 with extractor) ──
-      // Extractor: camera at y=2*cos(phi), z=2*sin(phi) looking at (offsetX, offsetY, 0)
-      // Simulator at SCALE: y×SCALE, z×SCALE, lookAt (offsetX×SCALE, offsetY×SCALE, 0)
-      const clampedPhi = Math.max(0.1, Math.min(Math.PI - 0.1, cueSettings.phi));
-      const camDist = 2; // extractor fixed distance
-      const camY = camDist * Math.cos(clampedPhi) * SCALE;
-      const camZ = camDist * Math.sin(clampedPhi) * SCALE;
-      const camFov = 50 / Math.max(0.1, cueSettings.zoom);
-      const camLookAt = new THREE.Vector3(
-        cueSettings.offsetX * SCALE,
-        cueSettings.offsetY * SCALE,
-        0
-      );
-
-      // Camera gizmo shown for reference at recording cam position
-      const cameraGizmo = new THREE.Group();
-      cameraGizmo.userData.selectType = "camera";
-      const camBody = new THREE.Mesh(
-        new THREE.BoxGeometry(0.6, 0.45, 0.45),
-        new THREE.MeshStandardMaterial({ color: 0xff6600, emissive: 0xff3300, emissiveIntensity: 0.4 })
-      );
-      camBody.userData.selectType = "camera";
-      cameraGizmo.add(camBody);
-      const camLens = new THREE.Mesh(
-        new THREE.ConeGeometry(0.3, 0.5, 4),
-        new THREE.MeshStandardMaterial({ color: 0xff9933, emissive: 0xff6600, emissiveIntensity: 0.3 })
-      );
-      camLens.rotation.x = Math.PI / 2;
-      camLens.position.z = 0.45;
-      camLens.userData.selectType = "camera";
-      cameraGizmo.add(camLens);
-      cameraGizmo.position.set(0, camY, camZ);
-      cameraGizmo.lookAt(camLookAt);
-      scene.add(cameraGizmo);
-
-      // RecordingCam locked to frame camera — NOT user-controllable
-      const recordingCam = new THREE.PerspectiveCamera(camFov, 1, 0.5, 100);
-      recordingCam.position.set(0, camY, camZ);
-      recordingCam.lookAt(camLookAt);
-      recordingCam.updateProjectionMatrix();
-      recordingCam.updateMatrixWorld(true);
-      const camHelper = new THREE.CameraHelper(recordingCam);
-      scene.add(camHelper);
-
-      const syncCameraFromGizmo = () => {
-        // Update recording camera to match gizmo position
-        recordingCam.position.copy(cameraGizmo.position);
-        // Recompute lookAt to maintain focus on model center
-        const lookTarget = new THREE.Vector3(
-          cueSettings.offsetX * SCALE,
-          cueSettings.offsetY * SCALE,
-          0
-        );
-        recordingCam.lookAt(lookTarget);
-        cameraGizmo.lookAt(lookTarget);
-        recordingCam.updateProjectionMatrix();
-        camHelper.update();
-
-        // Derive new phi from camera position
-        const camY = cameraGizmo.position.y / SCALE;
-        const camZ = cameraGizmo.position.z / SCALE;
-        const dist = Math.sqrt(camY * camY + camZ * camZ);
-        if (dist < 0.001) return; // Avoid division by zero at origin
-        const newPhi = Math.acos(Math.max(-1, Math.min(1, camY / dist)));
-        // Derive zoom from distance change (original dist was 2)
-        const newZoom = 2 / dist;
-
-        // Notify parent of camera changes
-        if (onCameraChangeRef.current) {
-          onCameraChangeRef.current(newPhi, newZoom);
-        }
-      };
-
-      // ── Light sphere ──────────────────────────────────────────────────────────
-      const lightSphere = new THREE.Mesh(
-        new THREE.SphereGeometry(0.55, 24, 24),
-        new THREE.MeshStandardMaterial({
-          color: 0xffcc00, emissive: 0xff8800, emissiveIntensity: 1.2,
-          roughness: 0.2, metalness: 0.1,
-        })
-      );
-      lightSphere.userData.selectType = "light";
-      lightSphere.name = "lightSphere";
-      scene.add(lightSphere);
-      lightSphere.add(new THREE.Mesh(
-        new THREE.SphereGeometry(0.9, 16, 16),
-        new THREE.MeshBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.18, side: THREE.DoubleSide })
-      ));
-      const lineGeo = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -300, 0),
-      ]);
-      lightSphere.add(new THREE.Line(lineGeo,
-        new THREE.LineBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.3 })
-      ));
-
-      // ── TransformControls ──────────────────────────────────────────────────────
-      const transformControls = new TransformControls(camera, renderer.domElement);
-      transformControls.setMode("translate");
-      transformControls.setSize(0.8);
-      scene.add(transformControls.getHelper());
-
-      transformControls.addEventListener("dragging-changed", (event: { value: unknown }) => {
-        orbitControls.enabled = !event.value;
-      });
-
-      transformControls.addEventListener("objectChange", () => {
-        if (selectedType === "light") syncLightPos();
-        if (selectedType === "camera") syncCameraFromGizmo();
-      });
-
-      const setAxisLock = (axis: "x" | "y" | "z") => {
-        transformControls.showX = axis === "x";
-        transformControls.showY = axis === "y";
-        transformControls.showZ = axis === "z";
-      };
-      const resetAxisLock = () => {
-        transformControls.showX = true;
-        transformControls.showY = true;
-        transformControls.showZ = true;
-      };
-
-      // ── Selection + Blender-style G/R/S hotkeys ────────────────────────────────
-      // All gizmos are now selectable and controllable
-      const selectableRoots: THREE.Object3D[] = [
-        lightSphere, cameraGizmo, ...(modelClone ? [modelClone] : []),
-      ];
-
-      let selectedObj: THREE.Object3D | null = null;
-      let selectedType: "light" | "camera" | "cue" | null = null;
-
-      let activeHotkey: "g" | "r" | "s" | null = null;
-      let hotkeyAxisLock: "x" | "y" | "z" | null = null;
-      let hotkeyDragging = false;
-      let hotkeyStartX = 0;
-      let hotkeyStartY = 0;
-      const hotkeyOrigPos = new THREE.Vector3();
-      const hotkeyOrigRot = new THREE.Euler();
-      const hotkeyOrigScl = new THREE.Vector3();
-
-      const syncLightPos = () => {
-        const { x, y, z } = lightSphere.position;
-        const cx = Math.max(-80, Math.min(80, x));
-        const cy = Math.max(-SCALE * 5, Math.min(150, y));  // allow below cue
-        const cz = Math.max(-80, Math.min(80, z));
-        if (cx !== x || cy !== y || cz !== z) lightSphere.position.set(cx, cy, cz);
-        shadowLight.position.set(cx, cy, cz);
-        shadowLight.shadow.camera.updateProjectionMatrix();
-        setLocalCfg(prev => {
-          const next = { ...prev, lightX: cx / SCALE, lightY: cy / SCALE, lightZ: cz / SCALE };
-          setTimeout(() => onConfigChangeRef.current(next), 0);
-          return next;
-        });
-      };
-
-      const selectObject = (
-        obj: THREE.Object3D | null,
-        type: "light" | "camera" | "cue" | null
-      ) => {
-        selectedObj = obj;
-        selectedType = type;
-        if (obj) {
-          transformControls.attach(obj);
-          transformControls.enabled = true;
-          transformControls.setMode("translate");
-          resetAxisLock();
-        } else {
-          transformControls.detach();
-        }
-        setActiveSelect(type);
-        setActiveHotkeyText(null);
-        setActiveHotkeyAxisRef.current(null);
-      };
-
-      const buildHotkeyText = (hk: "g" | "r" | "s", axis: "x" | "y" | "z" | null): string => {
-        const action = hk === "g" ? "Moving" : hk === "r" ? "Rotating" : "Scaling";
-        return axis ? `${action}: ${axis.toUpperCase()} axis` : `${action}: free`;
-      };
-
-      const setHotkeyState = (hk: "g" | "r" | "s" | null, axis: "x" | "y" | "z" | null) => {
-        setActiveHotkeyText(hk ? buildHotkeyText(hk, axis) : null);
-        setActiveHotkeyAxisRef.current(axis);
-      };
-
-      // Raycaster click selection
-      let mouseDownX = 0;
-      let mouseDownY = 0;
-      const raycaster = new THREE.Raycaster();
-      const mouseVec = new THREE.Vector2();
-
-      const onMouseDown = (e: MouseEvent) => {
-        if (e.button !== 0) return;
-        mouseDownX = e.clientX;
-        mouseDownY = e.clientY;
-      };
-
-      const onMouseUp = (e: MouseEvent) => {
-        if (e.button !== 0) return;
-        if (transformControls.dragging) return;
-        if (Math.abs(e.clientX - mouseDownX) > 5 || Math.abs(e.clientY - mouseDownY) > 5) return;
-        if (activeHotkey) return;
-        const rect = renderer.domElement.getBoundingClientRect();
-        mouseVec.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-        mouseVec.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-        raycaster.setFromCamera(mouseVec, camera);
-        const hits = raycaster.intersectObjects(selectableRoots, true);
-        if (!hits.length) { selectObject(null, null); return; }
-        const root = findSelectableRoot(hits[0].object, selectableRoots);
-        if (!root) { selectObject(null, null); return; }
-        selectObject(root, (root.userData.selectType as "light" | "camera" | "cue") ?? null);
-      };
-
-      const onKeyDown = (e: KeyboardEvent) => {
-        if (e.repeat) return;
-        const key = e.key.toLowerCase();
-
-        if ((key === "x" || key === "y" || key === "z") && activeHotkey && selectedObj) {
-          hotkeyAxisLock = key as "x" | "y" | "z";
-          setAxisLock(key as "x" | "y" | "z");
-          setHotkeyState(activeHotkey, key as "x" | "y" | "z");
-          return;
-        }
-
-        if ((key === "g" || key === "r" || key === "s") && selectedObj) {
-          if (key === "s" && selectedType === "camera") return;
-          activeHotkey = key;
-          hotkeyAxisLock = null;
-          hotkeyDragging = false;
-          hotkeyOrigPos.copy(selectedObj.position);
-          hotkeyOrigRot.copy(selectedObj.rotation);
-          hotkeyOrigScl.copy(selectedObj.scale);
-          transformControls.enabled = false;
-          orbitControls.enabled = false;
-          transformControls.setMode(key === "g" ? "translate" : key === "r" ? "rotate" : "scale");
-          resetAxisLock();
-          setHotkeyState(key, null);
-          e.preventDefault();
-          return;
-        }
-
-        if (key === "escape") {
-          if (activeHotkey && selectedObj) {
-            selectedObj.position.copy(hotkeyOrigPos);
-            selectedObj.rotation.copy(hotkeyOrigRot);
-            selectedObj.scale.copy(hotkeyOrigScl);
-            if (selectedType === "light") {
-              shadowLight.position.copy(hotkeyOrigPos);
-              shadowLight.shadow.camera.updateProjectionMatrix();
-            }
-            if (selectedType === "camera") syncCameraFromGizmo();
-            endHotkeyDrag(false);
-          } else {
-            selectObject(null, null);
-          }
-        }
-      };
-
-      const onKeyUp = (e: KeyboardEvent) => {
-        const key = e.key.toLowerCase();
-        if ((key === "g" || key === "r" || key === "s") && activeHotkey === key) {
-          endHotkeyDrag(true);
-        }
-      };
-
-      const onMouseMove = (e: MouseEvent) => {
-        if (!activeHotkey || !selectedObj) return;
-        if (!hotkeyDragging) {
-          hotkeyDragging = true;
-          hotkeyStartX = e.clientX;
-          hotkeyStartY = e.clientY;
-        }
-        const w = container.clientWidth || 1;
-        const h = container.clientHeight || 1;
-        const dx = (e.clientX - hotkeyStartX) / w;
-        const dy = (e.clientY - hotkeyStartY) / h;
-        const obj = selectedObj;
-
-        if (activeHotkey === "g") {
-          const speed = 20;
-          const pos = hotkeyOrigPos.clone();
-          const axis = hotkeyAxisLock;
-          if (!axis || axis === "x") pos.x += dx * speed;
-          if (!axis || axis === "y") pos.y -= dy * speed;
-          if (axis === "z") pos.z -= dx * speed;
-          obj.position.copy(pos);
-          if (selectedType === "light") {
-            shadowLight.position.copy(pos);
-            shadowLight.shadow.camera.updateProjectionMatrix();
-          }
-          if (selectedType === "camera") syncCameraFromGizmo();
-        } else if (activeHotkey === "r") {
-          const angle = -dy * Math.PI * 2;
-          const axis = hotkeyAxisLock ?? "y";
-          const origQ = new THREE.Quaternion().setFromEuler(hotkeyOrigRot);
-          const axVec =
-            axis === "x" ? new THREE.Vector3(1, 0, 0) :
-            axis === "z" ? new THREE.Vector3(0, 0, 1) :
-                           new THREE.Vector3(0, 1, 0);
-          const deltaQ = new THREE.Quaternion().setFromAxisAngle(axVec, angle);
-          const result = deltaQ.multiply(origQ);
-          obj.quaternion.copy(result);
-          obj.rotation.setFromQuaternion(result, obj.rotation.order);
-          if (selectedType === "camera") syncCameraFromGizmo();
-        } else if (activeHotkey === "s") {
-          const factor = 1 + dx * 2;
-          const scl = hotkeyOrigScl.clone();
-          const axis = hotkeyAxisLock;
-          if (!axis) scl.multiplyScalar(factor);
-          else {
-            if (axis === "x") scl.x *= factor;
-            if (axis === "y") scl.y *= factor;
-            if (axis === "z") scl.z *= factor;
-          }
-          obj.scale.copy(scl);
-        }
-      };
-
-      const endHotkeyDrag = (commit: boolean) => {
-        if (commit && selectedType === "light") syncLightPos();
-        if (commit && selectedType === "camera") syncCameraFromGizmo();
-        activeHotkey = null;
-        hotkeyAxisLock = null;
-        hotkeyDragging = false;
-        transformControls.enabled = true;
-        orbitControls.enabled = true;
-        resetAxisLock();
-        setHotkeyState(null, null);
-      };
-
-      window.addEventListener("mousedown", onMouseDown);
-      window.addEventListener("mouseup", onMouseUp);
-      renderer.domElement.addEventListener("mousemove", onMouseMove);
-      window.addEventListener("keydown", onKeyDown);
-      window.addEventListener("keyup", onKeyUp);
-
-      // ── Initial light position: stored natural-scale × SCALE ──────────────────
-      const initLx = cfg.lightX * SCALE;
-      const initLy = cfg.lightY * SCALE;
-      const initLz = cfg.lightZ * SCALE;
-      lightSphere.position.set(initLx, initLy, initLz);
-      shadowLight.position.set(initLx, initLy, initLz);
-      shadowLight.shadow.camera.updateProjectionMatrix();
-
-      // ── Render loop ───────────────────────────────────────────────────────────
-      // Preview is captured by rendering from recordingCam into the same renderer
-      // (within one rAF callback — browser composites only the final godCam render).
-      let lastPreviewMs = 0;
-
-      simObj = {
-        renderer, scene, camera, orbitControls, transformControls,
-        shadowLight, lightSphere, cameraGizmo, recordingCam, camHelper,
-        modelClone, floorBase, wallBase, lShapeShadow,
-        animFrameId: null, isDisposed: false,
-      };
-
-      const animate = () => {
-        if (simObj!.isDisposed) return;
-        simObj!.animFrameId = requestAnimationFrame(animate);
-        orbitControls.update();
-
-        // Throttle preview capture to ~5fps (every 200ms)
-        const now = performance.now();
-        if (now - lastPreviewMs > 200) {
-          lastPreviewMs = now;
-          // Render from recordingCam (1:1 aspect) for the 2D preview panel
-          renderer.render(scene, recordingCam);
-          try {
-            setPreviewUrlRef.current(renderer.domElement.toDataURL("image/jpeg", 0.88));
-          } catch { /* ignore tainted canvas */ }
-        }
-
-        // Always render main god-camera view last — this is what the user sees
-        renderer.render(scene, camera);
-      };
-      animate();
-
-      simRef.current = simObj;
-
-      const resizeObserver = new ResizeObserver(() => {
-        if (!simObj || simObj.isDisposed) return;
-        const w = container.clientWidth;
-        const h = container.clientHeight;
-        if (w === 0 || h === 0) return;
-        renderer.setSize(w, h);
-        camera.aspect = w / h;
-        camera.updateProjectionMatrix();
-      });
-      resizeObserver.observe(container);
-
-      const evtCleanup = () => {
-        window.removeEventListener("keydown", onKeyDown);
-        window.removeEventListener("keyup", onKeyUp);
-        window.removeEventListener("mousedown", onMouseDown);
-        window.removeEventListener("mouseup", onMouseUp);
-        renderer.domElement.removeEventListener("mousemove", onMouseMove);
-      };
-      (simObj as SimScene & { _resizeObs: ResizeObserver; _evtCleanup: () => void })._resizeObs =
-        resizeObserver;
-      (simObj as SimScene & { _resizeObs: ResizeObserver; _evtCleanup: () => void })._evtCleanup =
-        evtCleanup;
-    };
-
-    // rAF retry until dialog container has real dimensions
-    let retries = 0;
-    const tryInit = () => {
-      if (cancelled) return;
-      const container = simContainerRef.current;
-      if (!container || simRef.current) return;
-      if (container.clientWidth === 0 || container.clientHeight === 0) {
-        if (retries < 30) { retries++; rafId = requestAnimationFrame(tryInit); return; }
-      }
-      doInit(container);
-    };
-    rafId = requestAnimationFrame(tryInit);
-
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(rafId);
-      if (simObj) {
-        const s = simObj as SimScene & { _resizeObs?: ResizeObserver; _evtCleanup?: () => void };
-        s._resizeObs?.disconnect();
-        s._evtCleanup?.();
-        s.isDisposed = true;
-        if (s.animFrameId !== null) cancelAnimationFrame(s.animFrameId);
-        s.transformControls.detach();
-        s.orbitControls.dispose();
-        s.transformControls.dispose();
-        
-        // Dispose all geometries and materials to prevent GPU memory leaks
-        s.scene.traverse((obj) => {
-          if (obj instanceof THREE.Mesh) {
-            obj.geometry?.dispose();
-            if (Array.isArray(obj.material)) {
-              obj.material.forEach((m) => m.dispose());
-            } else if (obj.material) {
-              obj.material.dispose();
-            }
-          }
-        });
-        
-        s.renderer.dispose();
-        const c = simContainerRef.current;
-        if (c && c.contains(s.renderer.domElement)) c.removeChild(s.renderer.domElement);
-        simRef.current = null;
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
-  // Sync blur to sim scene when slider changes
-  useEffect(() => {
-    const sim = simRef.current;
-    if (!sim) return;
-    sim.shadowLight.shadow.radius = localCfg.blur;
-  }, [localCfg.blur]);
-
-  // Sync shadow intensity to L-shaped shadow mesh
-  useEffect(() => {
-    const sim = simRef.current;
-    if (!sim) return;
-    (sim.lShapeShadow.material as THREE.ShadowMaterial).opacity = localCfg.intensity;
-  }, [localCfg.intensity]);
-
-  // Sync wall/floor color to sim scene
-  useEffect(() => {
-    const sim = simRef.current;
-    if (!sim) return;
-    applyStudioColor(sim.floorBase.material as THREE.MeshBasicMaterial, localCfg.wallColor ?? "#ffffff", localCfg.wallGradientEnd);
-    applyStudioColor(sim.wallBase.material as THREE.MeshBasicMaterial, localCfg.wallColor ?? "#ffffff", localCfg.wallGradientEnd);
-  }, [localCfg.wallColor, localCfg.wallGradientEnd]);
-
-  // Preview is now captured live from recordingCam inside the animate loop.
-  // Clear preview when dialog closes.
-  useEffect(() => {
-    if (!open) setPreviewUrl(null);
-  }, [open]);
-
-  // ─── Handlers ────────────────────────────────────────────────────────────────
-  const handleSlider = (field: keyof CueShadowConfig, value: number) => {
-    setLocalCfg(prev => {
-      const next = { ...prev, [field]: value };
-      onConfigChangeRef.current(next);
-      return next;
-    });
-  };
-
-  const handleWallColor = (color: string) => {
-    setLocalCfg(prev => {
-      const next = { ...prev, wallColor: color };
-      onConfigChangeRef.current(next);
-      return next;
-    });
-  };
-
-  const handleGradientEnd = (color: string) => {
-    setLocalCfg(prev => {
-      const next = { ...prev, wallGradientEnd: color };
-      onConfigChangeRef.current(next);
-      return next;
-    });
-  };
-
-  const toggleGradient = () => {
-    setShowGradient(prev => {
-      const next = !prev;
-      if (!next) {
-        setLocalCfg(p => {
-          const updated = { ...p, wallGradientEnd: undefined };
-          onConfigChangeRef.current(updated);
-          return updated;
-        });
-      } else {
-        setLocalCfg(p => {
-          const updated = { ...p, wallGradientEnd: "#e0e0e0" };
-          onConfigChangeRef.current(updated);
-          return updated;
-        });
-      }
-      return next;
-    });
-  };
-
-  const handleSave = () => { onSave(localCfg); };
-
-  // ─── Render ───────────────────────────────────────────────────────────────────
+function TransformInput({ label, value, onChange, suffix = "" }: { label: string; value: number; onChange: (v: number) => void; suffix?: string }) {
+  const color = AXIS_COLORS[label] ?? undefined;
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="max-w-[92vw] w-[1200px] h-[84vh] flex flex-col p-0 gap-0 overflow-hidden"
-      >
-        <DialogHeader className="px-5 py-3.5 border-b shrink-0">
-          <DialogTitle className="flex items-center gap-2 text-base">
-            <Lightbulb className="w-4 h-4 text-yellow-400 fill-yellow-400/30" />
-            Studio Shadow Simulator — 3D
-            {activeSelect && (
-              <span className="ml-2 text-[11px] font-normal px-2 py-0.5 rounded-full bg-yellow-400/20 text-yellow-600 border border-yellow-400/40">
-                {activeSelect === "light" ? "💡 Light" : activeSelect === "camera" ? "📷 Camera" : "🎯 Cue"} selected
-              </span>
-            )}
-            {activeHotkeyText && (
-              <span className={`text-[11px] font-normal px-2 py-0.5 rounded-full border ${
-                activeHotkeyAxis === "x"
-                  ? "bg-red-500/20 text-red-500 border-red-400/40"
-                  : activeHotkeyAxis === "y"
-                  ? "bg-green-500/20 text-green-500 border-green-400/40"
-                  : activeHotkeyAxis === "z"
-                  ? "bg-blue-500/20 text-blue-500 border-blue-400/40"
-                  : "bg-white/20 text-foreground border-border/40"
-              }`}>
-                {activeHotkeyText}
-              </span>
-            )}
-          </DialogTitle>
-        </DialogHeader>
-
-        <div className="flex flex-1 min-h-0">
-          {/* 3D simulation canvas */}
-          <div
-            ref={simContainerRef}
-            className="flex-1 min-w-0 min-h-0 bg-white relative"
-          >
-            <div className="absolute bottom-3 left-3 pointer-events-none select-none space-y-1 z-10">
-              <p className="text-[10px] bg-black/40 text-white/85 px-2 py-0.5 rounded-full backdrop-blur-sm">
-                🖱 Click object to select · right-click/scroll to orbit/zoom
-              </p>
-              <p className="text-[10px] bg-black/40 text-white/85 px-2 py-0.5 rounded-full backdrop-blur-sm">
-                ⌨ G=grab · R=rotate · S=scale · then X/Y/Z to lock axis · Esc=cancel
-              </p>
-            </div>
-          </div>
-
-          {/* Right panel */}
-          <div className="w-[268px] shrink-0 flex flex-col border-l bg-background overflow-y-auto">
-            {/* 2D preview */}
-            <div className="p-3 border-b shrink-0">
-              <div className="mb-1.5">
-                <Label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-                  Cue Frame Result
-                </Label>
-              </div>
-              <div className="aspect-square bg-muted/40 rounded-md overflow-hidden border">
-                {previewUrl ? (
-                  <img src={previewUrl} alt="Shadow preview" className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-[11px] text-muted-foreground">
-                    Loading…
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Controls */}
-            <div className="p-3 space-y-5">
-              <Label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-                Shadow Settings
-              </Label>
-
-              {/* Intensity */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs text-muted-foreground">Intensity</Label>
-                  <span className="text-xs tabular-nums text-muted-foreground">
-                    {Math.round(localCfg.intensity * 100)}%
-                  </span>
-                </div>
-                <Slider value={[localCfg.intensity]} onValueChange={([v]) => handleSlider("intensity", v)}
-                  min={0} max={1} step={0.01} className="w-full" />
-              </div>
-
-              {/* Blur */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs text-muted-foreground">Blur</Label>
-                  <span className="text-xs tabular-nums text-muted-foreground">{localCfg.blur.toFixed(0)}</span>
-                </div>
-                <Slider value={[localCfg.blur]} onValueChange={([v]) => handleSlider("blur", v)}
-                  min={0} max={20} step={0.5} className="w-full" />
-              </div>
-
-              {/* Light position readout */}
-              <div className="rounded-md bg-muted/50 p-2.5 space-y-1">
-                <Label className="text-[10px] text-muted-foreground/70 uppercase tracking-wide">
-                  Light Position
-                </Label>
-                <div className="grid grid-cols-3 gap-1 text-[11px] font-mono">
-                  <span className="text-red-400">X {localCfg.lightX.toFixed(1)}</span>
-                  <span className="text-green-400">Y {localCfg.lightY.toFixed(1)}</span>
-                  <span className="text-blue-400">Z {localCfg.lightZ.toFixed(1)}</span>
-                </div>
-              </div>
-
-              {/* Wall / Floor color */}
-              <div className="space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs text-muted-foreground flex items-center gap-1.5">
-                    <Palette className="w-3 h-3" /> Wall &amp; Floor Color
-                  </Label>
-                  <button
-                    onClick={toggleGradient}
-                    className="text-[10px] text-primary hover:underline"
-                  >
-                    {showGradient ? "Solid" : "Gradient"}
-                  </button>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    value={localCfg.wallColor ?? "#ffffff"}
-                    onChange={(e) => handleWallColor(e.target.value)}
-                    className="w-7 h-7 rounded cursor-pointer border border-border p-0.5"
-                    title="Wall color"
-                  />
-                  <span className="text-[11px] text-muted-foreground font-mono">
-                    {localCfg.wallColor ?? "#ffffff"}
-                  </span>
-                </div>
-
-                {showGradient && (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="color"
-                      value={localCfg.wallGradientEnd ?? "#e0e0e0"}
-                      onChange={(e) => handleGradientEnd(e.target.value)}
-                      className="w-7 h-7 rounded cursor-pointer border border-border p-0.5"
-                      title="Gradient end color"
-                    />
-                    <span className="text-[11px] text-muted-foreground font-mono">
-                      {localCfg.wallGradientEnd ?? "#e0e0e0"}
-                    </span>
-                    <span className="text-[10px] text-muted-foreground/60 ml-auto">↓ bottom</span>
-                  </div>
-                )}
-
-                {/* Gradient preview swatch */}
-                {showGradient && (
-                  <div
-                    className="h-5 w-full rounded border border-border"
-                    style={{
-                      background: `linear-gradient(to bottom, ${localCfg.wallColor ?? "#ffffff"}, ${localCfg.wallGradientEnd ?? "#e0e0e0"})`,
-                    }}
-                  />
-                )}
-              </div>
-
-              <div className="text-[10px] text-muted-foreground/60 space-y-0.5 leading-relaxed">
-                <p>⚙ Gizmo: Red·X · Green·Y · Blue·Z</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <DialogFooter className="px-5 py-3 border-t shrink-0 flex justify-between sm:justify-between">
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button size="sm" onClick={handleSave} className="gap-1.5">
-            <Save className="w-3.5 h-3.5" />
-            Save Shadow Settings
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <div className="flex items-center gap-1">
+      <span className="text-[10px] font-bold w-3 shrink-0" style={color ? { color } : undefined}>
+        {label}
+      </span>
+      <input
+        type="number"
+        step="0.1"
+        value={parseFloat(value.toFixed(2))}
+        onChange={(e) => {
+          const v = parseFloat(e.target.value);
+          if (!isNaN(v)) onChange(v);
+        }}
+        className="h-5 w-full rounded border border-border/50 bg-muted/30 px-1 text-[11px] font-mono tabular-nums text-foreground outline-none focus:border-blue-500/50"
+      />
+      {suffix && <span className="text-[10px] text-muted-foreground shrink-0">{suffix}</span>}
+    </div>
   );
 }
 
+// ─── Main Component ───────────────────────────────────────────────────────────
+export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfigChange, onSave, extractorRef, cueSettings }: ShadowSimulateDialogProps) {
+  // Local shadow config (edit in-dialog, save on confirm)
+  const [localCfg, setLocalCfg] = useState<CueShadowConfig>(() => ({ ...shadowConfig }));
+  const localCfgRef = useRef(localCfg);
+  useEffect(() => {
+    localCfgRef.current = localCfg;
+  }, [localCfg]);
+
+  const [sceneReady, setSceneReady] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const didApplyRef = useRef(false);
+
+  const [wallsTransparent, setWallsTransparent] = useState(shadowConfig.wallsTransparent ?? false);
+
+  // Template system
+  const [templates, setTemplates] = useState<ShadowTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false);
+  const [showTemplateSaveChoiceDialog, setShowTemplateSaveChoiceDialog] = useState(false);
+  const [renamingTemplateId, setRenamingTemplateId] = useState<string | null>(null);
+  const [renameInput, setRenameInput] = useState("");
+  const [templateDropdownOpen, setTemplateDropdownOpen] = useState(false);
+  const [showTemplateNameDialog, setShowTemplateNameDialog] = useState(false);
+  const [templateNameInput, setTemplateNameInput] = useState("");
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const saveMsgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Selection & transform display
+  const [selectionInfo, setSelectionInfo] = useState<SelectionInfo>({ type: null });
+  const [transformValues, setTransformValues] = useState<TransformValues | null>(null);
+  const [transformMode, setTransformMode] = useState<"translate" | "rotate" | "scale">("translate");
+  const [hotkeyAxis, setHotkeyAxis] = useState<"x" | "y" | "z" | null>(null);
+
+  // Undo/redo
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const shadowHistoryRef = useRef<ShadowHistoryEntry[]>([]);
+  const shadowFutureRef = useRef<ShadowHistoryEntry[]>([]);
+  const isDraggingRef = useRef(false);
+  const wallsTransparentRef = useRef(shadowConfig.wallsTransparent ?? false);
+
+  // HDRI Cơ panel — React state mirrors configRef.current.cueHdriLayers for reactive display
+  const [cueHdriOpen, setCueHdriOpen] = useState(false);
+  const [cueHdriLayersState, setCueHdriLayersState] = useState<HdriLayer[]>(() =>
+    buildWhiteStudioConfig(shadowConfig).cueHdriLayers ?? []
+  );
+
+  // Refs — studioConfig is a REF (not state) to avoid React re-renders during drag/slider
+  const previewContainerRef = useRef<HTMLDivElement>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const esmRef = useRef<ESMClass | null>(null);
+  const sceneViewRef = useRef<SceneViewControls | null>(null);
+  const configRef = useRef<VideoStudioConfig>(buildWhiteStudioConfig(shadowConfig));
+  const onConfigChangeRef = useRef(onConfigChange);
+  useEffect(() => {
+    onConfigChangeRef.current = onConfigChange;
+  }, [onConfigChange]);
+  const configSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ─── Debounced ESM config push (no React state, no re-render) ──────────────
+  const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleConfigUpdate = useCallback(() => {
+    if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
+    updateTimerRef.current = setTimeout(() => {
+      esmRef.current?.updateStudioPreviewConfig(configRef.current);
+      updateTimerRef.current = null;
+    }, 80);
+  }, []);
+
+  // Keep wallsTransparentRef in sync for use in snapshot callbacks
+  useEffect(() => {
+    wallsTransparentRef.current = wallsTransparent;
+  }, [wallsTransparent]);
+
+  // ─── Undo/Redo helpers ────────────────────────────────────────────────────
+  const updateHistoryState = useCallback(() => {
+    setCanUndo(shadowHistoryRef.current.length > 1);
+    setCanRedo(shadowFutureRef.current.length > 0);
+  }, []);
+
+  const snapshotNow = useCallback((overrides?: Partial<ShadowHistoryEntry>) => {
+    const entry: ShadowHistoryEntry = {
+      studioConfig: structuredClone(configRef.current),
+      intensity: localCfgRef.current.intensity,
+      blur: localCfgRef.current.blur,
+      wallsTransparent: wallsTransparentRef.current,
+      ...overrides,
+    };
+    shadowHistoryRef.current = [...shadowHistoryRef.current.slice(-49), entry];
+    shadowFutureRef.current = [];
+    updateHistoryState();
+  }, [updateHistoryState]);
+
+  const applyHistoryEntry = useCallback((entry: ShadowHistoryEntry) => {
+    configRef.current = structuredClone(entry.studioConfig);
+    localCfgRef.current = { ...localCfgRef.current, intensity: entry.intensity, blur: entry.blur };
+    setLocalCfg(localCfgRef.current);
+    setCueHdriLayersState(configRef.current.cueHdriLayers ?? []);
+    wallsTransparentRef.current = entry.wallsTransparent;
+    setWallsTransparent(entry.wallsTransparent);
+    const esm = esmRef.current;
+    if (esm) {
+      esm.setWallsVisible(!entry.wallsTransparent);
+      esm.setTransparentBackground(entry.wallsTransparent);
+      esm.updateStudioPreviewConfig(configRef.current);
+      esm.forcePreviewUpdate();
+    }
+  }, []);
+
+  const undo = useCallback(() => {
+    if (shadowHistoryRef.current.length <= 1) return;
+    const current = shadowHistoryRef.current[shadowHistoryRef.current.length - 1];
+    shadowFutureRef.current = [current, ...shadowFutureRef.current.slice(0, 49)];
+    shadowHistoryRef.current = shadowHistoryRef.current.slice(0, -1);
+    const prev = shadowHistoryRef.current[shadowHistoryRef.current.length - 1];
+    applyHistoryEntry(prev);
+    updateHistoryState();
+  }, [applyHistoryEntry, updateHistoryState]);
+
+  const redo = useCallback(() => {
+    if (shadowFutureRef.current.length === 0) return;
+    const next = shadowFutureRef.current[0];
+    shadowFutureRef.current = shadowFutureRef.current.slice(1);
+    shadowHistoryRef.current = [...shadowHistoryRef.current, next];
+    applyHistoryEntry(next);
+    updateHistoryState();
+  }, [applyHistoryEntry, updateHistoryState]);
+
+  // Ctrl+Z / Ctrl+Shift+Z keyboard handler
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [open, undo, redo]);
+
+  // Initialize config only on open transition (NOT on every shadowConfig change)
+  const prevOpenRef = useRef(false);
+  useEffect(() => {
+    if (open && !prevOpenRef.current) {
+      didApplyRef.current = false;
+      const initCfg = buildWhiteStudioConfig(shadowConfig);
+      localCfgRef.current = { ...shadowConfig };
+      setLocalCfg(localCfgRef.current);
+      configRef.current = initCfg;
+      setCueHdriLayersState(initCfg.cueHdriLayers ?? []);
+      setSelectionInfo({ type: null });
+      setTransformValues(null);
+      const initWalls = shadowConfig.wallsTransparent ?? false;
+      wallsTransparentRef.current = initWalls;
+      setWallsTransparent(initWalls);
+      setSelectedTemplateId(null);
+      // Seed undo history with the initial state
+      shadowHistoryRef.current = [{
+        studioConfig: structuredClone(initCfg),
+        intensity: shadowConfig.intensity,
+        blur: shadowConfig.blur,
+        wallsTransparent: initWalls,
+      }];
+      shadowFutureRef.current = [];
+      setCanUndo(false);
+      setCanRedo(false);
+      isDraggingRef.current = false;
+    }
+    prevOpenRef.current = open;
+  }, [open, shadowConfig]);
+
+  useEffect(() => {
+    if (open) return;
+    setShowTemplateSaveChoiceDialog(false);
+    setShowTemplateNameDialog(false);
+    setTemplateNameInput("");
+  }, [open]);
+
+  useEffect(() => {
+    return () => {
+      if (configSyncTimerRef.current) {
+        clearTimeout(configSyncTimerRef.current);
+        configSyncTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  // ─── Sync shadow sliders → config ref (no state, just ref + push) ──────────
+  useEffect(() => {
+    const cfg = configRef.current;
+    cfg.shadow = { ...cfg.shadow, intensity: localCfg.intensity, blur: localCfg.blur };
+    scheduleConfigUpdate();
+  }, [localCfg.intensity, localCfg.blur, scheduleConfigUpdate]);
+
+  // ─── Sync transparent walls mode → ESM ─────────────────────────────────────
+  useEffect(() => {
+    if (!sceneReady || !esmRef.current) return;
+    esmRef.current.setWallsVisible(!wallsTransparent);
+    esmRef.current.setTransparentBackground(wallsTransparent);
+    esmRef.current.forcePreviewUpdate();
+  }, [wallsTransparent, sceneReady]);
+
+  const resetShadowPlaneToFollowLight = useCallback((_cfg: VideoStudioConfig): boolean => {
+    // Shadow position is driven purely by 3D light angles; no manual override to reset.
+    return false;
+  }, []);
+
+  // ─── Fetch shadow config templates ──────────────────────────────────────────
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const loadTemplates = async () => {
+      try {
+        const res = await fetch("/api/shadow-config-templates?limit=100");
+        const payload: unknown = res.ok ? await res.json() : null;
+        const { items } = parseShadowTemplateList(payload);
+        if (cancelled) return;
+        setTemplates(res.ok ? items : loadLocalShadowTemplates());
+      } catch {
+        if (cancelled) return;
+        setTemplates(loadLocalShadowTemplates());
+      }
+    };
+    loadTemplates();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  // ─── Scene Setup ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!open) return;
+
+    const sourceEsm = extractorRef.current;
+    if (!sourceEsm) return;
+
+    const sourcePreviewWasRunning = sourceEsm.isLivePreviewRunning();
+    sourceEsm.stopLivePreview();
+
+    // Minimize source ESM renderer to free GPU memory (1x1 framebuffer)
+    const srcCanvas = sourceEsm.getCanvas();
+    const srcW = srcCanvas?.width ?? 0;
+    const srcH = srcCanvas?.height ?? 0;
+    if (srcW > 1 || srcH > 1) sourceEsm.resize(1, 1);
+
+    let sceneViewAnimId: number | null = null;
+
+    const setup = async () => {
+      const model = sourceEsm.getModelClone();
+      if (!model) return;
+
+      const esm = new ESMClass();
+      esmRef.current = esm;
+
+      await esm.setModel(model);
+
+      const hdriUrl = sourceEsm.getCurrentHdriUrl();
+      if (hdriUrl) {
+        try {
+          await esm.loadHDRI(hdriUrl);
+        } catch {
+          /* non-critical */
+        }
+      }
+
+      const canvas = esm.getCanvas();
+      if (previewContainerRef.current && canvas) {
+        canvas.style.width = "100%";
+        canvas.style.height = "100%";
+        canvas.style.objectFit = "contain";
+        previewContainerRef.current.innerHTML = "";
+        previewContainerRef.current.appendChild(canvas);
+        const rect = previewContainerRef.current.getBoundingClientRect();
+        esm.resize(rect.width, rect.height);
+
+        esm.initSceneView();
+        sceneViewRef.current = new SceneViewControls(
+          esm,
+          canvas,
+          // Camera change — persist to configRef so updateStudioPreviewConfig won't reset it
+          (kf: CameraKeyframe) => {
+            configRef.current = { ...configRef.current, cameraStart: { ...kf } };
+          },
+          () => configRef.current.cueConfig,
+          // Selection change
+          (info) => {
+            setSelectionInfo(info);
+            if (info.type && info.object) {
+              const obj = info.object;
+              setTransformValues({
+                position: { x: obj.position.x, y: obj.position.y, z: obj.position.z },
+                rotation: {
+                  x: THREE.MathUtils.radToDeg(obj.rotation.x),
+                  y: THREE.MathUtils.radToDeg(obj.rotation.y),
+                  z: THREE.MathUtils.radToDeg(obj.rotation.z),
+                },
+                scale: { x: obj.scale.x, y: obj.scale.y, z: obj.scale.z },
+              });
+            } else {
+              setTransformValues(null);
+              setHotkeyAxis(null);
+            }
+          },
+          // Object transform — update config ref directly (no setState for config!)
+          (info, position, rotation, scale) => {
+            setTransformValues({
+              position: { x: position.x, y: position.y, z: position.z },
+              rotation: {
+                x: THREE.MathUtils.radToDeg(rotation.x),
+                y: THREE.MathUtils.radToDeg(rotation.y),
+                z: THREE.MathUtils.radToDeg(rotation.z),
+              },
+              scale: { x: scale.x, y: scale.y, z: scale.z },
+            });
+
+            const cfg = configRef.current;
+            if (info.type === "camera") {
+              const cfgWithCamera = {
+                ...cfg,
+                cameraStart: {
+                  x: position.x,
+                  y: position.y,
+                  z: position.z,
+                  rotationX: rotation.x,
+                  rotationY: rotation.y,
+                  rotationZ: rotation.z,
+                },
+              };
+              configRef.current = cfgWithCamera;
+              resetShadowPlaneToFollowLight(cfgWithCamera);
+              // Don't scheduleConfigUpdate — camera is already moved via gizmo
+            } else if (info.type === "cue") {
+              const instances = [...cfg.cueConfig.instances];
+              if (instances[0]) {
+                instances[0] = {
+                  ...instances[0],
+                  positionX: position.x,
+                  positionY: position.y,
+                  positionZ: position.z,
+                  scale: scale.x,
+                };
+              }
+              configRef.current = {
+                ...cfg,
+                cueConfig: {
+                  ...cfg.cueConfig,
+                  instances,
+                  spinX: rotation.x,
+                  spinY: rotation.y,
+                  spinZ: rotation.z,
+                },
+              };
+              scheduleConfigUpdate();
+            } else if (info.type === "hdriLight" && info.layerId != null) {
+              const ext = esmRef.current;
+              if (ext) {
+                resetShadowPlaneToFollowLight(cfg);
+                const { rotationX: rotX, rotationY: rotY } = ext.positionToHdriRotation(position);
+                const avgScale = (scale.x + scale.y + scale.z) / 3;
+                const newIntensity = Math.max(0.1, Math.min(3, avgScale));
+                const layers = [...cfg.hdriConfig.layers];
+                const idx = layers.findIndex((l) => l.id === info.layerId);
+                if (idx >= 0) {
+                  layers[idx] = { ...layers[idx], rotationX: rotX, rotationY: rotY, intensity: newIntensity };
+                }
+                configRef.current = { ...cfg, hdriConfig: { layers } };
+                scheduleConfigUpdate();
+              }
+            }
+          },
+          // Transform mode change
+          (mode) => {
+            setTransformMode(mode);
+            const state = sceneViewRef.current?.getHotkeyState();
+            setHotkeyAxis(state?.axis ?? null);
+          },
+          // Drag start: suppress history until drag ends
+          () => { isDraggingRef.current = true; },
+          // Drag end: push snapshot so user can undo the drag
+          () => {
+            isDraggingRef.current = false;
+            snapshotNow();
+          }
+        );
+        sceneViewRef.current.setEnabled(true);
+      }
+
+      const cfg = configRef.current;
+      await esm.setupStudioFromStudioConfig(cfg);
+      forceWhiteWalls(esm);
+      esm.updateStudioPreviewConfig(cfg);
+      esm.setViewMode("scene");
+
+      // Connect live preview canvas
+      if (previewCanvasRef.current) {
+        esm.setPreviewCanvas(previewCanvasRef.current, PREVIEW_CANVAS_SIZE);
+      }
+
+      setSceneReady(true);
+
+      // Animation loop — full-rate for smooth OrbitControls damping (mirrors VideoStudio pattern)
+      const animate = () => {
+        if (!esmRef.current) return;
+        sceneViewRef.current?.update();
+        esmRef.current.render();
+        sceneViewAnimId = requestAnimationFrame(animate);
+      };
+      sceneViewAnimId = requestAnimationFrame(animate);
+    };
+
+    setup();
+
+    return () => {
+      setSceneReady(false);
+      if (updateTimerRef.current) {
+        clearTimeout(updateTimerRef.current);
+        updateTimerRef.current = null;
+      }
+      if (sceneViewAnimId) cancelAnimationFrame(sceneViewAnimId);
+      sceneViewRef.current?.dispose();
+      sceneViewRef.current = null;
+      esmRef.current?.setPreviewCanvas(null);
+      esmRef.current?.dispose();
+      esmRef.current = null;
+
+      // Restore source ESM renderer to original size
+      const src = extractorRef.current;
+      if (src) {
+        if (srcW > 1 && srcH > 1) {
+          src.resize(srcW, srcH);
+        }
+        if (sourcePreviewWasRunning && !didApplyRef.current) {
+          src.startLivePreview();
+        } else {
+          src.render();
+        }
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, extractorRef, resetShadowPlaneToFollowLight]);
+
+  // ─── Rebuild scene on shadow enabled toggle (rare, expensive) ──────────────
+  const rebuildTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastShadowEnabled = useRef(configRef.current.shadow.enabled);
+  useEffect(() => {
+    if (!esmRef.current || !open) return;
+    const enabled = configRef.current.shadow.enabled;
+    if (enabled === lastShadowEnabled.current) return;
+    lastShadowEnabled.current = enabled;
+
+    if (rebuildTimerRef.current) clearTimeout(rebuildTimerRef.current);
+    rebuildTimerRef.current = setTimeout(async () => {
+      const esm = esmRef.current;
+      if (!esm) return;
+      sceneViewRef.current?.deselect();
+      await esm.setupStudioFromStudioConfig(configRef.current);
+      forceWhiteWalls(esm);
+      esm.updateStudioPreviewConfig(configRef.current);
+      esm.render();
+      rebuildTimerRef.current = null;
+    }, 500);
+    return () => {
+      if (rebuildTimerRef.current) clearTimeout(rebuildTimerRef.current);
+    };
+  }, [open]);
+
+  // ─── Handlers ──────────────────────────────────────────────────────────────
+  const handleSlider = useCallback((field: keyof CueShadowConfig, value: number) => {
+    const next = { ...localCfgRef.current, [field]: value };
+    localCfgRef.current = next;
+    setLocalCfg(next);
+    if (configSyncTimerRef.current) clearTimeout(configSyncTimerRef.current);
+    configSyncTimerRef.current = setTimeout(() => {
+      onConfigChangeRef.current(next);
+      configSyncTimerRef.current = null;
+    }, 150);
+  }, []);
+
+  const syncShadowStateToConfigRef = useCallback(() => {
+    const cfg = configRef.current;
+    cfg.shadow = {
+      ...cfg.shadow,
+      intensity: localCfgRef.current.intensity,
+      blur: localCfgRef.current.blur,
+    };
+  }, []);
+
+  /** Update a single cue HDRI layer (live slider/select change) */
+  const handleCueHdriLayer = useCallback((idx: number, patch: Partial<HdriLayer>) => {
+    const layers = (configRef.current.cueHdriLayers ?? []).map((l, i) =>
+      i === idx ? { ...l, ...patch } : l
+    );
+    configRef.current = { ...configRef.current, cueHdriLayers: layers };
+    setCueHdriLayersState(layers);
+    scheduleConfigUpdate();
+  }, [scheduleConfigUpdate]);
+
+  /** Add a second HDRI layer (max 2) */
+  const addCueHdriLayer = useCallback(() => {
+    const layers = configRef.current.cueHdriLayers ?? [];
+    if (layers.length >= 2) return;
+    const newLayer = createDefaultHdriLayer();
+    newLayer.rotationY = (layers[0]?.rotationY ?? 0 + 180) % 360;
+    newLayer.intensity = 0.5;
+    const updated = [...layers, newLayer];
+    configRef.current = { ...configRef.current, cueHdriLayers: updated };
+    setCueHdriLayersState(updated);
+    scheduleConfigUpdate();
+    snapshotNow();
+  }, [scheduleConfigUpdate, snapshotNow]);
+
+  /** Remove a cue HDRI layer (min 1) */
+  const removeCueHdriLayer = useCallback((idx: number) => {
+    const layers = configRef.current.cueHdriLayers ?? [];
+    if (layers.length <= 1) return;
+    const updated = layers.filter((_, i) => i !== idx);
+    configRef.current = { ...configRef.current, cueHdriLayers: updated };
+    setCueHdriLayersState(updated);
+    scheduleConfigUpdate();
+    snapshotNow();
+  }, [scheduleConfigUpdate, snapshotNow]);
+
+  /** Capture 2048×2048 clean production-camera frame (matches live preview) */
+  const captureStudio = useCallback((): string | null => {
+    const esm = esmRef.current;
+    if (!esm) return null;
+    sceneViewRef.current?.deselect();
+    return esm.captureCleanFrame(CAPTURE_SIZE, "png", wallsTransparent);
+  }, [wallsTransparent]);
+
+  /** "Áp dụng lên gậy": capture → store in config → pass to caller */
+  const handleApply = useCallback(async () => {
+    if (configSyncTimerRef.current) {
+      clearTimeout(configSyncTimerRef.current);
+      configSyncTimerRef.current = null;
+    }
+    setIsSaving(true);
+    try {
+      syncShadowStateToConfigRef();
+      const esm = esmRef.current;
+      if (esm) {
+        esm.updateStudioPreviewConfig(configRef.current);
+        esm.render();
+      }
+      const dataUrl = captureStudio();
+      const finalCfg: CueShadowConfig = {
+        ...localCfgRef.current,
+        wallsTransparent,
+        studioCapture: dataUrl ?? undefined,
+        studioConfigSnapshot: structuredClone(configRef.current),
+      };
+      didApplyRef.current = true;
+      onSave(finalCfg);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [captureStudio, onSave, wallsTransparent, syncShadowStateToConfigRef]);
+
+  const buildTemplateConfig = useCallback(() => {
+    syncShadowStateToConfigRef();
+    return {
+      intensity: localCfgRef.current.intensity,
+      blur: localCfgRef.current.blur,
+      studioConfigSnapshot: structuredClone(configRef.current),
+    };
+  }, [syncShadowStateToConfigRef]);
+
+  const showSaveMsg = useCallback((ok: boolean, text: string) => {
+    if (saveMsgTimerRef.current) clearTimeout(saveMsgTimerRef.current);
+    setSaveMsg({ ok, text });
+    saveMsgTimerRef.current = setTimeout(() => setSaveMsg(null), 3000);
+  }, []);
+
+  const refreshTemplateList = useCallback(async () => {
+    try {
+      const res = await fetch("/api/shadow-config-templates?limit=100");
+      const payload: unknown = res.ok ? await res.json() : null;
+      const { items } = parseShadowTemplateList(payload);
+      setTemplates(res.ok ? items : []);
+    } catch {
+      // Leave list as-is on network error
+    }
+  }, []);
+
+  const buildDefaultTemplateName = useCallback(() => `Mẫu bóng ${new Date().toLocaleDateString("vi-VN")}`, []);
+
+  const openSaveNewTemplateDialog = useCallback(() => {
+    setShowTemplateSaveChoiceDialog(false);
+    setTemplateNameInput(buildDefaultTemplateName());
+    setShowTemplateNameDialog(true);
+  }, [buildDefaultTemplateName]);
+
+  /** "Lưu cài đặt bóng": open in-app save dialog flow */
+  const handleSaveTemplate = useCallback(() => {
+    if (selectedTemplateId) {
+      setShowTemplateSaveChoiceDialog(true);
+      return;
+    }
+    openSaveNewTemplateDialog();
+  }, [openSaveNewTemplateDialog, selectedTemplateId]);
+
+  const handleUpdateSelectedTemplate = useCallback(async () => {
+    if (!selectedTemplateId) return;
+    const tpl = templates.find((t) => t.id === selectedTemplateId);
+    if (!tpl) return;
+
+    const config = buildTemplateConfig();
+    setIsSavingTemplate(true);
+    try {
+      const updateRes = await fetch(`/api/shadow-config-templates/${selectedTemplateId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config }),
+      });
+      if (updateRes.ok) {
+        await refreshTemplateList();
+        showSaveMsg(true, "Đã lưu mẫu bóng");
+      } else {
+        showSaveMsg(false, "Lưu thất bại");
+      }
+      setShowTemplateSaveChoiceDialog(false);
+    } catch {
+      showSaveMsg(false, "Lỗi kết nối");
+      setShowTemplateSaveChoiceDialog(false);
+    } finally {
+      setIsSavingTemplate(false);
+    }
+  }, [buildTemplateConfig, refreshTemplateList, selectedTemplateId, showSaveMsg, templates]);
+
+  const handleSaveTemplateAsNew = useCallback(async () => {
+    const name = templateNameInput.trim();
+    if (!name) return;
+
+    const config = buildTemplateConfig();
+    setIsSavingTemplate(true);
+    try {
+      const res = await fetch("/api/shadow-config-templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, config }),
+      });
+      if (res.ok) {
+        const created: unknown = await res.json();
+        const createdId = typeof created === "object" && created !== null && "id" in created ? String((created as { id: string }).id) : null;
+        if (createdId) setSelectedTemplateId(createdId);
+        await refreshTemplateList();
+        showSaveMsg(true, "Đã lưu mẫu bóng mới");
+      } else {
+        showSaveMsg(false, "Lưu thất bại");
+      }
+      setShowTemplateNameDialog(false);
+      setTemplateNameInput("");
+    } catch {
+      showSaveMsg(false, "Lỗi kết nối");
+      setShowTemplateNameDialog(false);
+    } finally {
+      setIsSavingTemplate(false);
+    }
+  }, [buildTemplateConfig, refreshTemplateList, showSaveMsg, templateNameInput]);
+
+  /** Apply a template to current session */
+  const handleApplyTemplate = useCallback(
+    (templateId: string) => {
+      const tpl = templates.find((t) => t.id === templateId);
+      if (!tpl) return;
+      setSelectedTemplateId(templateId);
+
+      const cfg = tpl.config as Record<string, unknown>;
+      const intensity = typeof cfg.intensity === "number" ? cfg.intensity : localCfgRef.current.intensity;
+      const blur = typeof cfg.blur === "number" ? cfg.blur : localCfgRef.current.blur;
+
+      localCfgRef.current = { ...localCfgRef.current, intensity, blur };
+      setLocalCfg(localCfgRef.current);
+
+      // If template has a full studio snapshot, restore it
+      if (cfg.studioConfigSnapshot && typeof cfg.studioConfigSnapshot === "object") {
+        const snap = structuredClone(cfg.studioConfigSnapshot) as VideoStudioConfig;
+        snap.shadow = { ...snap.shadow, intensity, blur };
+        // Migrate old snapshots without cueHdriLayers
+        if (!snap.cueHdriLayers || snap.cueHdriLayers.length === 0) {
+          const legacy = snap.cueHdri ?? DEFAULT_CUE_HDRI;
+          snap.cueHdriLayers = [{
+            id: crypto.randomUUID(),
+            hdriType: legacy.hdriType,
+            rotationX: legacy.rotationX,
+            rotationY: legacy.rotationY,
+            intensity: legacy.intensity,
+            enabled: true,
+          }];
+        }
+        configRef.current = snap;
+        setCueHdriLayersState(snap.cueHdriLayers ?? []);
+        scheduleConfigUpdate();
+      }
+
+      snapshotNow({ intensity, blur });
+    },
+    [templates, scheduleConfigUpdate, snapshotNow]
+  );
+
+  /** Reset the whole simulator to factory defaults so the user can craft a new shadow template */
+  const handleResetSimulator = useCallback(() => {
+    const defaults = DEFAULT_CUE_SHADOW;
+    localCfgRef.current = { ...localCfgRef.current, intensity: defaults.intensity, blur: defaults.blur };
+    setLocalCfg(localCfgRef.current);
+    wallsTransparentRef.current = false;
+    setWallsTransparent(false);
+    setSelectedTemplateId(null);
+    const freshConfig = buildWhiteStudioConfig({ ...defaults, enabled: true });
+    configRef.current = freshConfig;
+    setCueHdriLayersState(freshConfig.cueHdriLayers ?? []);
+    if (esmRef.current) {
+      esmRef.current.setWallsVisible(true);
+      esmRef.current.setTransparentBackground(false);
+      esmRef.current.updateStudioPreviewConfig(freshConfig);
+      esmRef.current.forcePreviewUpdate();
+    }
+    snapshotNow({ intensity: defaults.intensity, blur: defaults.blur, wallsTransparent: false });
+  }, [snapshotNow]);
+
+  const handleRenameTemplate = useCallback(async (id: string, newName: string) => {
+    if (!newName.trim()) return;
+    try {
+      await fetch(`/api/shadow-config-templates/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName.trim() }),
+      });
+      await refreshTemplateList();
+    } catch (err) {
+      console.error("Failed to rename template", err);
+    } finally {
+      setRenamingTemplateId(null);
+      setRenameInput("");
+    }
+  }, [refreshTemplateList]);
+
+  const handleDeleteTemplate = useCallback(async (id: string) => {
+    try {
+      await fetch(`/api/shadow-config-templates/${id}`, { method: "DELETE" });
+      if (selectedTemplateId === id) setSelectedTemplateId(null);
+      await refreshTemplateList();
+    } catch (err) {
+      console.error("Failed to delete template", err);
+    }
+  }, [refreshTemplateList, selectedTemplateId]);
+
+  const applyTransformValue = useCallback(
+    (axis: "x" | "y" | "z", prop: "position" | "rotation" | "scale", value: number) => {
+      if (!transformValues || !sceneViewRef.current) return;
+      const newValues = structuredClone(transformValues);
+      newValues[prop][axis] = value;
+      setTransformValues(newValues);
+
+      const pos = new THREE.Vector3(newValues.position.x, newValues.position.y, newValues.position.z);
+      const rot = new THREE.Euler(THREE.MathUtils.degToRad(newValues.rotation.x), THREE.MathUtils.degToRad(newValues.rotation.y), THREE.MathUtils.degToRad(newValues.rotation.z));
+      const scl = new THREE.Vector3(newValues.scale.x, newValues.scale.y, newValues.scale.z);
+      sceneViewRef.current.applyTransform(pos, rot, scl);
+    },
+    [transformValues]
+  );
+
+  // ─── Badge text ────────────────────────────────────────────────────────────
+  const modeBadgeText = (() => {
+    const label = MODE_LABELS_VN[transformMode] ?? transformMode;
+    if (hotkeyAxis) return `${label} (trục ${hotkeyAxis.toUpperCase()})`;
+    return label;
+  })();
+  const selectedTemplateName = selectedTemplateId ? templates.find((t) => t.id === selectedTemplateId)?.name : null;
+
+  // ─── Render ────────────────────────────────────────────────────────────────
+  return (
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent
+          className="w-screen h-screen max-w-none rounded-none flex flex-col p-0 gap-0"
+          onEscapeKeyDown={(e) => {
+            e.preventDefault();
+            sceneViewRef.current?.deselect();
+            setHotkeyAxis(null);
+          }}
+        >
+          <DialogHeader className="px-6 pt-4 pb-2">
+            <DialogTitle className="flex items-center gap-2 text-base flex-wrap">
+              <Lightbulb className="w-4 h-4 text-yellow-400 fill-yellow-400/30" />
+              Studio Simulator
+              <div className="flex items-center gap-0.5 ml-1">
+                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={undo} disabled={!canUndo} title="Hoàn tác (Ctrl+Z)">
+                  <Undo2 className="h-3.5 w-3.5" />
+                </Button>
+                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={redo} disabled={!canRedo} title="Làm lại (Ctrl+Shift+Z)">
+                  <Redo2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              {selectionInfo.type && (
+                <span className="ml-2 text-[11px] font-normal px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-400/40">
+                  {SELECTION_LABELS_VN[selectionInfo.type] ?? selectionInfo.type}
+                </span>
+              )}
+              {selectionInfo.type && (
+                <span
+                  className={`text-[11px] font-normal px-2 py-0.5 rounded-full border ${
+                    hotkeyAxis === "x"
+                      ? "bg-red-500/15 text-red-400 border-red-400/40"
+                      : hotkeyAxis === "y"
+                      ? "bg-green-500/15 text-green-400 border-green-400/40"
+                      : hotkeyAxis === "z"
+                      ? "bg-blue-500/15 text-blue-400 border-blue-400/40"
+                      : transformMode === "translate"
+                      ? "bg-emerald-500/15 text-emerald-400 border-emerald-400/40"
+                      : transformMode === "rotate"
+                      ? "bg-orange-500/15 text-orange-400 border-orange-400/40"
+                      : "bg-violet-500/15 text-violet-400 border-violet-400/40"
+                  }`}
+                >
+                  {modeBadgeText}
+                </span>
+              )}
+            </DialogTitle>
+            <DialogDescription className="sr-only">Trình giả lập studio 3D với bóng đổ</DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-1 overflow-hidden">
+            {/* Bên trái: Khung cảnh 3D */}
+            <div className="flex-1 flex flex-col p-4 min-w-0">
+              <div ref={previewContainerRef} className="flex-1 bg-black rounded-lg overflow-hidden relative">
+                <div
+                  className={`absolute inset-0 flex items-center justify-center bg-black/40 z-10 transition-opacity duration-500 pointer-events-none ${
+                    !sceneReady ? "opacity-100" : "opacity-0"
+                  }`}
+                >
+                  <div className="flex flex-col items-center gap-2">
+                    <Loader2 className="h-8 w-8 animate-spin text-white/70" />
+                    <span className="text-xs text-white/50">Đang thiết lập cảnh…</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground px-1 flex-wrap">
+                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">G</span>
+                <span>Di chuyển</span>
+                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">R</span>
+                <span>Xoay</span>
+                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">S</span>
+                <span>Tỷ lệ</span>
+                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">X</span>
+                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">Y</span>
+                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">Z</span>
+                <span>Khoá trục</span>
+                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">Esc</span>
+                <span>Bỏ chọn</span>
+              </div>
+            </div>
+
+            {/* Bên phải: Bảng điều khiển */}
+            <div className="w-72 shrink-0 border-l border-border flex flex-col overflow-hidden">
+              {/* Xem trước kết quả — live canvas from production camera */}
+              <div className="shrink-0 p-3 border-b border-border/50">
+                <Label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5 block">
+                  Xem trước kết quả {CAPTURE_SIZE}×{CAPTURE_SIZE}
+                </Label>
+                <div className="relative w-full aspect-square rounded-md border border-border/50 bg-muted/20 overflow-hidden">
+                  <canvas ref={previewCanvasRef} width={PREVIEW_CANVAS_SIZE} height={PREVIEW_CANVAS_SIZE} className="w-full h-full" />
+                  {!sceneReady && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-muted-foreground/40">
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      <span className="text-[10px]">Đang tải…</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-3 space-y-4">
+                {/* Biến đổi */}
+                {selectionInfo.type && transformValues && (
+                  <div className="rounded-lg border-2 border-blue-600/60 bg-card/30 p-3 space-y-3">
+                    <div className="flex gap-1">
+                      <Button
+                        variant={transformMode === "translate" ? "secondary" : "ghost"}
+                        size="sm"
+                        className="flex-1 h-7 text-xs"
+                        onClick={() => {
+                          sceneViewRef.current?.setTransformMode("translate");
+                          setTransformMode("translate");
+                          setHotkeyAxis(null);
+                        }}
+                      >
+                        <Move className="h-3 w-3 mr-1" /> Di chuyển
+                      </Button>
+                      <Button
+                        variant={transformMode === "rotate" ? "secondary" : "ghost"}
+                        size="sm"
+                        className="flex-1 h-7 text-xs"
+                        onClick={() => {
+                          sceneViewRef.current?.setTransformMode("rotate");
+                          setTransformMode("rotate");
+                          setHotkeyAxis(null);
+                        }}
+                      >
+                        <RotateCcw className="h-3 w-3 mr-1" /> Xoay
+                      </Button>
+                      <Button
+                        variant={transformMode === "scale" ? "secondary" : "ghost"}
+                        size="sm"
+                        className="flex-1 h-7 text-xs"
+                        onClick={() => {
+                          sceneViewRef.current?.setTransformMode("scale");
+                          setTransformMode("scale");
+                          setHotkeyAxis(null);
+                        }}
+                      >
+                        <Maximize2 className="h-3 w-3 mr-1" /> Tỷ lệ
+                      </Button>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Vị trí</Label>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <TransformInput label="X" value={transformValues.position.x} onChange={(v) => applyTransformValue("x", "position", v)} />
+                        <TransformInput label="Y" value={transformValues.position.y} onChange={(v) => applyTransformValue("y", "position", v)} />
+                        <TransformInput label="Z" value={transformValues.position.z} onChange={(v) => applyTransformValue("z", "position", v)} />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Xoay</Label>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <TransformInput label="X" value={transformValues.rotation.x} onChange={(v) => applyTransformValue("x", "rotation", v)} suffix="°" />
+                        <TransformInput label="Y" value={transformValues.rotation.y} onChange={(v) => applyTransformValue("y", "rotation", v)} suffix="°" />
+                        <TransformInput label="Z" value={transformValues.rotation.z} onChange={(v) => applyTransformValue("z", "rotation", v)} suffix="°" />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Tỷ lệ</Label>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <TransformInput label="X" value={transformValues.scale.x} onChange={(v) => applyTransformValue("x", "scale", v)} />
+                        <TransformInput label="Y" value={transformValues.scale.y} onChange={(v) => applyTransformValue("y", "scale", v)} />
+                        <TransformInput label="Z" value={transformValues.scale.z} onChange={(v) => applyTransformValue("z", "scale", v)} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Mẫu bóng đổ */}
+                <div className="rounded-lg border border-border/50 bg-card/30 p-3 space-y-2">
+                  <Label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Mẫu bóng đổ</Label>
+                  <Popover open={templateDropdownOpen} onOpenChange={setTemplateDropdownOpen}>
+                    <PopoverTrigger asChild>
+                      <button
+                        className="w-full h-8 flex items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-xs disabled:opacity-50 hover:bg-accent/40 transition-colors"
+                        disabled={templates.length === 0}
+                      >
+                        <span className="truncate text-left flex-1">
+                          {selectedTemplateId
+                            ? (templates.find((t) => t.id === selectedTemplateId)?.name ?? "Chọn mẫu…")
+                            : templates.length > 0 ? "Chọn mẫu…" : "Chưa có mẫu"}
+                        </span>
+                        <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-64 p-1" align="start">
+                      <div className="max-h-48 overflow-y-auto">
+                        {templates.map((t) => (
+                          <div
+                            key={t.id}
+                            className={`group flex items-center gap-1 rounded px-2 py-1.5 ${selectedTemplateId === t.id ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
+                          >
+                            {renamingTemplateId === t.id ? (
+                              <>
+                                <Input
+                                  className="h-6 text-xs flex-1 py-0 px-1"
+                                  value={renameInput}
+                                  onChange={(e) => setRenameInput(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") handleRenameTemplate(t.id, renameInput);
+                                    if (e.key === "Escape") { setRenamingTemplateId(null); setRenameInput(""); }
+                                  }}
+                                  autoFocus
+                                />
+                                <button
+                                  className="shrink-0 text-green-500 hover:text-green-400"
+                                  onClick={() => handleRenameTemplate(t.id, renameInput)}
+                                  title="Lưu tên"
+                                >
+                                  <Check className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  className="shrink-0 text-muted-foreground hover:text-foreground"
+                                  onClick={() => { setRenamingTemplateId(null); setRenameInput(""); }}
+                                  title="Hủy"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <span
+                                  className="flex-1 text-xs truncate cursor-pointer"
+                                  onClick={() => { handleApplyTemplate(t.id); setTemplateDropdownOpen(false); }}
+                                  title={t.name}
+                                >
+                                  {t.name}
+                                </span>
+                                <button
+                                  className="shrink-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+                                  onClick={(e) => { e.stopPropagation(); setRenamingTemplateId(t.id); setRenameInput(t.name); }}
+                                  title="Đổi tên"
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </button>
+                                <button
+                                  className="shrink-0 opacity-0 group-hover:opacity-100 text-destructive/70 hover:text-destructive transition-opacity"
+                                  onClick={(e) => { e.stopPropagation(); handleDeleteTemplate(t.id); }}
+                                  title="Xóa"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full h-7 text-xs gap-1.5"
+                    onClick={handleResetSimulator}
+                    title="Đặt lại toàn bộ simulator về mặc định để tạo mẫu bóng mới"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    Tạo Mẫu Bóng Mới
+                  </Button>
+                </div>
+
+                {/* HDRI Cơ — multi-layer (max 2) */}
+                <div className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+                  <div className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium">
+                    <button
+                      type="button"
+                      className="flex flex-1 items-center gap-2 hover:text-foreground transition-colors min-w-0"
+                      onClick={() => setCueHdriOpen(v => !v)}
+                    >
+                      <Sun className="h-3.5 w-3.5 text-yellow-400 shrink-0" />
+                      <span>HDRI Cơ</span>
+                      <span className="text-[10px] text-muted-foreground ml-1">({cueHdriLayersState.length}/2)</span>
+                      <span className="flex-1" />
+                      {cueHdriOpen
+                        ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+                    </button>
+                    {cueHdriLayersState.length < 2 && (
+                      <button
+                        type="button"
+                        className="p-0.5 rounded hover:bg-muted/60 transition-colors shrink-0"
+                        onClick={addCueHdriLayer}
+                        title="Thêm lớp HDRI"
+                      >
+                        <Plus className="h-3 w-3 text-muted-foreground" />
+                      </button>
+                    )}
+                  </div>
+                  {cueHdriOpen && (
+                    <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-4">
+                      <p className="text-[10px] text-muted-foreground">HDRI chỉ áp dụng cho cơ. Có thể pha trộn tối đa 2 lớp HDRI.</p>
+                      {cueHdriLayersState.map((layer, idx) => (
+                        <div key={layer.id} className="space-y-2 rounded-md border border-border/40 bg-muted/10 px-2.5 pb-2.5 pt-2">
+                          {/* Layer header: enable toggle + label + remove */}
+                          <div className="flex items-center gap-2">
+                            <Checkbox
+                              id={`cue-hdri-layer-${idx}`}
+                              checked={layer.enabled}
+                              onCheckedChange={(v) => {
+                                handleCueHdriLayer(idx, { enabled: !!v });
+                                snapshotNow();
+                              }}
+                              className="h-3.5 w-3.5"
+                            />
+                            <label htmlFor={`cue-hdri-layer-${idx}`} className="text-[10px] font-medium flex-1 cursor-pointer select-none">
+                              Lớp {idx + 1}
+                            </label>
+                            {cueHdriLayersState.length > 1 && (
+                              <button
+                                type="button"
+                                className="p-0.5 rounded hover:bg-destructive/20 transition-colors"
+                                onClick={() => removeCueHdriLayer(idx)}
+                                title="Xóa lớp"
+                              >
+                                <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                              </button>
+                            )}
+                          </div>
+                          {/* HDRI type */}
+                          <div className="space-y-0.5">
+                            <Label className="text-[10px] text-muted-foreground">Môi trường</Label>
+                            <Select
+                              value={layer.hdriType}
+                              onValueChange={(v) => {
+                                handleCueHdriLayer(idx, { hdriType: v });
+                                snapshotNow();
+                              }}
+                            >
+                              <SelectTrigger className="h-6 text-[10px]">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {HDRI_OPTIONS_FALLBACK.filter((h) => h.id !== STUDIO_WHITE_HDRI).map((h) => (
+                                  <SelectItem key={h.id} value={h.id} className="text-[10px]">
+                                    {h.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {/* Rotation Y */}
+                          <div className="space-y-0.5">
+                            <Label className="text-[10px] text-muted-foreground">
+                              Ngang — {layer.rotationY.toFixed(0)}°
+                            </Label>
+                            <Slider
+                              value={[layer.rotationY]}
+                              onValueChange={([v]) => handleCueHdriLayer(idx, { rotationY: v })}
+                              onValueCommit={() => snapshotNow()}
+                              min={0} max={360} step={1}
+                            />
+                          </div>
+                          {/* Rotation X */}
+                          <div className="space-y-0.5">
+                            <Label className="text-[10px] text-muted-foreground">
+                              Dọc — {layer.rotationX.toFixed(0)}°
+                            </Label>
+                            <Slider
+                              value={[layer.rotationX]}
+                              onValueChange={([v]) => handleCueHdriLayer(idx, { rotationX: v })}
+                              onValueCommit={() => snapshotNow()}
+                              min={0} max={360} step={1}
+                            />
+                          </div>
+                          {/* Intensity */}
+                          <div className="space-y-0.5">
+                            <Label className="text-[10px] text-muted-foreground">
+                              Cường độ — {(layer.intensity * 100).toFixed(0)}%
+                            </Label>
+                            <Slider
+                              value={[layer.intensity]}
+                              onValueChange={([v]) => handleCueHdriLayer(idx, { intensity: v })}
+                              onValueCommit={() => snapshotNow()}
+                              min={0} max={3} step={0.05}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                      {cueHdriLayersState.length < 2 && (
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border/60 py-1.5 text-[10px] text-muted-foreground hover:border-border hover:bg-muted/20 transition-colors"
+                          onClick={addCueHdriLayer}
+                        >
+                          <Plus className="h-3 w-3" />
+                          Thêm lớp HDRI
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Cài đặt bóng đổ */}
+                <div className="rounded-lg border border-border/50 bg-card/30 p-3 space-y-3">
+                  <Label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Cài đặt bóng đổ</Label>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs text-muted-foreground">Cường độ</Label>
+                      <span className="text-xs tabular-nums text-muted-foreground">{Math.round(localCfg.intensity * 100)}%</span>
+                    </div>
+                    <Slider value={[localCfg.intensity]} onValueChange={([v]) => handleSlider("intensity", v)} onValueCommit={() => snapshotNow()} min={0} max={1} step={0.01} />
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs text-muted-foreground">Làm mờ</Label>
+                      <span className="text-xs tabular-nums text-muted-foreground">{localCfg.blur.toFixed(0)}</span>
+                    </div>
+                    <Slider value={[localCfg.blur]} onValueChange={([v]) => handleSlider("blur", v)} onValueCommit={() => snapshotNow()} min={0} max={20} step={0.5} />
+                  </div>
+
+                  {/* Transparent walls toggle */}
+                  <div className="border-t border-border/30 pt-2">
+                    <Button
+                      variant={wallsTransparent ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 text-xs w-full gap-1.5"
+                      onClick={() => {
+                        const newWalls = !wallsTransparentRef.current;
+                        setWallsTransparent(newWalls);
+                        snapshotNow({ wallsTransparent: newWalls });
+                      }}
+                    >
+                      {wallsTransparent ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      {wallsTransparent ? "Đang ẩn tường / sàn" : "Ẩn tường / sàn (nền trong suốt)"}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="px-6 py-3 border-t shrink-0 flex justify-between">
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={handleSaveTemplate} disabled={!sceneReady || isSavingTemplate}>
+                {isSavingTemplate ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileUp className="w-4 h-4 mr-2" />}
+                Lưu cài đặt bóng
+              </Button>
+              {saveMsg && (
+                <span className={`flex items-center gap-1 text-xs ${saveMsg.ok ? "text-green-500" : "text-destructive"}`}>
+                  {saveMsg.ok ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+                  {saveMsg.text}
+                </span>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={handleApply} disabled={!sceneReady || isSaving}>
+                {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                Áp dụng lên gậy
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showTemplateSaveChoiceDialog}
+        onOpenChange={(nextOpen) => {
+          if (!isSavingTemplate) setShowTemplateSaveChoiceDialog(nextOpen);
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Lưu cài đặt bóng</DialogTitle>
+            <DialogDescription>Chọn cách lưu mẫu bóng hiện tại.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-1">
+            <Button className="w-full justify-start" variant="outline" onClick={handleUpdateSelectedTemplate} disabled={isSavingTemplate}>
+              {isSavingTemplate ? "Đang lưu..." : `Cập nhật "${selectedTemplateName ?? "Mẫu hiện tại"}"`}
+            </Button>
+            <Button className="w-full justify-start" variant="outline" onClick={openSaveNewTemplateDialog} disabled={isSavingTemplate}>
+              Lưu thành mẫu mới
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowTemplateSaveChoiceDialog(false)} disabled={isSavingTemplate}>
+              Hủy
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showTemplateNameDialog}
+        onOpenChange={(nextOpen) => {
+          if (!isSavingTemplate) setShowTemplateNameDialog(nextOpen);
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Tên mẫu bóng đổ</DialogTitle>
+            <DialogDescription className="sr-only">Nhập tên mẫu để lưu cài đặt bóng đổ hiện tại.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-1">
+            <Label htmlFor="shadow-template-name">Tên mẫu</Label>
+            <Input
+              id="shadow-template-name"
+              value={templateNameInput}
+              onChange={(e) => setTemplateNameInput(e.target.value)}
+              placeholder="Mẫu bóng của tôi"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && templateNameInput.trim()) {
+                  void handleSaveTemplateAsNew();
+                }
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowTemplateNameDialog(false)} disabled={isSavingTemplate}>
+              Hủy
+            </Button>
+            <Button
+              onClick={() => {
+                void handleSaveTemplateAsNew();
+              }}
+              disabled={!templateNameInput.trim() || isSavingTemplate}
+            >
+              {isSavingTemplate ? "Đang lưu..." : "Lưu"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}

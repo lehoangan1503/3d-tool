@@ -370,6 +370,9 @@ export class SceneViewControls {
       this.hotkeyAxisLock = key as "x" | "y" | "z";
       // Also update TransformControls axis visibility for visual feedback
       this.setAxisLock(key as "x" | "y" | "z");
+      // Re-fire mode change so parent can read updated axis via getHotkeyState()
+      const mode = this.activeHotkey === "g" ? "translate" : this.activeHotkey === "r" ? "rotate" : "scale";
+      this.onTransformModeChange?.(mode);
       return;
     }
 
@@ -448,7 +451,7 @@ export class SceneViewControls {
       const axis = this.hotkeyAxisLock;
       if (!axis || axis === "x") pos.x += dx * speed;
       if (!axis || axis === "y") pos.y -= dy * speed;
-      if (axis === "z") pos.z += dx * speed;
+      if (axis === "z") pos.z -= dx * speed;
       obj.position.copy(pos);
     } else if (this.activeHotkey === "r") {
       // Rotate around world axis using quaternions (matches TransformControls behavior)
@@ -597,6 +600,13 @@ export class SceneViewControls {
 
   getTransformMode(): "translate" | "rotate" | "scale" {
     return (this.transformControls?.mode as "translate" | "rotate" | "scale") ?? "translate";
+  }
+
+  /** Current hotkey state for badge display (e.g. "translate" + "y" axis lock) */
+  getHotkeyState(): { mode: "translate" | "rotate" | "scale" | null; axis: "x" | "y" | "z" | null } {
+    if (!this.activeHotkey) return { mode: null, axis: null };
+    const mode = this.activeHotkey === "g" ? "translate" : this.activeHotkey === "r" ? "rotate" : "scale";
+    return { mode, axis: this.hotkeyAxisLock };
   }
 
   /** Apply typed transform values to the currently selected object */

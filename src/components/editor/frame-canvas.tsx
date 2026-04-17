@@ -121,6 +121,9 @@ export function FrameCanvas({
   const renderScale = DISPLAY_SIZE / CANVAS_SIZE;
   const interactionScale = renderScale * canvasView.zoom;
   const selectedFrame = frames.find(f => f.id === selectedFrameId && isCueFrame(f)) as CueFrame | undefined;
+  const selectedCueUsesStudioCapture = Boolean(
+    selectedFrame?.cue.studioShadow?.enabled && selectedFrame?.cue.studioShadow?.studioCapture
+  );
 
   // Z + scroll → zoom the canvas viewport (native handler to allow preventDefault on wheel)
   useEffect(() => {
@@ -136,7 +139,7 @@ export function FrameCanvas({
       const mx = e.clientX - rect.left - rect.width / 2;
       const my = e.clientY - rect.top - rect.height / 2;
 
-      const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+      const zoomFactor = e.deltaY > 0 ? 1.1 : 0.9;
 
       setCanvasView(prev => {
         const newZoom = Math.max(0.25, Math.min(8, prev.zoom * zoomFactor));
@@ -194,13 +197,13 @@ export function FrameCanvas({
   useEffect(() => {
     const extractor = extractorRef.current;
     if (!extractor || !extractorReady) return;
-    if (selectedFrame) {
+    if (selectedFrame && !selectedCueUsesStudioCapture) {
       extractor.startLivePreview();   // resume (guard inside prevents double-start)
     } else {
       extractor.stopLivePreview();    // pause — nothing to render in 3D
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedFrame?.id, extractorReady]);  // intentionally omit extractorRef (stable ref object)
+  }, [selectedFrame?.id, selectedCueUsesStudioCapture, extractorReady]);  // intentionally omit extractorRef (stable ref object)
 
   // Capture screenshot when selection changes (deselecting a CUE frame)
   useEffect(() => {
@@ -208,9 +211,16 @@ export function FrameCanvas({
     if (prevId && prevId !== selectedFrameId) {
       // Only capture from the 3D extractor when the PREVIOUS frame was a CUE frame
       const prevFrame = frames.find(f => f.id === prevId);
-      if (prevFrame && isCueFrame(prevFrame) && extractorRef.current) {
-        const screenshot = extractorRef.current.captureFrame('png');
-        onScreenshotCapture(prevId, screenshot);
+      if (prevFrame && isCueFrame(prevFrame)) {
+        const studioCapture = prevFrame.cue.studioShadow?.enabled
+          ? prevFrame.cue.studioShadow?.studioCapture
+          : null;
+        if (studioCapture) {
+          onScreenshotCapture(prevId, studioCapture);
+        } else if (extractorRef.current) {
+          const screenshot = extractorRef.current.captureFrame('png');
+          onScreenshotCapture(prevId, screenshot);
+        }
       }
     }
     previousSelectedIdRef.current = selectedFrameId;
@@ -224,7 +234,7 @@ export function FrameCanvas({
     console.log('[FrameCanvas] useEffect: container=', !!container, 'extractor=', !!extractor, 'selectedFrameId=', selectedFrameId, 'extractorReady=', extractorReady);
     
     // Wait for extractor to be ready (model and HDRI loaded)
-    if (!container || !extractor || !selectedFrameId || !extractorReady) {
+    if (!container || !extractor || !selectedFrameId || !extractorReady || selectedCueUsesStudioCapture) {
       canvasAttachedRef.current = false;
       return;
     }
@@ -275,7 +285,7 @@ export function FrameCanvas({
     return () => {
       // Don't remove canvas on cleanup - let it persist for next selection
     };
-  }, [selectedFrameId, selectedFrame, extractorRef, extractorReady]);
+  }, [selectedFrameId, selectedFrame, extractorRef, extractorReady, selectedCueUsesStudioCapture]);
 
   // Memoize hdriLayers to detect actual changes (not just reference changes)
   const hdriLayersKey = useMemo(() => {
@@ -285,7 +295,7 @@ export function FrameCanvas({
 
   // Fast updates - model rotation, camera, zoom, offset (no HDRI)
   useEffect(() => {
-    if (!extractorRef.current || !selectedFrame || !extractorReady) return;
+    if (!extractorRef.current || !selectedFrame || !extractorReady || selectedCueUsesStudioCapture) return;
     
     extractorRef.current.resize(
       Math.round(selectedFrame.transform.width),
@@ -304,13 +314,14 @@ export function FrameCanvas({
     selectedFrame?.cue.zoom,
     selectedFrame?.cue.offsetX,
     selectedFrame?.cue.offsetY,
+    selectedCueUsesStudioCapture,
     extractorRef,
     extractorReady
   ]);
 
   // Slow updates - HDRI layers (debounced)
   useEffect(() => {
-    if (!extractorRef.current || !selectedFrame || !extractorReady) return;
+    if (!extractorRef.current || !selectedFrame || !extractorReady || selectedCueUsesStudioCapture) return;
     if (!hdriLayersKey) return;
     
     // Debounce HDRI updates to avoid lag during slider drag
@@ -325,11 +336,11 @@ export function FrameCanvas({
     }, 100); // 100ms debounce
     
     return () => clearTimeout(timeoutId);
-  }, [hdriLayersKey, selectedFrame?.cue.lightAngle, extractorRef, extractorReady]);
+  }, [hdriLayersKey, selectedFrame?.cue.lightAngle, selectedCueUsesStudioCapture, extractorRef, extractorReady]);
 
   // Studio shadow updates — apply whenever studioShadow config changes on the selected CueFrame
   useEffect(() => {
-    if (!extractorRef.current || !selectedFrame || !extractorReady) return;
+    if (!extractorRef.current || !selectedFrame || !extractorReady || selectedCueUsesStudioCapture) return;
     if (!isCueFrame(selectedFrame)) return;
     const shadow: CueShadowConfig = selectedFrame.cue.studioShadow ?? DEFAULT_CUE_SHADOW;
     extractorRef.current.setFrameShadow(shadow);
@@ -338,6 +349,7 @@ export function FrameCanvas({
     // Stringify shadow config so deep equality works without a separate memo
     // eslint-disable-next-line react-hooks/exhaustive-deps
     JSON.stringify(selectedFrame && isCueFrame(selectedFrame) ? selectedFrame.cue.studioShadow : null),
+    selectedCueUsesStudioCapture,
     extractorRef,
     extractorReady,
   ]);
@@ -641,7 +653,7 @@ export function FrameCanvas({
               IMAGE frames that are selected remain here so they stay visible with selection handles. */}
           {frames.filter(f => {
             if (hiddenFrameIds?.has(f.id)) return false;
-            if (f.id === selectedFrameId && isCueFrame(f)) return false;
+            if (f.id === selectedFrameId && isCueFrame(f) && !selectedCueUsesStudioCapture) return false;
             return true;
           }).map((frame) => (
             <StaticFrame
@@ -657,7 +669,7 @@ export function FrameCanvas({
           ))}
 
           {/* Selected frame 3D canvas container (clipped) */}
-          {selectedFrame && !hiddenFrameIds?.has(selectedFrame.id) && (
+          {selectedFrame && !hiddenFrameIds?.has(selectedFrame.id) && !selectedCueUsesStudioCapture && (
             <div
               data-frame-id={selectedFrame.id}
               className="absolute"
@@ -744,12 +756,14 @@ export function FrameCanvas({
             )}
 
             {/* 3D interaction area - INSIDE the frame (inset from border) */}
-            <div
-              className="absolute inset-3 cursor-grab active:cursor-grabbing pointer-events-auto rounded"
-              onMouseDown={handleCueStart}
-              onWheel={handleWheel}
-              onContextMenu={(e) => e.preventDefault()}
-            />
+            {!selectedCueUsesStudioCapture && (
+              <div
+                className="absolute inset-3 cursor-grab active:cursor-grabbing pointer-events-auto rounded"
+                onMouseDown={handleCueStart}
+                onWheel={handleWheel}
+                onContextMenu={(e) => e.preventDefault()}
+              />
+            )}
 
             {/* Move border area - outer strip for dragging the frame */}
             <div
@@ -805,9 +819,11 @@ export function FrameCanvas({
             </div>
 
             {/* Frame label */}
-            <div className="absolute bottom-1 left-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded pointer-events-none z-10">
-              {selectedFrame.cue.zoom.toFixed(1)}x
-            </div>
+            {!selectedCueUsesStudioCapture && (
+              <div className="absolute bottom-1 left-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded pointer-events-none z-10">
+                {selectedFrame.cue.zoom.toFixed(1)}x
+              </div>
+            )}
           </div>
         )}
 

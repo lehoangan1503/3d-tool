@@ -83,6 +83,7 @@ export class ExtractorSceneManager {
   /** Cue-only HDRI env map (separate from studio surfaces) */
   private cueEnvRT: THREE.WebGLRenderTarget | null = null;
   private lastCueHdriKey: string = '';
+  private lastCueHdriLayersKey: string = '';
   private isDisposed = false;
 
   // HDRI state - supports multi-HDRI
@@ -103,6 +104,10 @@ export class ExtractorSceneManager {
   // Studio elements (for video)
   private backdrop: THREE.Mesh | null = null;
   private shadowFloor: THREE.Mesh | null = null;
+  private shadowFloorBaseY = 0;
+  // Stored shadow offsets re-applied whenever lights are rebuilt
+  private _shadowOffsetX = 0;
+  private _shadowOffsetZ = 0;
   private wallShadowPlane: THREE.Mesh | null = null;
   private tableSurface: THREE.Mesh | null = null;
 
@@ -118,16 +123,19 @@ export class ExtractorSceneManager {
   // Studio shadow for CueFrame (image extractor) — independent from video-studio lights
   private frameShadowLight: THREE.DirectionalLight | null = null;
   private frameShadowFloor: THREE.Mesh | null = null;
-  // White studio backdrop (floor base + back wall) shown when shadow is enabled
-  private frameFloorBase: THREE.Mesh | null = null;
-  private frameWallBase: THREE.Mesh | null = null;
+  private frameShadowBaseY = 0;
+  // Wall and table backdrops shown when shadow is enabled (matches Video Studio layout)
+  private frameWallBackdrop: THREE.Mesh | null = null;
+  private frameTableBackdrop: THREE.Mesh | null = null;
 
-  // Frame shadow studio dimensions (match video studio for consistency)
-  private static readonly FRAME_STUDIO_WIDTH = 36;
-  private static readonly FRAME_STUDIO_WALL_HEIGHT = 24;
-  private static readonly FRAME_STUDIO_FLOOR_DEPTH = 14;
-  private static readonly FRAME_STUDIO_CORNER_Y = -1.18;
-  private static readonly FRAME_STUDIO_WALL_Z = -3;
+  // Frame shadow studio dimensions — SAME AS VIDEO STUDIO for consistency
+  // Video studio: wall at (0, 4.5, -5.5), 34×24; table at y=-7.5, depth=12
+  private static readonly FRAME_WALL_WIDTH = 34;
+  private static readonly FRAME_WALL_HEIGHT = 24;
+  private static readonly FRAME_WALL_Y = 4.5;
+  private static readonly FRAME_WALL_Z = -5.5;
+  private static readonly FRAME_TABLE_Y = -7.5;
+  private static readonly FRAME_TABLE_DEPTH = 12;
   private static readonly FRAME_SHADOW_FRUSTUM = 20;
 
   // Track last loaded HDRI file for change detection
@@ -172,6 +180,14 @@ export class ExtractorSceneManager {
   private static readonly MINIMAP_H = 324;
   private static readonly MINIMAP_INTERVAL = 6; // render every Nth frame (~10fps)
 
+  // Preview: render production camera view to a square canvas (used by shadow simulator)
+  private _previewCanvas: HTMLCanvasElement | null = null;
+  private _previewTarget: THREE.WebGLRenderTarget | null = null;
+  private _previewBuf: Uint8Array | null = null;
+  private _previewSize = 512;
+  private _previewFrameCount = 0;
+  private static readonly PREVIEW_INTERVAL = 10; // every 10th frame (~6fps) to reduce readback cost
+
   // Frame plane meshes (for interactive scene view)
   private wallFramePlanes: THREE.Mesh[] = [];
   private tableFramePlanes: THREE.Mesh[] = [];
@@ -208,7 +224,7 @@ export class ExtractorSceneManager {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.5;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.VSMShadowMap;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x1a1a1a);
@@ -272,7 +288,7 @@ export class ExtractorSceneManager {
       light.position.copy(pos);
       light.target.position.set(0, 0, 0);
       light.castShadow = true;
-      light.shadow.mapSize.set(4096, 4096);
+      light.shadow.mapSize.set(2048, 2048);
       light.shadow.camera.near = 0.1;
       light.shadow.camera.far = 50;
       light.shadow.camera.left = -20;
@@ -345,6 +361,7 @@ export class ExtractorSceneManager {
       (this.shadowFloor.material as THREE.Material).dispose();
       this.shadowFloor.geometry.dispose();
       this.shadowFloor = null;
+      this.shadowFloorBaseY = 0;
     }
     if (this.wallShadowPlane) {
       this.scene.remove(this.wallShadowPlane);
@@ -402,21 +419,24 @@ export class ExtractorSceneManager {
       light.position.copy(pos);
       light.target.position.set(0, 0, 0);
       light.castShadow = shadow.enabled;
-      light.shadow.mapSize.set(4096, 4096);
+      light.shadow.mapSize.set(2048, 2048);
       light.shadow.camera.near = 0.1;
       light.shadow.camera.far = 50;
       light.shadow.camera.left = -12;
       light.shadow.camera.right = 12;
       light.shadow.camera.top = 12;
       light.shadow.camera.bottom = -12;
-      light.shadow.bias = 0.0001;
+      light.shadow.bias = -0.0001;
       light.shadow.normalBias = 0.02;
-      light.shadow.radius = shadow.blur ?? 3;
+      light.shadow.radius = Math.max(shadow.blur ?? 3, 4);
+      light.shadow.blurSamples = 20;
 
       this.scene.add(light);
       this.scene.add(light.target);
       this.hdriShadowLights.push({ layerId: layer.id, light });
     }
+    // Re-apply stored offset so lights point at the correct shadow target after rebuild
+    this._applyShadowLightOffset(this._shadowOffsetX, this._shadowOffsetZ);
   }
 
   /** Update HDRI shadow light positions/properties without full rebuild */
@@ -441,12 +461,39 @@ export class ExtractorSceneManager {
       entry.light.color.set(layer.lightColor ?? '#ffffff');
       entry.light.userData = { baseIntensity };
       entry.light.castShadow = shadow.enabled;
-      entry.light.shadow.radius = shadow.blur ?? 3;
+      entry.light.shadow.radius = Math.max(shadow.blur ?? 3, 4);
+      entry.light.shadow.blurSamples = 20;
     }
 
     if (this.shadowFloor) {
       (this.shadowFloor.material as THREE.ShadowMaterial).opacity = shadow.intensity;
     }
+  }
+
+  /** Shift all HDRI shadow light targets to (offsetX, 0, offsetZ) so the shadow spot moves in X/Z. */
+  private _applyShadowLightOffset(offsetX: number, offsetZ: number): void {
+    for (const entry of this.hdriShadowLights) {
+      entry.light.target.position.set(offsetX, 0, offsetZ);
+      entry.light.target.updateMatrixWorld();
+      entry.light.shadow.needsUpdate = true;
+    }
+  }
+
+  /** Show or hide backdrop wall, table surface and their frame planes (for transparent capture). */
+  setWallsVisible(visible: boolean): void {
+    if (this.backdrop) this.backdrop.visible = visible;
+    if (this.tableSurface) this.tableSurface.visible = visible;
+    for (const p of this.wallFramePlanes) p.visible = visible;
+    for (const p of this.tableFramePlanes) p.visible = visible;
+  }
+
+  /**
+   * Force the preview canvas to update on the very next render() call.
+   * Call after changing shadow or wall visibility so the live preview reflects
+   * the change immediately instead of waiting for the next preview interval.
+   */
+  forcePreviewUpdate(): void {
+    this._previewFrameCount = ExtractorSceneManager.PREVIEW_INTERVAL;
   }
 
   /** Get HDRI light helper objects for raycasting */
@@ -889,6 +936,75 @@ export class ExtractorSceneManager {
       this.applyCueEnvMap(rt.texture, config.intensity);
     } catch (err) {
       console.error('[ESM] Failed to set cue HDRI:', err);
+    }
+  }
+
+  /** Blend up to 2 HDRI layers and apply the result only to cue materials.
+   *  Used by the Studio Simulator's mixed-HDRI feature. Deduplicates internally. */
+  async setCueHdriLayers(layers: HdriLayer[]): Promise<void> {
+    const activeLayers = layers.filter(l => l.enabled !== false);
+    if (activeLayers.length === 0) return;
+
+    const key = JSON.stringify(activeLayers.map(l => ({
+      t: l.hdriType, i: l.intensity,
+      rx: Math.round(l.rotationX), ry: Math.round(l.rotationY),
+    })));
+    if (key === this.lastCueHdriLayersKey) return;
+
+    try {
+      const textures: THREE.DataTexture[] = [];
+      const intensities: number[] = [];
+      for (const layer of activeLayers) {
+        try {
+          const tex = await this.loadAndCacheHdri(layer.hdriType);
+          textures.push(tex);
+          intensities.push(layer.intensity ?? 1);
+        } catch (loadErr) {
+          console.error('[ESM] setCueHdriLayers: failed to load HDRI', layer.hdriType, loadErr);
+        }
+      }
+      if (textures.length === 0) return;
+
+      // Apply per-layer rotation
+      const rotated: THREE.DataTexture[] = [];
+      for (let i = 0; i < textures.length; i++) {
+        const rx = activeLayers[i].rotationX ?? 0;
+        const ry = activeLayers[i].rotationY ?? 0;
+        if (rx !== 0 || ry !== 0) {
+          const r = this.createRotatedHdriTextureXY(textures[i], rx, ry);
+          rotated.push(r ?? textures[i]);
+        } else {
+          rotated.push(textures[i]);
+        }
+      }
+
+      let finalTex: THREE.DataTexture;
+      if (rotated.length === 1) {
+        finalTex = intensities[0] !== 1
+          ? this.blendHdriTextures(rotated, intensities)
+          : rotated[0].clone();
+      } else {
+        finalTex = this.blendHdriTextures(rotated, intensities);
+      }
+
+      // Dispose intermediate rotated copies (not the originals from cache)
+      for (let i = 0; i < rotated.length; i++) {
+        if (rotated[i] !== textures[i]) rotated[i].dispose();
+      }
+
+      finalTex.mapping = THREE.EquirectangularReflectionMapping;
+      const rt = this.pmremGenerator.fromEquirectangular(finalTex);
+      finalTex.dispose();
+
+      if (this.cueEnvRT) this.cueEnvRT.dispose();
+      this.cueEnvRT = rt;
+      this.lastCueHdriLayersKey = key;
+      // Invalidate single-HDRI cache so setCueHdri re-applies if called later
+      this.lastCueHdriKey = '';
+
+      this.applyCueEnvMap(rt.texture, 1.0);
+    } catch (err) {
+      console.error('[ESM] Failed to set cue HDRI layers:', err);
     }
   }
 
@@ -1573,8 +1689,23 @@ export class ExtractorSceneManager {
    * This light is completely separate from HDRI/cue lighting — it only affects the shadow.
    * A white (or custom-color) floor base and back wall are also added to create the
    * seamless-paper studio look used in the simulator capture.
+   * Layout matches Video Studio exactly: wall at (0, 4.5, -5.5), table at y=-7.5.
    */
-  setFrameShadow(config: { enabled: boolean; lightX: number; lightY: number; lightZ: number; intensity: number; blur: number; wallColor?: string; wallGradientEnd?: string }): void {
+  setFrameShadow(config: {
+    enabled: boolean;
+    lightX: number;
+    lightY: number;
+    lightZ: number;
+    intensity: number;
+    blur: number;
+    wallColor?: string;
+    wallGradientEnd?: string;
+    shadowOffsetX?: number;
+    shadowOffsetY?: number;
+    shadowOffsetZ?: number;
+    shadowScale?: number;
+    shadowRotationY?: number;
+  }): void {
     if (!config.enabled) {
       this.clearFrameShadow();
       return;
@@ -1582,56 +1713,66 @@ export class ExtractorSceneManager {
 
     const wallColor = config.wallColor ?? '#ffffff';
     const wallGradientEnd = config.wallGradientEnd;
-    const { FRAME_STUDIO_WIDTH, FRAME_STUDIO_WALL_HEIGHT, FRAME_STUDIO_FLOOR_DEPTH, 
-            FRAME_STUDIO_CORNER_Y, FRAME_STUDIO_WALL_Z, FRAME_SHADOW_FRUSTUM } = ExtractorSceneManager;
+    const { FRAME_WALL_WIDTH, FRAME_WALL_HEIGHT, FRAME_WALL_Y, FRAME_WALL_Z,
+            FRAME_TABLE_Y, FRAME_TABLE_DEPTH, FRAME_SHADOW_FRUSTUM } = ExtractorSceneManager;
 
-    // ── White floor base (MeshBasicMaterial behind shadow overlay) ───────────
-    if (!this.frameFloorBase) {
-      this.frameFloorBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(FRAME_STUDIO_WIDTH, FRAME_STUDIO_FLOOR_DEPTH),
-        new THREE.MeshBasicMaterial({ color: new THREE.Color(wallColor) })
+    // ── Wall backdrop (vertical plane behind cue) ────────────────────────────
+    if (!this.frameWallBackdrop) {
+      this.frameWallBackdrop = new THREE.Mesh(
+        new THREE.PlaneGeometry(FRAME_WALL_WIDTH, FRAME_WALL_HEIGHT),
+        new THREE.MeshBasicMaterial({ color: wallColor, side: THREE.FrontSide })
       );
-      this.frameFloorBase.rotation.x = -Math.PI / 2;
-      // Floor center Z offset: FLOOR_DEPTH/2 - (WALL_Z offset) = 14/2 - (-3) = 7 - 3 = 4
-      this.frameFloorBase.position.set(0, FRAME_STUDIO_CORNER_Y, FRAME_STUDIO_FLOOR_DEPTH / 2 + FRAME_STUDIO_WALL_Z);
-      this.scene.add(this.frameFloorBase);
+      this.frameWallBackdrop.position.set(0, FRAME_WALL_Y, FRAME_WALL_Z);
+      this.scene.add(this.frameWallBackdrop);
     } else {
       this.applyStudioColor(
-        this.frameFloorBase.material as THREE.MeshBasicMaterial,
+        this.frameWallBackdrop.material as THREE.MeshBasicMaterial,
         wallColor, wallGradientEnd
       );
     }
 
-    // ── Shadow-receiving floor (ShadowMaterial overlay) ───────────────────────
+    // ── Table backdrop (horizontal plane below cue) ──────────────────────────
+    if (!this.frameTableBackdrop) {
+      this.frameTableBackdrop = new THREE.Mesh(
+        new THREE.PlaneGeometry(FRAME_WALL_WIDTH, FRAME_TABLE_DEPTH),
+        new THREE.MeshBasicMaterial({ color: wallColor, side: THREE.FrontSide })
+      );
+      this.frameTableBackdrop.rotation.x = -Math.PI / 2;
+      this.frameTableBackdrop.position.set(0, FRAME_TABLE_Y, FRAME_WALL_Z + FRAME_TABLE_DEPTH / 2);
+      this.scene.add(this.frameTableBackdrop);
+    } else {
+      this.applyStudioColor(
+        this.frameTableBackdrop.material as THREE.MeshBasicMaterial,
+        wallColor, wallGradientEnd
+      );
+    }
+
+    // ── L-shaped shadow mesh (spans wall + table seamlessly) ─────────────────
     if (!this.frameShadowFloor) {
-      // Use L-shaped shadow mesh for seamless wall+floor shadow
       this.frameShadowFloor = createLShapedShadowMesh(
-        FRAME_STUDIO_WIDTH,
-        FRAME_STUDIO_WALL_HEIGHT,
-        FRAME_STUDIO_FLOOR_DEPTH,
-        FRAME_STUDIO_CORNER_Y,
-        FRAME_STUDIO_WALL_Z,
+        36,                    // width (slightly wider than surfaces)
+        FRAME_WALL_HEIGHT,     // wall height
+        FRAME_TABLE_DEPTH + 2, // floor depth (extra margin)
+        FRAME_TABLE_Y,         // corner Y (where wall meets table)
+        FRAME_WALL_Z,          // wall Z position
         config.intensity
       );
+      this.frameShadowBaseY = this.frameShadowFloor.position.y;
       this.scene.add(this.frameShadowFloor);
     }
     (this.frameShadowFloor.material as THREE.ShadowMaterial).opacity = config.intensity;
-
-    // ── White back wall ───────────────────────────────────────────────────────
-    if (!this.frameWallBase) {
-      const wallCenterY = FRAME_STUDIO_CORNER_Y + FRAME_STUDIO_WALL_HEIGHT / 2;
-      this.frameWallBase = new THREE.Mesh(
-        new THREE.PlaneGeometry(FRAME_STUDIO_WIDTH, FRAME_STUDIO_WALL_HEIGHT),
-        new THREE.MeshBasicMaterial({ color: new THREE.Color(wallColor) })
-      );
-      this.frameWallBase.position.set(0, wallCenterY, FRAME_STUDIO_WALL_Z);
-      this.scene.add(this.frameWallBase);
-    } else {
-      this.applyStudioColor(
-        this.frameWallBase.material as THREE.MeshBasicMaterial,
-        wallColor, wallGradientEnd
-      );
-    }
+    const frameShadowOffsetX = config.shadowOffsetX ?? 0;
+    const frameShadowOffsetY = config.shadowOffsetY ?? 0;
+    const frameShadowOffsetZ = config.shadowOffsetZ ?? 0;
+    const frameShadowScale = config.shadowScale ?? 1;
+    const frameShadowRotationY = config.shadowRotationY ?? 0;
+    this.frameShadowFloor.position.set(
+      frameShadowOffsetX,
+      this.frameShadowBaseY + frameShadowOffsetY,
+      frameShadowOffsetZ
+    );
+    this.frameShadowFloor.scale.set(frameShadowScale, 1, frameShadowScale);
+    this.frameShadowFloor.rotation.y = frameShadowRotationY;
 
     // ── Shadow-casting DirectionalLight ──────────────────────────────────────
     if (!this.frameShadowLight) {
@@ -1644,15 +1785,16 @@ export class ExtractorSceneManager {
       this.frameShadowLight.shadow.camera.right = FRAME_SHADOW_FRUSTUM;
       this.frameShadowLight.shadow.camera.top = FRAME_SHADOW_FRUSTUM;
       this.frameShadowLight.shadow.camera.bottom = -FRAME_SHADOW_FRUSTUM;
-      this.frameShadowLight.shadow.bias = 0.0001;
+      this.frameShadowLight.shadow.bias = -0.0001;
       this.frameShadowLight.shadow.normalBias = 0.02;
+      this.frameShadowLight.shadow.blurSamples = 20;
       this.frameShadowLight.target.position.set(0, 0, 0);
       this.scene.add(this.frameShadowLight);
       this.scene.add(this.frameShadowLight.target);
     }
 
     this.frameShadowLight.position.set(config.lightX, config.lightY, config.lightZ);
-    this.frameShadowLight.shadow.radius = config.blur;
+    this.frameShadowLight.shadow.radius = Math.max(config.blur, 4);
     // Force shadow camera to update after position change
     this.frameShadowLight.shadow.camera.updateProjectionMatrix();
   }
@@ -1669,11 +1811,11 @@ export class ExtractorSceneManager {
 
   /** Update only the wall/floor color without re-creating all shadow objects. */
   setFrameShadowWallColor(wallColor: string, wallGradientEnd?: string): void {
-    if (this.frameFloorBase) {
-      this.applyStudioColor(this.frameFloorBase.material as THREE.MeshBasicMaterial, wallColor, wallGradientEnd);
+    if (this.frameWallBackdrop) {
+      this.applyStudioColor(this.frameWallBackdrop.material as THREE.MeshBasicMaterial, wallColor, wallGradientEnd);
     }
-    if (this.frameWallBase) {
-      this.applyStudioColor(this.frameWallBase.material as THREE.MeshBasicMaterial, wallColor, wallGradientEnd);
+    if (this.frameTableBackdrop) {
+      this.applyStudioColor(this.frameTableBackdrop.material as THREE.MeshBasicMaterial, wallColor, wallGradientEnd);
     }
   }
 
@@ -1744,9 +1886,10 @@ export class ExtractorSceneManager {
         (mesh.material as THREE.Material).dispose();
       }
     };
-    disposeMesh(this.frameShadowFloor); this.frameShadowFloor = null;
-    disposeMesh(this.frameFloorBase);   this.frameFloorBase = null;
-    disposeMesh(this.frameWallBase);    this.frameWallBase = null;
+    disposeMesh(this.frameShadowFloor);    this.frameShadowFloor = null;
+    this.frameShadowBaseY = 0;
+    disposeMesh(this.frameWallBackdrop);   this.frameWallBackdrop = null;
+    disposeMesh(this.frameTableBackdrop);  this.frameTableBackdrop = null;
   }
 
   private async applyVideoBackgroundLayers(layers: VideoBackgroundLayer[]): Promise<void> {
@@ -1901,7 +2044,11 @@ export class ExtractorSceneManager {
     // Apply cue-only HDRI (isolated from studio surfaces)
     const cueHdri = config.cueHdri ?? DEFAULT_CUE_HDRI;
     try {
-      await this.setCueHdri(cueHdri);
+      if (config.cueHdriLayers && config.cueHdriLayers.length > 0) {
+        await this.setCueHdriLayers(config.cueHdriLayers);
+      } else {
+        await this.setCueHdri(cueHdri);
+      }
     } catch (err) { console.warn('[ESM] Failed to apply cue HDRI:', err); }
 
     // ── Load PBR textures for wall and table ──
@@ -1991,7 +2138,10 @@ export class ExtractorSceneManager {
       );
       // Offsets baked into vertices — no position adjustment needed
       this.shadowFloor = shadowMesh;
+      this.shadowFloorBaseY = shadowMesh.position.y;
       this.scene.add(this.shadowFloor);
+      // Restore saved manual transform for shadow floor (if any)
+      this.applyShadowPlaneTransform(config);
     }
 
     // Setup cue instances
@@ -2229,9 +2379,15 @@ export class ExtractorSceneManager {
 
     // Apply cue-only HDRI (separate from studio surfaces)
     const cueHdri = config.cueHdri ?? DEFAULT_CUE_HDRI;
-    this.setCueHdri(cueHdri).catch(err =>
-      console.warn('[ESM] Failed to update cue HDRI:', err)
-    );
+    if (config.cueHdriLayers && config.cueHdriLayers.length > 0) {
+      this.setCueHdriLayers(config.cueHdriLayers).catch(err =>
+        console.warn('[ESM] Failed to update cue HDRI layers:', err)
+      );
+    } else {
+      this.setCueHdri(cueHdri).catch(err =>
+        console.warn('[ESM] Failed to update cue HDRI:', err)
+      );
+    }
 
     // Update cue instances
     this.updateCueInstances(config.cueConfig);
@@ -2258,6 +2414,29 @@ export class ExtractorSceneManager {
   /** Apply shadow config via HDRI-driven shadow lights */
   private updateShadowFromConfig(config: VideoStudioConfig): void {
     this.updateHdriShadowLights(config);
+    // Apply shadow plane offset/scale from shadow config (independent of light direction)
+    this.applyShadowPlaneTransform(config);
+  }
+
+  /**
+   * Apply manual shadow plane offset and scale from CueShadowConfig stored in studioConfigSnapshot.
+   * Now loads values into the 2D compositing fields — no 3D mesh movement.
+   */
+  private applyShadowPlaneTransform(_config: VideoStudioConfig): void {
+    // No-op: 2D shadow plane transforms removed. Shadow shape is determined by 3D lights only.
+  }
+
+  /**
+   * Public: no-op kept for backward compatibility.
+   */
+  setShadowPlaneTransform(
+    _offsetX: number,
+    _offsetY: number,
+    _offsetZ: number,
+    _scale: number,
+    _rotationY = 0
+  ): void {
+    // No-op: shadow position is controlled by 3D light angles, not 2D offsets.
   }
 
   /** Apply HDRI intensity to scene environment and shadow lights */
@@ -2306,6 +2485,10 @@ export class ExtractorSceneManager {
 
     const qp = VIDEO_QUALITY_PRESETS[config.quality] ?? VIDEO_QUALITY_PRESETS["2k"];
 
+    // Stop live preview and all background render loops FIRST to free GPU resources
+    // and eliminate competing draw calls during recording setup.
+    this.stopVideoPreview();
+
     return new Promise((resolve, reject) => {
       // Use device pixel ratio during recording for sharp output (matching preview quality)
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -2313,14 +2496,27 @@ export class ExtractorSceneManager {
       this.camera.aspect = qp.width / qp.height;
       this.camera.updateProjectionMatrix();
 
-      this.setupStudioFromStudioConfig(config).then(() => {
-        // Render warm-up frames to force GPU texture uploads and mipmap generation.
-        // This prevents blurry textures in the first 0-1s of recorded video.
+      this.setupStudioFromStudioConfig(config).then(async () => {
         this.setCameraFromKeyframe(config.cameraStart);
         this.camera.fov = 50;
         this.camera.updateProjectionMatrix();
-        this.renderer.render(this.scene, this.camera);
-        this.renderer.render(this.scene, this.camera);
+
+        // Pre-compile all shaders to avoid GPU stalls on the first recorded frames.
+        this.renderer.compile(this.scene, this.camera);
+
+        // Warm-up: render 24 frames with browser-yield pauses between batches so the
+        // GPU can fully upload PBR textures (diffuse/normal/roughness/AO/displacement)
+        // and generate complete mipmap chains before MediaRecorder begins capturing.
+        for (let i = 0; i < 24; i++) {
+          this.renderer.render(this.scene, this.camera);
+          if (i % 6 === 5) {
+            // Yield to the event loop every 6 renders so the browser can flush
+            // pending GPU texture upload commands and DMA transfers.
+            await new Promise<void>(r => setTimeout(r, 0));
+          }
+        }
+        // Final 16 ms yield to ensure all GPU work is complete before MediaRecorder starts.
+        await new Promise<void>(r => setTimeout(r, 16));
 
         this._startStudioRecordingLoop(config, qp, onProgress, resolve, reject);
       }).catch(reject);
@@ -2496,6 +2692,11 @@ export class ExtractorSceneManager {
     animate();
   }
 
+  /** Returns whether a continuous live preview loop is currently active. */
+  isLivePreviewRunning(): boolean {
+    return this.animationFrameId !== null;
+  }
+
   /**
    * Stop continuous animation loop
    */
@@ -2524,8 +2725,72 @@ export class ExtractorSceneManager {
       }
     }
 
+    // Preview: render production camera view to square offscreen target every N frames
+    if (this._previewCanvas && this.isSceneView) {
+      this._previewFrameCount++;
+      if (this._previewFrameCount >= ExtractorSceneManager.PREVIEW_INTERVAL) {
+        this._previewFrameCount = 0;
+        this._updatePreviewInternal();
+      }
+    }
+
     const cam = this.isSceneView && this.godCamera ? this.godCamera : this.camera;
     this.renderer.render(this.scene, cam);
+  }
+
+  /** Register a canvas to receive live production-camera preview (square, for shadow simulator) */
+  setPreviewCanvas(canvas: HTMLCanvasElement | null, size = 512): void {
+    // Dispose any previously allocated render target (no longer used)
+    if (this._previewTarget) {
+      this._previewTarget.dispose();
+      this._previewTarget = null;
+      this._previewBuf = null;
+    }
+    this._previewCanvas = canvas;
+    if (canvas) {
+      this._previewSize = size;
+    }
+  }
+
+  /** Internal: render production camera to main WebGL canvas, copy via drawImage to 2D preview canvas.
+   *  Uses preserveDrawingBuffer for a GPU-accelerated blit — no CPU readback, no pipeline stall. */
+  private _updatePreviewInternal(): void {
+    const canvas = this._previewCanvas;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const size = this._previewSize;
+
+    // Hide ALL editor helpers (HDRI lights, camera helper, camera gizmo)
+    this.setHelpersVisible(false);
+
+    // Hide TransformControls gizmos (arrows, rings, planes)
+    const hiddenObjs: THREE.Object3D[] = [];
+    this.scene.traverse((obj) => {
+      if (obj.type.startsWith('TransformControls') || (obj as any).isTransformControls) {
+        if (obj.visible) { hiddenObjs.push(obj); obj.visible = false; }
+      }
+    });
+
+    // Square aspect for production camera
+    const savedAspect = this.camera.aspect;
+    this.camera.aspect = 1;
+    this.camera.updateProjectionMatrix();
+
+    // Render directly to the main WebGL canvas (preserveDrawingBuffer: true)
+    this.renderer.render(this.scene, this.camera);
+
+    // Clear before blitting so transparent frames don't bleed old opaque pixels
+    ctx.clearRect(0, 0, size, size);
+    // GPU-accelerated blit to 2D preview canvas — drawImage scales automatically
+    ctx.drawImage(this.renderer.domElement, 0, 0, size, size);
+
+    // Restore
+    this.camera.aspect = savedAspect;
+    this.camera.updateProjectionMatrix();
+    if (this.isSceneView) this.setHelpersVisible(true);
+    for (const obj of hiddenObjs) obj.visible = true;
   }
 
   /** Register a canvas element to receive minimap camera view updates */
@@ -2601,6 +2866,60 @@ export class ExtractorSceneManager {
           ? 'image/webp'
           : 'image/png';
     return this.renderer.domElement.toDataURL(mimeType);
+  }
+
+  /**
+   * Capture a clean production-camera frame: hides all helpers/gizmos,
+   * renders with square aspect (1:1), then restores. Matches the live preview output.
+   */
+  captureCleanFrame(size: number, format: 'png' | 'jpeg' | 'webp' = 'png', transparent = false): string {
+    const mimeType = format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png';
+
+    // Hide ALL editor helpers
+    this.setHelpersVisible(false);
+
+    // Hide TransformControls
+    const hidden: THREE.Object3D[] = [];
+    this.scene.traverse((obj) => {
+      if (obj.type.startsWith('TransformControls') || (obj as any).isTransformControls) {
+        if (obj.visible) { hidden.push(obj); obj.visible = false; }
+      }
+    });
+
+    // Transparent mode: clear background and hide wall/table surfaces
+    const prevBg = this.scene.background;
+    if (transparent) {
+      this.scene.background = null;
+      this.setWallsVisible(false);
+    }
+
+    // Save state
+    const prevSize = this.renderer.getSize(new THREE.Vector2());
+    const prevAspect = this.camera.aspect;
+    const prevPixelRatio = this.renderer.getPixelRatio();
+
+    // Render at requested size with square aspect
+    this.renderer.setPixelRatio(1);
+    this.renderer.setSize(size, size, false);
+    this.camera.aspect = 1;
+    this.camera.updateProjectionMatrix();
+    this.renderer.render(this.scene, this.camera);
+
+    const dataUrl = this.renderer.domElement.toDataURL(mimeType);
+
+    // Restore
+    this.renderer.setPixelRatio(prevPixelRatio);
+    this.renderer.setSize(prevSize.x, prevSize.y, false);
+    this.camera.aspect = prevAspect;
+    this.camera.updateProjectionMatrix();
+    if (transparent) {
+      this.scene.background = prevBg;
+      this.setWallsVisible(true);
+    }
+    if (this.isSceneView) this.setHelpersVisible(true);
+    for (const obj of hidden) obj.visible = true;
+
+    return dataUrl;
   }
 
   /**
@@ -3013,11 +3332,17 @@ export class ExtractorSceneManager {
 
   getScene(): THREE.Scene { return this.scene; }
 
+  getShadowPlaneBaseY(): number | null {
+    if (!this.shadowFloor) return null;
+    return this.shadowFloorBaseY;
+  }
+
   getSelectableObjects(): THREE.Object3D[] {
     const objects: THREE.Object3D[] = [];
     if (this.cameraGizmo) objects.push(this.cameraGizmo);
     if (this.backdrop) objects.push(this.backdrop);
     if (this.tableSurface) objects.push(this.tableSurface);
+    // shadowFloor is intentionally excluded — it is not selectable/interactive
     objects.push(...this.wallFramePlanes);
     objects.push(...this.tableFramePlanes);
     // HDRI light helpers
@@ -3220,6 +3545,12 @@ export class ExtractorSceneManager {
     this._minimapTarget = null;
     this._minimapCanvas = null;
     this._minimapBuf = null;
+
+    // Clean up preview
+    this._previewTarget?.dispose();
+    this._previewTarget = null;
+    this._previewCanvas = null;
+    this._previewBuf = null;
 
     if (this.clonedModel) {
       this.scene.remove(this.clonedModel);

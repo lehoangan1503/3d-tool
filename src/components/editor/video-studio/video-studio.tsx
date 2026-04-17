@@ -72,6 +72,22 @@ interface VideoStudioProps {
   open: boolean;
 }
 
+const SELECTION_LABELS_VN: Record<string, string> = {
+  camera: "Camera",
+  cue: "Mô hình",
+  wall: "Tường",
+  table: "Bàn",
+  wallFrame: "Khung tường",
+  tableFrame: "Khung bàn",
+  hdriLight: "Đèn",
+};
+
+const MODE_LABELS_VN: Record<string, string> = {
+  translate: "Di chuyển",
+  rotate: "Xoay",
+  scale: "Tỷ lệ",
+};
+
 export function VideoStudio({ sceneManager, productName, productId, onClose, open }: VideoStudioProps) {
   const [config, setConfig] = useState<VideoStudioConfig>(() => structuredClone(DEFAULT_STUDIO_CONFIG));
   const [isRecording, setIsRecording] = useState(false);
@@ -89,6 +105,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     scale: { x: number; y: number; z: number };
   } | null>(null);
   const [transformMode, setTransformMode] = useState<"translate" | "rotate" | "scale">("translate");
+  const [hotkeyAxis, setHotkeyAxis] = useState<"x" | "y" | "z" | null>(null);
   // Track which section was auto-opened by selection (so we can close it on deselect)
   const autoExpandedSectionRef = useRef<string | null>(null);
 
@@ -285,6 +302,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               autoExpandedSectionRef.current = matchedSection ?? null;
             } else {
               setTransformValues(null);
+              setHotkeyAxis(null);
               setExpandedSections((prev) => {
                 const next = new Set(prev);
                 next.delete("transform");
@@ -371,6 +389,8 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
           // Transform mode change (G/R/S keys)
           (mode) => {
             setTransformMode(mode);
+            const hs = sceneViewControlsRef.current?.getHotkeyState();
+            setHotkeyAxis(hs?.axis ?? null);
           },
           // Drag start: suppress history pushes during drag
           () => {
@@ -379,6 +399,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
           // Drag end: commit final state to history
           () => {
             isDraggingRef.current = false;
+            setHotkeyAxis(null);
             if (historyDebounceRef.current) clearTimeout(historyDebounceRef.current);
             configHistoryRef.current = [...configHistoryRef.current.slice(-4), configRef.current];
             configFutureRef.current = [];
@@ -584,11 +605,11 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         }}
       >
         <DialogHeader className="px-6 pt-4 pb-2">
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle className="flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-2">
               <Video className="h-5 w-5" /> Video Studio
             </div>
-            <div className="flex-1 flex items-center justify-center gap-1">
+            <div className="flex items-center gap-0.5">
               <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={undo} title="Hoàn tác (Ctrl+Z)">
                 <Undo2 className="h-3.5 w-3.5" />
               </Button>
@@ -596,6 +617,35 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                 <Redo2 className="h-3.5 w-3.5" />
               </Button>
             </div>
+            {/* Selection & transform info badges — visible in scene view when an object is selected */}
+            {viewMode === "scene" && selectionInfo.type && (
+              <span className="ml-1 text-[11px] font-normal px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-400/40">
+                {SELECTION_LABELS_VN[selectionInfo.type] ?? selectionInfo.type}
+              </span>
+            )}
+            {viewMode === "scene" && selectionInfo.type && (
+              <span
+                className={`text-[11px] font-normal px-2 py-0.5 rounded-full border ${
+                  hotkeyAxis === "x"
+                    ? "bg-red-500/15 text-red-400 border-red-400/40"
+                    : hotkeyAxis === "y"
+                    ? "bg-green-500/15 text-green-400 border-green-400/40"
+                    : hotkeyAxis === "z"
+                    ? "bg-blue-500/15 text-blue-400 border-blue-400/40"
+                    : transformMode === "translate"
+                    ? "bg-emerald-500/15 text-emerald-400 border-emerald-400/40"
+                    : transformMode === "rotate"
+                    ? "bg-orange-500/15 text-orange-400 border-orange-400/40"
+                    : "bg-violet-500/15 text-violet-400 border-violet-400/40"
+                }`}
+              >
+                {(() => {
+                  const label = MODE_LABELS_VN[transformMode] ?? transformMode;
+                  return hotkeyAxis ? `${label} (trục ${hotkeyAxis.toUpperCase()})` : label;
+                })()}
+              </span>
+            )}
+            <div className="flex-1" />
             <div className="flex items-center gap-1">
               <Button variant={viewMode === "camera" ? "secondary" : "ghost"} size="sm" className="h-7 text-xs" onClick={() => setViewMode("camera")}>
                 <Camera className="h-3 w-3 mr-1" /> Góc nhìn máy quay

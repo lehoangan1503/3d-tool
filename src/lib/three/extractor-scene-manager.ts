@@ -556,6 +556,25 @@ export class ExtractorSceneManager {
     return { rotationX: rotX, rotationY: rotY % 360 };
   }
 
+  /**
+   * Immediately move a shadow-casting DirectionalLight to a new HDRI position.
+   * Called on every drag event so the shadow responds in real-time without
+   * waiting for the 80 ms debounced config update.
+   */
+  directUpdateShadowLight(layerIndex: number, rotationX: number, rotationY: number, intensity?: number): void {
+    const entry = this.hdriShadowLights[layerIndex];
+    if (!entry) return;
+    const pos = this.hdriRotationToPosition(rotationX, rotationY);
+    entry.light.position.copy(pos);
+    if (intensity !== undefined) {
+      // Same multiplier used in setupHdriShadowLights / updateHdriShadowLights
+      entry.light.intensity = intensity * 1.2;
+    }
+    // Ensure the shadow camera matrix is refreshed before the next render
+    entry.light.target.updateMatrixWorld();
+    entry.light.shadow.needsUpdate = true;
+  }
+
   /** Create a visible HDRI light helper for a layer */
   private createHdriLightHelper(layer: HdriLayer, index: number): THREE.Group {
     const group = new THREE.Group();
@@ -642,10 +661,26 @@ export class ExtractorSceneManager {
   /** Update HDRI light helper positions/visuals without full rebuild */
   updateHdriLightHelpers(config: VideoStudioConfig): void {
     const layers = config.hdriConfig?.layers ?? [];
-    for (let i = 0; i < Math.min(layers.length, this.hdriLightHelpers.length); i++) {
+
+    // When a template is loaded or undo/redo changes the config, the layer count
+    // may differ from the number of helpers in the scene — rebuild helpers to match.
+    if (layers.length !== this.hdriLightHelpers.length) {
+      this.setupHdriLightHelpers(config);
+      return;
+    }
+
+    for (let i = 0; i < layers.length; i++) {
       const layer = layers[i];
       const entry = this.hdriLightHelpers[i];
-      if (!entry || entry.layerId !== layer.id) continue;
+      if (!entry) continue;
+
+      // When the config is replaced (template load / undo-redo / reset), the layer
+      // IDs in the config diverge from the IDs stored on the helper objects.
+      // Re-sync them by index so drag callbacks can find the layer by ID correctly.
+      if (entry.layerId !== layer.id) {
+        entry.layerId = layer.id;
+        entry.helper.userData.layerId = layer.id;
+      }
 
       // Skip position update while the user is actively dragging a helper
       if (!this._isHelperDragging) {

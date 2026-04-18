@@ -531,17 +531,28 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
                 },
               };
               scheduleConfigUpdate();
-            } else if (info.type === "hdriLight" && info.layerId != null) {
+            } else if (info.type === "hdriLight") {
               const ext = esmRef.current;
               if (ext) {
                 resetShadowPlaneToFollowLight(cfg);
                 const { rotationX: rotX, rotationY: rotY } = ext.positionToHdriRotation(position);
                 const avgScale = (scale.x + scale.y + scale.z) / 3;
                 const newIntensity = Math.max(0.1, Math.min(3, avgScale));
+
+                // Use the numeric index (stable across config replacements) for the
+                // layer lookup.  info.layerId may be stale if the user grabbed the
+                // helper before the 80 ms ID-sync from a template load had fired.
                 const layers = [...cfg.hdriConfig.layers];
-                const idx = layers.findIndex((l) => l.id === info.layerId);
-                if (idx >= 0) {
-                  layers[idx] = { ...layers[idx], rotationX: rotX, rotationY: rotY, intensity: newIntensity };
+                const layerIdx = (info.layerIndex !== undefined && info.layerIndex < layers.length)
+                  ? info.layerIndex
+                  : layers.findIndex((l) => l.id === info.layerId);
+
+                // Push shadow-light movement immediately so the cast shadow tracks
+                // the helper in real-time instead of waiting for the debounced update.
+                ext.directUpdateShadowLight(layerIdx >= 0 ? layerIdx : 0, rotX, rotY, newIntensity);
+
+                if (layerIdx >= 0) {
+                  layers[layerIdx] = { ...layers[layerIdx], rotationX: rotX, rotationY: rotY, intensity: newIntensity };
                 }
                 configRef.current = { ...cfg, hdriConfig: { layers } };
                 scheduleConfigUpdate();

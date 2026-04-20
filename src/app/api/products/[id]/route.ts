@@ -11,7 +11,7 @@ interface UpdateProductWithConfigInput extends UpdateProductInput {
   config?: ThreeJSSettingsJson;
 }
 
-// GET /api/products/[id] - Get a single product
+// GET /api/products/[id] - Get a single product (any authenticated user can view)
 export async function GET(request: Request, { params }: RouteParams) {
   try {
     const { id } = await params;
@@ -26,7 +26,6 @@ export async function GET(request: Request, { params }: RouteParams) {
       .from("products")
       .select("*")
       .eq("id", id)
-      .eq("user_id", user.id)
       .single();
 
     if (error) {

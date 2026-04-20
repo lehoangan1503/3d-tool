@@ -1,10 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { logout } from "@/app/login/actions";
-import { Button } from "@/components/ui/button";
-import { ProductsGrid } from "@/components/products/products-grid";
-import { ThemeToggle } from "@/components/theme-toggle";
-import { LogOut } from "lucide-react";
+import { DashboardClient } from "./dashboard-client";
+import type { UserProfile } from "@/types/product";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -17,31 +14,40 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
-  return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="bg-card/80 backdrop-blur-sm border-b sticky top-0 z-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-18 ">
-            <h1 className="text-xl font-semibold text-foreground">Cue Customizer</h1>
-            <div className="flex items-center gap-3">
-              <span className="text-sm text-muted-foreground hidden sm:block">{user.email}</span>
-              <ThemeToggle />
-              <form action={logout}>
-                <Button variant="ghost" size="sm" type="submit">
-                  <LogOut className="h-4 w-4" />
-                  <span className="hidden sm:inline">Đăng Xuất</span>
-                </Button>
-              </form>
-            </div>
-          </div>
-        </div>
-      </header>
+  // Fetch or create user profile
+  let profile: UserProfile;
+  const { data: existingProfile } = await supabase
+    .from("user_profiles")
+    .select("*")
+    .eq("user_id", user.id)
+    .single();
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <ProductsGrid />
-      </main>
-    </div>
+  if (existingProfile) {
+    profile = existingProfile as UserProfile;
+  } else {
+    // Upsert in case profile doesn't exist yet
+    const { data: newProfile } = await supabase
+      .from("user_profiles")
+      .upsert({ user_id: user.id, email: user.email! }, { onConflict: "user_id" })
+      .select()
+      .single();
+    profile = (newProfile as UserProfile) ?? {
+      id: "",
+      user_id: user.id,
+      nickname: null,
+      email: user.email!,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  const showFirstLoginDialog = !profile.nickname;
+
+  return (
+    <DashboardClient
+      profile={profile}
+      showFirstLoginDialog={showFirstLoginDialog}
+    />
   );
 }
+

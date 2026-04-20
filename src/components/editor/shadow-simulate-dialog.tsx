@@ -15,10 +15,10 @@ import type { CueShadowConfig, HdriLayer } from "@/types/extractor";
 import { createDefaultHdriLayer, DEFAULT_CUE_SHADOW, STUDIO_WHITE_HDRI } from "@/types/extractor";
 import type { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import { ExtractorSceneManager as ESMClass, HDRI_OPTIONS_FALLBACK } from "@/lib/three/extractor-scene-manager";
-import type { VideoStudioConfig, CameraKeyframe } from "@/types/video-studio";
-import { DEFAULT_STUDIO_CONFIG, DEFAULT_CUE_HDRI } from "@/types/video-studio";
+import type { VideoStudioConfig, CameraKeyframe, CueInstance } from "@/types/video-studio";
+import { DEFAULT_STUDIO_CONFIG, DEFAULT_CUE_HDRI, MAX_CUE_INSTANCES, createCueInstance } from "@/types/video-studio";
 import { forceWhiteWalls } from "@/lib/three/studio-helpers";
-import { Lightbulb, Move, RotateCcw, Maximize2, Loader2, Download, FileUp, CheckCircle2, XCircle, Eye, EyeOff, Pencil, Trash2, Check, X, Undo2, Redo2, Sun, ChevronDown, ChevronUp, Plus } from "lucide-react";
+import { Lightbulb, Move, RotateCcw, Maximize2, Loader2, Download, FileUp, CheckCircle2, XCircle, Eye, EyeOff, Pencil, Trash2, Check, X, Undo2, Redo2, Sun, ChevronDown, ChevronUp, Plus, Copy, ClipboardPaste } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 // ─── Shadow Template type ────────────────────────────────────────────────────
@@ -206,6 +206,8 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
   const [transformValues, setTransformValues] = useState<TransformValues | null>(null);
   const [transformMode, setTransformMode] = useState<"translate" | "rotate" | "scale">("translate");
   const [hotkeyAxis, setHotkeyAxis] = useState<"x" | "y" | "z" | null>(null);
+  // Clipboard for copy/paste cue transform
+  const [copiedCueTransform, setCopiedCueTransform] = useState<TransformValues | null>(null);
 
   // Undo/redo
   const [canUndo, setCanUndo] = useState(false);
@@ -220,6 +222,19 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
   const [cueHdriLayersState, setCueHdriLayersState] = useState<HdriLayer[]>(() =>
     buildWhiteStudioConfig(shadowConfig).cueHdriLayers ?? []
   );
+
+  // Studio Lights panel — React state mirrors configRef.current.hdriConfig.layers
+  const [studioLightsOpen, setStudioLightsOpen] = useState(true);
+  const [studioLightsState, setStudioLightsState] = useState<HdriLayer[]>(() =>
+    buildWhiteStudioConfig(shadowConfig).hdriConfig.layers
+  );
+
+  // Multi-cue panel — mirrors configRef.current.cueConfig.instances for reactive display
+  const [cuesOpen, setCuesOpen] = useState(true);
+  const [cueInstancesState, setCueInstancesState] = useState<CueInstance[]>(() =>
+    buildWhiteStudioConfig(shadowConfig).cueConfig.instances
+  );
+  const [selectedCueIndex, setSelectedCueIndex] = useState<number>(0);
 
   // Refs — studioConfig is a REF (not state) to avoid React re-renders during drag/slider
   const previewContainerRef = useRef<HTMLDivElement>(null);
@@ -267,10 +282,13 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
   }, [updateHistoryState]);
 
   const applyHistoryEntry = useCallback((entry: ShadowHistoryEntry) => {
+    sceneViewRef.current?.deselect();
     configRef.current = structuredClone(entry.studioConfig);
     localCfgRef.current = { ...localCfgRef.current, intensity: entry.intensity, blur: entry.blur };
     setLocalCfg(localCfgRef.current);
     setCueHdriLayersState(configRef.current.cueHdriLayers ?? []);
+    setStudioLightsState(configRef.current.hdriConfig.layers);
+    setCueInstancesState(configRef.current.cueConfig.instances);
     wallsTransparentRef.current = entry.wallsTransparent;
     setWallsTransparent(entry.wallsTransparent);
     const esm = esmRef.current;
@@ -278,6 +296,7 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
       esm.setWallsVisible(!entry.wallsTransparent);
       esm.setTransparentBackground(entry.wallsTransparent);
       esm.updateStudioPreviewConfig(configRef.current);
+      esm.setupSimulatorCueGroups(configRef.current.cueConfig);
       esm.forcePreviewUpdate();
     }
   }, []);
@@ -328,6 +347,9 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
       setLocalCfg(localCfgRef.current);
       configRef.current = initCfg;
       setCueHdriLayersState(initCfg.cueHdriLayers ?? []);
+      setStudioLightsState(initCfg.hdriConfig.layers);
+      setCueInstancesState(initCfg.cueConfig.instances);
+      setSelectedCueIndex(0);
       setSelectionInfo({ type: null });
       setTransformValues(null);
       const initWalls = shadowConfig.wallsTransparent ?? false;
@@ -431,6 +453,7 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
 
       const esm = new ESMClass();
       esmRef.current = esm;
+      esm.enableSimulatorMode();
 
       await esm.setModel(model);
 
@@ -510,26 +533,35 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
               resetShadowPlaneToFollowLight(cfgWithCamera);
               // Don't scheduleConfigUpdate — camera is already moved via gizmo
             } else if (info.type === "cue") {
+              const cueIdx = info.cueIndex ?? 0;
               const instances = [...cfg.cueConfig.instances];
-              if (instances[0]) {
-                instances[0] = {
-                  ...instances[0],
+              if (instances[cueIdx]) {
+                instances[cueIdx] = {
+                  ...instances[cueIdx],
                   positionX: position.x,
                   positionY: position.y,
                   positionZ: position.z,
                   scale: scale.x,
+                  rotationX: rotation.x,
+                  rotationY: rotation.y,
+                  rotationZ: rotation.z,
                 };
               }
               configRef.current = {
                 ...cfg,
-                cueConfig: {
-                  ...cfg.cueConfig,
-                  instances,
-                  spinX: rotation.x,
-                  spinY: rotation.y,
-                  spinZ: rotation.z,
-                },
+                cueConfig: { ...cfg.cueConfig, instances },
               };
+              setCueInstancesState(instances);
+              // Update only the affected group directly (no full rebuild)
+              const inst = instances[cueIdx];
+              if (inst) {
+                esmRef.current?.updateSimulatorCueGroup(
+                  cueIdx,
+                  inst.positionX, inst.positionY, inst.positionZ,
+                  inst.rotationX ?? 0, inst.rotationY ?? 0, inst.rotationZ ?? 0,
+                  inst.scale,
+                );
+              }
               scheduleConfigUpdate();
             } else if (info.type === "hdriLight") {
               const ext = esmRef.current;
@@ -579,6 +611,10 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
       const cfg = configRef.current;
       await esm.setupStudioFromStudioConfig(cfg);
       forceWhiteWalls(esm);
+      esm.setupSimulatorCueGroups(cfg.cueConfig);
+      // Focus godCamera on the loaded cue group so saved positions are immediately visible
+      const grpCenter = esm.getSimulatorGroupsCenter();
+      if (grpCenter) sceneViewRef.current?.focusOnPosition(grpCenter);
       esm.updateStudioPreviewConfig(cfg);
       esm.setViewMode("scene");
 
@@ -707,6 +743,84 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
     const updated = layers.filter((_, i) => i !== idx);
     configRef.current = { ...configRef.current, cueHdriLayers: updated };
     setCueHdriLayersState(updated);
+    scheduleConfigUpdate();
+    snapshotNow();
+  }, [scheduleConfigUpdate, snapshotNow]);
+
+  /** Update a single studio light layer (live slider/toggle change) */
+  const handleStudioLight = useCallback((idx: number, patch: Partial<HdriLayer>) => {
+    const layers = configRef.current.hdriConfig.layers.map((l, i) =>
+      i === idx ? { ...l, ...patch } : l
+    );
+    configRef.current = { ...configRef.current, hdriConfig: { layers } };
+    setStudioLightsState(layers);
+    scheduleConfigUpdate();
+  }, [scheduleConfigUpdate]);
+
+  /** Add a second studio light (max 2) */
+  const addStudioLight = useCallback(() => {
+    const layers = configRef.current.hdriConfig.layers;
+    if (layers.length >= 2) return;
+    // Deselect before rebuilding helpers to avoid TransformControls stale-object error
+    sceneViewRef.current?.deselect();
+    const newLayer = createDefaultHdriLayer(STUDIO_WHITE_HDRI);
+    newLayer.rotationY = (layers[0]?.rotationY ?? 0 + 180) % 360;
+    newLayer.intensity = 0.5;
+    const updated = [...layers, newLayer];
+    configRef.current = { ...configRef.current, hdriConfig: { layers: updated } };
+    setStudioLightsState(updated);
+    scheduleConfigUpdate();
+    snapshotNow();
+  }, [scheduleConfigUpdate, snapshotNow]);
+
+  /** Remove a studio light (min 1) */
+  const removeStudioLight = useCallback((idx: number) => {
+    const layers = configRef.current.hdriConfig.layers;
+    if (layers.length <= 1) return;
+    // Deselect before rebuilding helpers to avoid TransformControls stale-object error
+    sceneViewRef.current?.deselect();
+    const updated = layers.filter((_, i) => i !== idx);
+    configRef.current = { ...configRef.current, hdriConfig: { layers: updated } };
+    setStudioLightsState(updated);
+    scheduleConfigUpdate();
+    snapshotNow();
+  }, [scheduleConfigUpdate, snapshotNow]);
+
+  /** Add a new cue clone (max MAX_CUE_INSTANCES) */
+  const handleAddCue = useCallback(() => {
+    const instances = configRef.current.cueConfig.instances;
+    if (instances.length >= MAX_CUE_INSTANCES) return;
+    const lastInst = instances[instances.length - 1];
+    const offsetX = (lastInst?.positionX ?? 0) + 3;
+    const newInst = createCueInstance(offsetX);
+    const updated = [...instances, newInst];
+    configRef.current = {
+      ...configRef.current,
+      cueConfig: { ...configRef.current.cueConfig, instances: updated },
+    };
+    setCueInstancesState(updated);
+    esmRef.current?.setupSimulatorCueGroups(configRef.current.cueConfig);
+    setSelectedCueIndex(updated.length - 1);
+    scheduleConfigUpdate();
+    snapshotNow();
+  }, [scheduleConfigUpdate, snapshotNow]);
+
+  /** Remove a cue (min 1). Deselect if selected cue was removed. */
+  const handleRemoveCue = useCallback((idx: number) => {
+    const instances = configRef.current.cueConfig.instances;
+    if (instances.length <= 1) return;
+    const updated = instances.filter((_, i) => i !== idx);
+    configRef.current = {
+      ...configRef.current,
+      cueConfig: { ...configRef.current.cueConfig, instances: updated },
+    };
+    setCueInstancesState(updated);
+    esmRef.current?.setupSimulatorCueGroups(configRef.current.cueConfig);
+    setSelectedCueIndex((prev) => {
+      if (prev >= updated.length) return updated.length - 1;
+      if (prev === idx) return Math.max(0, idx - 1);
+      return prev;
+    });
     scheduleConfigUpdate();
     snapshotNow();
   }, [scheduleConfigUpdate, snapshotNow]);
@@ -865,6 +979,7 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
 
       // If template has a full studio snapshot, restore it
       if (cfg.studioConfigSnapshot && typeof cfg.studioConfigSnapshot === "object") {
+        sceneViewRef.current?.deselect();
         const snap = structuredClone(cfg.studioConfigSnapshot) as VideoStudioConfig;
         snap.shadow = { ...snap.shadow, intensity, blur };
         // Migrate old snapshots without cueHdriLayers
@@ -881,6 +996,12 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
         }
         configRef.current = snap;
         setCueHdriLayersState(snap.cueHdriLayers ?? []);
+        setStudioLightsState(snap.hdriConfig.layers);
+        setCueInstancesState(snap.cueConfig.instances);
+        // Rebuild cue groups so the 3D scene matches the applied snapshot
+        esmRef.current?.setupSimulatorCueGroups(snap.cueConfig);
+        const snapCenter = esmRef.current?.getSimulatorGroupsCenter();
+        if (snapCenter) sceneViewRef.current?.focusOnPosition(snapCenter);
         scheduleConfigUpdate();
       }
 
@@ -891,19 +1012,24 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
 
   /** Reset the whole simulator to factory defaults so the user can craft a new shadow template */
   const handleResetSimulator = useCallback(() => {
+    sceneViewRef.current?.deselect();
     const defaults = DEFAULT_CUE_SHADOW;
     localCfgRef.current = { ...localCfgRef.current, intensity: defaults.intensity, blur: defaults.blur };
     setLocalCfg(localCfgRef.current);
     wallsTransparentRef.current = false;
     setWallsTransparent(false);
     setSelectedTemplateId(null);
+    setSelectedCueIndex(0);
     const freshConfig = buildWhiteStudioConfig({ ...defaults, enabled: true });
     configRef.current = freshConfig;
     setCueHdriLayersState(freshConfig.cueHdriLayers ?? []);
+    setStudioLightsState(freshConfig.hdriConfig.layers);
+    setCueInstancesState(freshConfig.cueConfig.instances);
     if (esmRef.current) {
       esmRef.current.setWallsVisible(true);
       esmRef.current.setTransparentBackground(false);
       esmRef.current.updateStudioPreviewConfig(freshConfig);
+      esmRef.current.setupSimulatorCueGroups(freshConfig.cueConfig);
       esmRef.current.forcePreviewUpdate();
     }
     snapshotNow({ intensity: defaults.intensity, blur: defaults.blur, wallsTransparent: false });
@@ -1130,8 +1256,46 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
                         <TransformInput label="Z" value={transformValues.scale.z} onChange={(v) => applyTransformValue("z", "scale", v)} />
                       </div>
                     </div>
+
+                    {/* Copy / Paste — only for cue selections */}
+                    {selectionInfo.type === "cue" && (
+                      <div className="flex gap-1.5 pt-1 border-t border-border/40">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 h-7 text-xs gap-1"
+                          onClick={() => setCopiedCueTransform(structuredClone(transformValues))}
+                          title="Sao chép vị trí/xoay/tỷ lệ của cue này"
+                        >
+                          <Copy className="h-3 w-3" /> Sao chép
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 h-7 text-xs gap-1"
+                          disabled={copiedCueTransform === null}
+                          onClick={() => {
+                            if (!copiedCueTransform || !sceneViewRef.current) return;
+                            const pos = new THREE.Vector3(copiedCueTransform.position.x, copiedCueTransform.position.y, copiedCueTransform.position.z);
+                            const rot = new THREE.Euler(
+                              THREE.MathUtils.degToRad(copiedCueTransform.rotation.x),
+                              THREE.MathUtils.degToRad(copiedCueTransform.rotation.y),
+                              THREE.MathUtils.degToRad(copiedCueTransform.rotation.z),
+                            );
+                            const scl = new THREE.Vector3(copiedCueTransform.scale.x, copiedCueTransform.scale.y, copiedCueTransform.scale.z);
+                            setTransformValues(structuredClone(copiedCueTransform));
+                            sceneViewRef.current.applyTransform(pos, rot, scl);
+                            snapshotNow();
+                          }}
+                          title={copiedCueTransform ? "Dán vị trí/xoay/tỷ lệ đã sao chép vào cue này" : "Chưa có dữ liệu sao chép"}
+                        >
+                          <ClipboardPaste className="h-3 w-3" /> Dán
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 )}
+
 
                 {/* Mẫu bóng đổ */}
                 <div className="rounded-lg border border-border/50 bg-card/30 p-3 space-y-2">
@@ -1357,24 +1521,214 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
                   )}
                 </div>
 
+                {/* Đèn Studio — isolated per-light controls (max 2) */}
+                <div className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+                  <div className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium">
+                    <button
+                      type="button"
+                      className="flex flex-1 items-center gap-2 hover:text-foreground transition-colors min-w-0"
+                      onClick={() => setStudioLightsOpen(v => !v)}
+                    >
+                      <Lightbulb className="h-3.5 w-3.5 text-yellow-400 shrink-0" />
+                      <span>Đèn Studio</span>
+                      <span className="text-[10px] text-muted-foreground ml-1">
+                        ({studioLightsState.filter(l => l.enabled !== false).length}/{studioLightsState.length})
+                      </span>
+                      <span className="flex-1" />
+                      {studioLightsOpen
+                        ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+                    </button>
+                    {studioLightsState.length < 2 && (
+                      <button
+                        type="button"
+                        className="p-0.5 rounded hover:bg-muted/60 transition-colors shrink-0"
+                        onClick={addStudioLight}
+                        title="Thêm đèn studio"
+                      >
+                        <Plus className="h-3 w-3 text-muted-foreground" />
+                      </button>
+                    )}
+                  </div>
+                  {studioLightsOpen && (
+                    <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-4">
+                      <p className="text-[10px] text-muted-foreground">Mỗi đèn studio có bóng riêng biệt. Điều chỉnh độ mờ và cường độ bóng độc lập cho từng đèn.</p>
+                      {studioLightsState.map((layer, idx) => (
+                        <div key={layer.id} className="space-y-2 rounded-md border border-border/40 bg-muted/10 px-2.5 pb-2.5 pt-2">
+                          {/* Header: enable + label + remove */}
+                          <div className="flex items-center gap-2">
+                            <Checkbox
+                              id={`studio-light-${idx}`}
+                              checked={layer.enabled !== false}
+                              onCheckedChange={(v) => {
+                                handleStudioLight(idx, { enabled: !!v });
+                                snapshotNow();
+                              }}
+                              className="h-3.5 w-3.5"
+                            />
+                            <label htmlFor={`studio-light-${idx}`} className="text-[10px] font-medium flex-1 cursor-pointer select-none flex items-center gap-1.5">
+                              <Sun className="h-3 w-3 text-yellow-400" />
+                              Đèn Studio {idx + 1}
+                            </label>
+                            {studioLightsState.length > 1 && (
+                              <button
+                                type="button"
+                                className="p-0.5 rounded hover:bg-destructive/20 transition-colors"
+                                onClick={() => removeStudioLight(idx)}
+                                title="Xóa đèn"
+                              >
+                                <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                              </button>
+                            )}
+                          </div>
+                          {/* Light Color */}
+                          <div className="space-y-0.5">
+                            <Label className="text-[10px] text-muted-foreground">Màu đèn</Label>
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="color"
+                                value={layer.lightColor ?? "#ffffff"}
+                                onChange={(e) => handleStudioLight(idx, { lightColor: e.target.value })}
+                                onBlur={() => snapshotNow()}
+                                className="w-6 h-6 rounded cursor-pointer border border-border/50 p-0"
+                              />
+                              <span className="text-[10px] text-muted-foreground font-mono">{(layer.lightColor ?? "#ffffff").toUpperCase()}</span>
+                            </div>
+                          </div>
+                          {/* Light Intensity */}
+                          <div className="space-y-0.5">
+                            <Label className="text-[10px] text-muted-foreground">
+                              Cường độ đèn — {((layer.intensity ?? 1) * 100).toFixed(0)}%
+                            </Label>
+                            <Slider
+                              value={[layer.intensity ?? 1]}
+                              onValueChange={([v]) => handleStudioLight(idx, { intensity: v })}
+                              onValueCommit={() => snapshotNow()}
+                              min={0} max={3} step={0.05}
+                            />
+                          </div>
+                          {/* Shadow Blur (per-light) */}
+                          <div className="space-y-0.5">
+                            <Label className="text-[10px] text-muted-foreground">
+                              Độ mờ bóng — {(layer.shadowBlur ?? 4).toFixed(0)}
+                            </Label>
+                            <Slider
+                              value={[layer.shadowBlur ?? 4]}
+                              onValueChange={([v]) => handleStudioLight(idx, { shadowBlur: v })}
+                              onValueCommit={() => snapshotNow()}
+                              min={0} max={20} step={0.5}
+                            />
+                          </div>
+                          {/* Shadow Intensity (per-light) */}
+                          <div className="space-y-0.5">
+                            <Label className="text-[10px] text-muted-foreground">
+                              Cường độ bóng — {Math.round((layer.shadowIntensity ?? 1) * 100)}%
+                            </Label>
+                            <Slider
+                              value={[layer.shadowIntensity ?? 1]}
+                              onValueChange={([v]) => handleStudioLight(idx, { shadowIntensity: v })}
+                              onValueCommit={() => snapshotNow()}
+                              min={0} max={1} step={0.01}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                      {studioLightsState.length < 2 && (
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border/60 py-1.5 text-[10px] text-muted-foreground hover:border-border hover:bg-muted/20 transition-colors"
+                          onClick={addStudioLight}
+                        >
+                          <Plus className="h-3 w-3" />
+                          Thêm đèn studio
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Gậy — multi-cue (max MAX_CUE_INSTANCES) */}
+                <div className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+                  <div className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium">
+                    <button
+                      type="button"
+                      className="flex flex-1 items-center gap-2 hover:text-foreground transition-colors min-w-0"
+                      onClick={() => setCuesOpen(v => !v)}
+                    >
+                      <span>🎱</span>
+                      <span>Gậy</span>
+                      <span className="text-[10px] text-muted-foreground ml-1">({cueInstancesState.length}/{MAX_CUE_INSTANCES})</span>
+                      <span className="flex-1" />
+                      {cuesOpen
+                        ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+                    </button>
+                    {cueInstancesState.length < MAX_CUE_INSTANCES && (
+                      <button
+                        type="button"
+                        className="p-0.5 rounded hover:bg-muted/60 transition-colors shrink-0"
+                        onClick={handleAddCue}
+                        title="Thêm gậy"
+                      >
+                        <Plus className="h-3 w-3 text-muted-foreground" />
+                      </button>
+                    )}
+                  </div>
+                  {cuesOpen && (
+                    <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-1.5">
+                      <p className="text-[10px] text-muted-foreground mb-2">Click vào gậy để chọn và dùng gizmo di chuyển/xoay/tỉ lệ. Mỗi gậy có bóng riêng.</p>
+                      {cueInstancesState.map((inst, idx) => (
+                        <div
+                          key={inst.id}
+                          className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 cursor-pointer transition-colors ${
+                            selectedCueIndex === idx
+                              ? "border-blue-500/60 bg-blue-500/10"
+                              : "border-border/40 bg-muted/10 hover:bg-muted/20"
+                          }`}
+                          onClick={() => setSelectedCueIndex(idx)}
+                        >
+                          <span className="text-[10px] font-medium flex-1">
+                            {inst.isMain ? "Gậy chính" : `Gậy ${idx + 1}`}
+                          </span>
+                          <span className="text-[9px] text-muted-foreground tabular-nums font-mono">
+                            ({inst.positionX.toFixed(1)}, {inst.positionY.toFixed(1)}, {inst.positionZ.toFixed(1)})
+                          </span>
+                          {!inst.isMain && (
+                            <button
+                              type="button"
+                              className="p-0.5 rounded hover:bg-destructive/20 transition-colors shrink-0"
+                              onClick={(e) => { e.stopPropagation(); handleRemoveCue(idx); }}
+                              title="Xóa gậy"
+                            >
+                              <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      {cueInstancesState.length < MAX_CUE_INSTANCES && (
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border/60 py-1.5 text-[10px] text-muted-foreground hover:border-border hover:bg-muted/20 transition-colors"
+                          onClick={handleAddCue}
+                        >
+                          <Plus className="h-3 w-3" />
+                          Thêm gậy ({cueInstancesState.length}/{MAX_CUE_INSTANCES})
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {/* Cài đặt bóng đổ */}
                 <div className="rounded-lg border border-border/50 bg-card/30 p-3 space-y-3">
                   <Label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Cài đặt bóng đổ</Label>
 
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">
-                      <Label className="text-xs text-muted-foreground">Cường độ</Label>
+                      <Label className="text-xs text-muted-foreground">Độ đậm sàn</Label>
                       <span className="text-xs tabular-nums text-muted-foreground">{Math.round(localCfg.intensity * 100)}%</span>
                     </div>
                     <Slider value={[localCfg.intensity]} onValueChange={([v]) => handleSlider("intensity", v)} onValueCommit={() => snapshotNow()} min={0} max={1} step={0.01} />
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs text-muted-foreground">Làm mờ</Label>
-                      <span className="text-xs tabular-nums text-muted-foreground">{localCfg.blur.toFixed(0)}</span>
-                    </div>
-                    <Slider value={[localCfg.blur]} onValueChange={([v]) => handleSlider("blur", v)} onValueCommit={() => snapshotNow()} min={0} max={20} step={0.5} />
                   </div>
 
                   {/* Transparent walls toggle */}

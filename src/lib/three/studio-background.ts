@@ -458,6 +458,10 @@ export function createLShapedShadowMesh(
   
   // Curved corner section (quarter circle from wall to floor)
   // Goes from (wallZ, cornerY + cornerRadius) to (wallZ + cornerRadius, cornerY)
+  // Use a parallel curve at (cornerRadius - surfaceOff) so the surfaceOff is applied
+  // uniformly in the outward normal direction. This makes the curve endpoints exactly
+  // match the wall face (z = wallFaceZ) and floor face (y = floorFaceY) with no seam.
+  const effectiveCurveRadius = cornerRadius - surfaceOff;
   for (let i = 0; i < cornerSegments; i++) {
     const angle0 = (i / cornerSegments) * (Math.PI / 2);
     const angle1 = ((i + 1) / cornerSegments) * (Math.PI / 2);
@@ -466,11 +470,13 @@ export function createLShapedShadowMesh(
     const centerZ = wallZ + cornerRadius;
     const centerY = cornerY + cornerRadius;
     
-    // Points on the curve (offset slightly for z-fighting)
-    const y0 = centerY - cornerRadius * Math.cos(angle0);
-    const z0 = centerZ - cornerRadius * Math.sin(angle0) + surfaceOff;
-    const y1 = centerY - cornerRadius * Math.cos(angle1);
-    const z1 = centerZ - cornerRadius * Math.sin(angle1) + surfaceOff;
+    // Parallel curve at effectiveCurveRadius — uniform surfaceOff in normal direction
+    // At angle=π/2: y=cornerY+cornerRadius, z=wallZ+cornerRadius-effectiveR = wallFaceZ ✓
+    // At angle=0:   y=cornerY+cornerRadius-effectiveR = floorFaceY ✓, z=wallZ+cornerRadius ✓
+    const y0 = centerY - effectiveCurveRadius * Math.cos(angle0);
+    const z0 = centerZ - effectiveCurveRadius * Math.sin(angle0);
+    const y1 = centerY - effectiveCurveRadius * Math.cos(angle1);
+    const z1 = centerZ - effectiveCurveRadius * Math.sin(angle1);
     
     // Normal direction (pointing outward from curve center)
     const nx0 = 0;
@@ -512,6 +518,63 @@ export function createLShapedShadowMesh(
   const material = new THREE.ShadowMaterial({ opacity });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.receiveShadow = true;
+  return mesh;
+}
+
+/**
+ * Curved corner fill mesh that backs the L-shaped shadow mesh's curved section.
+ * Without this, the shadow on the curved section appears as a floating dark arc
+ * because no solid surface geometry exists at mid-curve positions.
+ * Uses MeshBasicMaterial (unlit) so it stays the wall color regardless of HDRI.
+ * Both junctions (wall top, table bottom) are white-on-white so z-fighting is invisible.
+ */
+export function createCornerFillMesh(
+  wallWidth: number,
+  cornerY: number,
+  wallZ: number,
+  color: THREE.Color | string = '#ffffff'
+): THREE.Mesh {
+  const hw = wallWidth / 2;
+  const cornerRadius = 0.8;
+  const cornerSegments = 8;
+
+  const positions: number[] = [];
+  const normals: number[] = [];
+
+  const centerZ = wallZ + cornerRadius;
+  const centerY = cornerY + cornerRadius;
+
+  for (let i = 0; i < cornerSegments; i++) {
+    const angle0 = (i / cornerSegments) * (Math.PI / 2);
+    const angle1 = ((i + 1) / cornerSegments) * (Math.PI / 2);
+
+    const y0 = centerY - cornerRadius * Math.cos(angle0);
+    const z0 = centerZ - cornerRadius * Math.sin(angle0);
+    const y1 = centerY - cornerRadius * Math.cos(angle1);
+    const z1 = centerZ - cornerRadius * Math.sin(angle1);
+
+    const ny0 = Math.cos(angle0);
+    const nz0 = Math.sin(angle0);
+    const ny1 = Math.cos(angle1);
+    const nz1 = Math.sin(angle1);
+
+    positions.push(-hw, y0, z0,  hw, y0, z0,  hw, y1, z1);
+    positions.push(-hw, y0, z0,  hw, y1, z1, -hw, y1, z1);
+    normals.push(0, ny0, nz0,  0, ny0, nz0,  0, ny1, nz1);
+    normals.push(0, ny0, nz0,  0, ny1, nz1,  0, ny1, nz1);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+  geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normals), 3));
+
+  const material = new THREE.MeshBasicMaterial({
+    color: typeof color === 'string' ? new THREE.Color(color) : color,
+    side: THREE.FrontSide,
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.receiveShadow = false;
   return mesh;
 }
 

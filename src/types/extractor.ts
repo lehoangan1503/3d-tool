@@ -263,6 +263,8 @@ export interface HdriLayer {
   intensity: number; // Per-layer intensity (0–3, default 1.0)
   enabled: boolean;  // Whether this layer contributes to the blend
   lightColor?: string; // Hex color for studio white light (e.g. "#ffffff")
+  shadowBlur?: number;      // Per-light shadow blur radius (0–20; overrides global shadow.blur)
+  shadowIntensity?: number; // Per-light shadow darkness (0–1; maps to light.shadow.intensity)
 }
 
 /** Default HDRI layer — bloem train (same as DEFAULT_CUE_HDRI).

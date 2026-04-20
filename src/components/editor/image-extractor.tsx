@@ -60,6 +60,11 @@ async function renderCueFrameViaStudio(
     await studioEsm.setupStudioFromStudioConfig(snapshot);
     forceWhiteWalls(studioEsm);
 
+    // Switch to simulator mode so individual per-instance cue groups are used,
+    // matching the preview pipeline from the Simulator dialog exactly.
+    studioEsm.enableSimulatorMode();
+    studioEsm.setupSimulatorCueGroups(snapshot.cueConfig);
+
     // Apply all config properties (cue transforms, shadow, HDRI, camera)
     studioEsm.updateStudioPreviewConfig(snapshot);
     // forceWhiteWalls again in case updateSurfaceHdri replaced materials

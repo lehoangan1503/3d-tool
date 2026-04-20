@@ -16,6 +16,18 @@ export interface Product {
   threejs_settings_id: string | null;
   created_at: string;
   updated_at: string;
+  // Optional owner info joined from user_profiles (present in list API responses)
+  owner_nickname?: string | null;
+  owner_email?: string | null;
+}
+
+export interface UserProfile {
+  id: string;
+  user_id: string;
+  nickname: string | null;
+  email: string;
+  created_at: string;
+  updated_at: string;
 }
 
 // Editable configuration for 3D preview

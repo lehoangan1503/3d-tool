@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { CreateProductInput } from "@/types/product";
 import { DEFAULT_SMOOTH_CONFIG, DEFAULT_LEATHER_CONFIG, configToSettingsJson } from "@/types/product";
 
-// GET /api/products - List products for current user with pagination + search + type filter
+// GET /api/products - List ALL products (global) with pagination + search + type filter
 export async function GET(request: Request) {
   try {
     const supabase = await createClient();
@@ -19,24 +19,48 @@ export async function GET(request: Request) {
     const search = (searchParams.get("search") ?? "").trim();
     const type   = searchParams.get("type") ?? "";
     const sort   = searchParams.get("sort") ?? "";
+    const owner  = searchParams.get("owner") ?? "";
 
+    // Fetch all products globally; optionally filter to current user only
     let query = supabase
       .from("products")
-      .select("*", { count: "exact" })
-      .eq("user_id", user.id);
+      .select("*", { count: "exact" });
 
+    if (owner === "me") query = query.eq("user_id", user.id);
     if (search) query = query.ilike("name", `%${search}%`);
     if (type && ["smooth", "leather"].includes(type)) query = query.eq("type", type);
     if (sort === "asc") query = query.order("name", { ascending: true });
     else if (sort === "desc") query = query.order("name", { ascending: false });
-    else query = query.order("updated_at", { ascending: false });
+    else query = query.order("created_at", { ascending: false });
 
     query = query.range(offset, offset + limit - 1);
 
-    const { data, error, count } = await query;
+    const { data: products, error, count } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    return NextResponse.json({ items: data, total: count ?? 0 });
+    if (!products || products.length === 0) {
+      return NextResponse.json({ items: [], total: count ?? 0 });
+    }
+
+    // Fetch owner profiles for these products
+    const ownerIds = [...new Set(products.map((p) => p.user_id))];
+    const { data: profiles } = await supabase
+      .from("user_profiles")
+      .select("user_id, nickname, email")
+      .in("user_id", ownerIds);
+
+    const profileMap = new Map(profiles?.map((p) => [p.user_id, p]) ?? []);
+
+    const items = products.map((p) => {
+      const profile = profileMap.get(p.user_id);
+      return {
+        ...p,
+        owner_nickname: profile?.nickname ?? null,
+        owner_email: profile?.email ?? null,
+      };
+    });
+
+    return NextResponse.json({ items, total: count ?? 0 });
   } catch (error) {
     console.error("GET /api/products error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

@@ -13,7 +13,11 @@ type SortOrder = "asc" | "desc" | null;
 
 const PAGE_SIZE = 20;
 
-export function ProductsGrid() {
+interface ProductsGridProps {
+  currentUserId: string;
+}
+
+export function ProductsGrid({ currentUserId }: ProductsGridProps) {
   const [products, setProducts] = useState<Product[]>([]);
   const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -22,6 +26,7 @@ export function ProductsGrid() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<FilterType>("all");
   const [sortOrder, setSortOrder] = useState<SortOrder>(null);
+  const [myOnly, setMyOnly] = useState(false);
   const offsetRef = useRef(0);
   const observerRef = useRef<IntersectionObserver | null>(null);
 
@@ -31,7 +36,7 @@ export function ProductsGrid() {
     return () => clearTimeout(t);
   }, [search]);
 
-  const fetchPage = useCallback(async (offset: number, currentSearch: string, currentType: FilterType, currentSort: SortOrder, append: boolean) => {
+  const fetchPage = useCallback(async (offset: number, currentSearch: string, currentType: FilterType, currentSort: SortOrder, currentMyOnly: boolean, append: boolean) => {
     if (offset === 0) setIsLoading(true);
     else setIsFetchingMore(true);
     try {
@@ -39,6 +44,7 @@ export function ProductsGrid() {
       if (currentSearch) params.set("search", currentSearch);
       if (currentType !== "all") params.set("type", currentType);
       if (currentSort) params.set("sort", currentSort);
+      if (currentMyOnly) params.set("owner", "me");
 
       const res = await fetch(`/api/products?${params}`);
       if (!res.ok) throw new Error("Failed");
@@ -55,12 +61,12 @@ export function ProductsGrid() {
     }
   }, []);
 
-  // Reset + refetch when search/filter/sort changes
+  // Reset + refetch when search/filter/sort/myOnly changes
   useEffect(() => {
     offsetRef.current = 0;
     setProducts([]);
-    fetchPage(0, debouncedSearch, typeFilter, sortOrder, false);
-  }, [debouncedSearch, typeFilter, sortOrder, fetchPage]);
+    fetchPage(0, debouncedSearch, typeFilter, sortOrder, myOnly, false);
+  }, [debouncedSearch, typeFilter, sortOrder, myOnly, fetchPage]);
 
   const hasMore = products.length < total;
 
@@ -72,21 +78,21 @@ export function ProductsGrid() {
       observerRef.current = new IntersectionObserver(
         ([entry]) => {
           if (entry.isIntersecting && !isFetchingMore && hasMore) {
-            fetchPage(offsetRef.current, debouncedSearch, typeFilter, sortOrder, true);
+            fetchPage(offsetRef.current, debouncedSearch, typeFilter, sortOrder, myOnly, true);
           }
         },
         { threshold: 0.1 }
       );
       observerRef.current.observe(el);
     },
-    [isFetchingMore, hasMore, fetchPage, debouncedSearch, typeFilter, sortOrder]
+    [isFetchingMore, hasMore, fetchPage, debouncedSearch, typeFilter, sortOrder, myOnly]
   );
 
   const handleProductCreated = useCallback(() => {
     offsetRef.current = 0;
     setProducts([]);
-    fetchPage(0, debouncedSearch, typeFilter, sortOrder, false);
-  }, [fetchPage, debouncedSearch, typeFilter, sortOrder]);
+    fetchPage(0, debouncedSearch, typeFilter, sortOrder, myOnly, false);
+  }, [fetchPage, debouncedSearch, typeFilter, sortOrder, myOnly]);
 
   const handleProductDeleted = useCallback((id: string) => {
     setProducts((prev) => prev.filter((p) => p.id !== id));
@@ -104,6 +110,8 @@ export function ProductsGrid() {
     { value: "desc", label: "Z-A" },
   ];
 
+  const hasActiveFilter = debouncedSearch || typeFilter !== "all" || myOnly;
+
   return (
     <div>
       {/* Sticky toolbar */}
@@ -113,16 +121,20 @@ export function ProductsGrid() {
         style={{ borderColor: "rgba(255, 255, 255, 0) !important" }}
       >
         <div className="flex items-center justify-between gap-3 pt-4">
-          <h2 className="text-2xl font-bold shrink-0">Sản Phẩm Của Tôi</h2>
+          <h2 className="text-2xl font-bold shrink-0">{myOnly ? "Bản Của Tôi" : "Tất Cả Sản Phẩm"}</h2>
           <CreateProductDialog onCreated={handleProductCreated} />
         </div>
-        <p className="text-muted-foreground text-sm mt-0.5">Tạo và tùy chỉnh thiết kế cơ bi-da của bạn</p>
+        <p className="text-muted-foreground text-sm mt-0.5">{myOnly ? "Các thiết kế cơ bi-da của bạn" : "Tất cả thiết kế cơ bi-da của đội nhóm"}</p>
         <div className="flex items-center gap-2 mt-3">
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input type="text" placeholder="Tìm theo tên..." value={search} onChange={(e) => setSearchRaw(e.target.value)} className="pl-8" />
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            <Button variant={myOnly ? "default" : "outline"} size="sm" onClick={() => setMyOnly((v) => !v)}>
+              Bạn
+            </Button>
+            <div className="w-px bg-border self-stretch" />
             {filters.map((f) => (
               <Button key={f.value} variant={typeFilter === f.value ? "default" : "outline"} size="sm" onClick={() => setTypeFilter(f.value)}>
                 {f.label}
@@ -130,12 +142,7 @@ export function ProductsGrid() {
             ))}
             <div className="w-px bg-border self-stretch mx-1" />
             {sortOptions.map((s) => (
-              <Button
-                key={s.value}
-                variant={sortOrder === s.value ? "default" : "outline"}
-                size="sm"
-                onClick={() => setSortOrder((prev) => (prev === s.value ? null : s.value))}
-              >
+              <Button key={s.value} variant={sortOrder === s.value ? "default" : "outline"} size="sm" onClick={() => setSortOrder((prev) => (prev === s.value ? null : s.value))}>
                 {s.label}
               </Button>
             ))}
@@ -149,7 +156,7 @@ export function ProductsGrid() {
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : products.length === 0 ? (
-        debouncedSearch || typeFilter !== "all" ? (
+        hasActiveFilter ? (
           <div className="text-center py-16 bg-card rounded-xl border">
             <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 rounded-full bg-muted">
               <Search className="h-8 w-8 text-muted-foreground" />
@@ -171,7 +178,7 @@ export function ProductsGrid() {
         <>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {products.map((product) => (
-              <ProductCard key={product.id} product={product} onDeleted={() => handleProductDeleted(product.id)} />
+              <ProductCard key={product.id} product={product} currentUserId={currentUserId} onDeleted={() => handleProductDeleted(product.id)} />
             ))}
           </div>
 

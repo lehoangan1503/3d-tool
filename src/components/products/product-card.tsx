@@ -12,13 +12,17 @@ import { ProductPreviewDialog } from "./product-preview-dialog";
 
 interface ProductCardProps {
   product: Product;
+  currentUserId: string;
   onDeleted?: () => void;
 }
 
-export function ProductCard({ product, onDeleted }: ProductCardProps) {
+export function ProductCard({ product, currentUserId, onDeleted }: ProductCardProps) {
   const router = useRouter();
   const [previewOpen, setPreviewOpen] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
+
+  const isOwner = product.user_id === currentUserId;
+  const ownerDisplay = product.owner_nickname || product.owner_email || "";
 
   async function handleDelete(e: React.MouseEvent) {
     e.preventDefault();
@@ -102,24 +106,33 @@ export function ProductCard({ product, onDeleted }: ProductCardProps) {
                     )}
                   </p>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                  onClick={handleDelete}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+                {isOwner && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    onClick={handleDelete}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                )}
               </div>
 
-              <div className="mt-auto flex items-center justify-between text-xs pt-2">
-                <span className="text-muted-foreground">
-                  {new Date(product.updated_at).toLocaleDateString()}
-                </span>
-                <span className="flex items-center gap-1 text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                  Chỉnh sửa
-                  <ArrowRight className="h-3 w-3" />
-                </span>
+              <div className="mt-auto flex flex-col gap-1 pt-2">
+                {ownerDisplay && (
+                  <p className="text-[11px] text-muted-foreground/70 truncate" title={ownerDisplay}>
+                    👤 {ownerDisplay}
+                  </p>
+                )}
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">
+                    {new Date(product.updated_at).toLocaleDateString("vi-VN")}
+                  </span>
+                  <span className="flex items-center gap-1 text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+                    {isOwner ? "Chỉnh sửa" : "Xem"}
+                    <ArrowRight className="h-3 w-3" />
+                  </span>
+                </div>
               </div>
             </div>
           </div>

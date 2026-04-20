@@ -47,7 +47,7 @@ export const CAMERA_DIRECTION_PRESETS: CameraDirectionPreset[] = [
 
 // ── Cue Instance & Config ──
 
-export const MAX_CUE_INSTANCES = 4;
+export const MAX_CUE_INSTANCES = 5;
 
 export interface CueInstance {
   id: string;
@@ -56,15 +56,19 @@ export interface CueInstance {
   positionZ: number;  // -5 to 3
   scale: number;      // 4–12
   isMain: boolean;    // first cue is always main
+  /** Per-instance rotation (radians). Only used in Simulator mode. Optional for backward compat. */
+  rotationX?: number;
+  rotationY?: number;
+  rotationZ?: number;
 }
 
 export interface CueConfig {
-  instances: CueInstance[];  // 1–4 cues
-  spinY: number;             // Model Y rotation (radians, 0–2π) — shared
+  instances: CueInstance[];  // 1–5 cues
+  spinY: number;             // Model Y rotation (radians, 0–2π) — shared (Video Studio only)
   spinSpeed: number;         // Continuous Y-rotation speed (0–1) — shared
-  spinX: number;             // Model X rotation (radians, 0–2π) — shared
+  spinX: number;             // Model X rotation (radians, 0–2π) — shared (Video Studio only)
   spinSpeedX: number;        // Continuous X-rotation speed (0–1) — shared
-  spinZ: number;             // Model Z rotation (radians, 0–2π) — shared
+  spinZ: number;             // Model Z rotation (radians, 0–2π) — shared (Video Studio only)
 }
 
 export const DEFAULT_CUE_CONFIG: CueConfig = {
@@ -389,14 +393,17 @@ export function createBackgroundFrame(type: BackgroundFrameType = "color"): Back
 
 // ── Factory: Create a new cue instance ──
 
-export function createCueInstance(): CueInstance {
+export function createCueInstance(offsetX = 2): CueInstance {
   return {
     id: crypto.randomUUID(),
-    positionX: 2,   // offset from main cue so clones don't overlap
+    positionX: offsetX,
     positionY: 0,
     positionZ: 0,
     scale: 7,
     isMain: false,
+    rotationX: 0,
+    rotationY: 0,
+    rotationZ: 0,
   };
 }
 

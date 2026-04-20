@@ -43,6 +43,8 @@ import { uploadToStorage } from "@/lib/supabase/upload";
 interface EditorClientProps {
   product: Product;
   initialConfig?: ProductConfig;
+  isOwner?: boolean;
+  ownerProfile?: { nickname: string | null; email: string } | null;
 }
 
 interface PendingFiles {
@@ -50,7 +52,7 @@ interface PendingFiles {
   customTexture: { file: File; preview: string } | null;
 }
 
-export function EditorClient({ product: initialProduct, initialConfig }: EditorClientProps) {
+export function EditorClient({ product: initialProduct, initialConfig, isOwner = true, ownerProfile }: EditorClientProps) {
   const router = useRouter();
   const [product, setProduct] = useState(initialProduct);
   const [config, setConfig] = useState<ProductConfig>(initialConfig || DEFAULT_PRODUCT_CONFIG);
@@ -69,6 +71,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
   });
   const [showImageExtractor, setShowImageExtractor] = useState(false);
   const [showVideoExtractor, setShowVideoExtractor] = useState(false);
+  const [cloning, setCloning] = useState(false);
 
   const [hdriOptions, setHdriOptions] = useState<Array<{ id: string; label: string }>>([]);
 
@@ -350,6 +353,21 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
     }
   };
 
+  const handleClone = async () => {
+    if (cloning) return;
+    setCloning(true);
+    try {
+      const res = await fetch(`/api/products/${product.id}/clone`, { method: "POST" });
+      if (!res.ok) throw new Error("Failed");
+      const cloned = await res.json();
+      router.push(`/dashboard/products/${cloned.id}`);
+    } catch {
+      alert("Không thể sao chép sản phẩm");
+    } finally {
+      setCloning(false);
+    }
+  };
+
   const copyJsonMetadata = async () => {
     // Simplified Shopify metafield format
     const metadata = {
@@ -386,85 +404,136 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
       {/* Header */}
       <header className="bg-card/80 backdrop-blur-sm border-b px-2 sm:px-4 py-2 sm:py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-          <Link href="/dashboard" onClick={handleBackClick}>
-            <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8 sm:h-10 sm:w-10">
+          <Link href="/dashboard">
+            <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8 sm:h-10 sm:w-10" onClick={isOwner ? handleBackClick : undefined}>
               <ArrowLeft className="h-4 w-4 sm:h-5 sm:w-5" />
             </Button>
           </Link>
           <div className="min-w-0 flex-1">
-            <Input
-              value={product.name}
-              onChange={(e) => updateProduct({ name: e.target.value })}
-              className="font-semibold text-base sm:text-lg border-none shadow-none px-0 h-auto focus-visible:ring-0 bg-transparent truncate"
-            />
+            {isOwner ? (
+              <Input
+                value={product.name}
+                onChange={(e) => updateProduct({ name: e.target.value })}
+                className="font-semibold text-base sm:text-lg border-none shadow-none px-0 h-auto focus-visible:ring-0 bg-transparent truncate"
+              />
+            ) : (
+              <p className="font-semibold text-base sm:text-lg truncate">{product.name}</p>
+            )}
             <p className="text-xs sm:text-sm text-muted-foreground capitalize">
-              {product.type} cơ
+              {isOwner ? (
+                `${product.type} cơ`
+              ) : (
+                <span>
+                  Sở hữu bởi:{" "}
+                  <span className="font-medium text-foreground">
+                    {ownerProfile?.nickname || ownerProfile?.email || "Người dùng"}
+                  </span>
+                </span>
+              )}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-1 sm:gap-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleAutoRotate}
-            title={isAutoRotating ? "Tạm dừng tự động xoay" : "Bắt đầu tự động xoay"}
-            className="h-8 w-8 sm:h-10 sm:w-10"
-          >
-            {isAutoRotating ? (
-              <Pause className="h-4 w-4 sm:h-5 sm:w-5" />
-            ) : (
-              <Play className="h-4 w-4 sm:h-5 sm:w-5" />
-            )}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleBackground}
-            title={isDarkBg ? "Nền sáng" : "Nền tối"}
-            className="h-8 w-8 sm:h-10 sm:w-10"
-          >
-            {isDarkBg ? (
-              <Sun className="h-4 w-4 sm:h-5 sm:w-5" />
-            ) : (
-              <Moon className="h-4 w-4 sm:h-5 sm:w-5" />
-            )}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setShowImageExtractor(true)}
-            title="Chụp ảnh"
-            className="h-8 w-8 sm:h-10 sm:w-10"
-          >
-            <Camera className="h-4 w-4 sm:h-5 sm:w-5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setShowVideoExtractor(true)}
-            title="Quay video"
-            className="h-8 w-8 sm:h-10 sm:w-10"
-          >
-            <Video className="h-4 w-4 sm:h-5 sm:w-5" />
-          </Button>
-          <Button 
-            onClick={handleSave} 
-            disabled={saving || !hasChanges}
-            size="sm"
-            className="h-8 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm"
-          >
-            {saving ? (
-              <>
-                <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
-                <span className="hidden sm:inline ml-1">{uploading ? "Đang tải lên..." : "Đang lưu..."}</span>
-              </>
-            ) : (
-              <>
-                <Save className="h-3 w-3 sm:h-4 sm:w-4" />
-                <span className="hidden sm:inline ml-1">Lưu</span>
-              </>
-            )}
-          </Button>
+          {isOwner ? (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleAutoRotate}
+                title={isAutoRotating ? "Tạm dừng tự động xoay" : "Bắt đầu tự động xoay"}
+                className="h-8 w-8 sm:h-10 sm:w-10"
+              >
+                {isAutoRotating ? (
+                  <Pause className="h-4 w-4 sm:h-5 sm:w-5" />
+                ) : (
+                  <Play className="h-4 w-4 sm:h-5 sm:w-5" />
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleBackground}
+                title={isDarkBg ? "Nền sáng" : "Nền tối"}
+                className="h-8 w-8 sm:h-10 sm:w-10"
+              >
+                {isDarkBg ? (
+                  <Sun className="h-4 w-4 sm:h-5 sm:w-5" />
+                ) : (
+                  <Moon className="h-4 w-4 sm:h-5 sm:w-5" />
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowImageExtractor(true)}
+                title="Chụp ảnh"
+                className="h-8 w-8 sm:h-10 sm:w-10"
+              >
+                <Camera className="h-4 w-4 sm:h-5 sm:w-5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowVideoExtractor(true)}
+                title="Quay video"
+                className="h-8 w-8 sm:h-10 sm:w-10"
+              >
+                <Video className="h-4 w-4 sm:h-5 sm:w-5" />
+              </Button>
+              <Button
+                onClick={handleSave}
+                disabled={saving || !hasChanges}
+                size="sm"
+                className="h-8 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm"
+              >
+                {saving ? (
+                  <>
+                    <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
+                    <span className="hidden sm:inline ml-1">{uploading ? "Đang tải lên..." : "Đang lưu..."}</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-3 w-3 sm:h-4 sm:w-4" />
+                    <span className="hidden sm:inline ml-1">Lưu</span>
+                  </>
+                )}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleBackground}
+                title={isDarkBg ? "Nền sáng" : "Nền tối"}
+                className="h-8 w-8 sm:h-10 sm:w-10"
+              >
+                {isDarkBg ? (
+                  <Sun className="h-4 w-4 sm:h-5 sm:w-5" />
+                ) : (
+                  <Moon className="h-4 w-4 sm:h-5 sm:w-5" />
+                )}
+              </Button>
+              <Button
+                onClick={handleClone}
+                disabled={cloning}
+                size="sm"
+                className="h-8 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm"
+              >
+                {cloning ? (
+                  <>
+                    <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
+                    <span className="hidden sm:inline ml-1">Đang sao chép...</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3 w-3 sm:h-4 sm:w-4" />
+                    <span className="ml-1">Sao chép sản phẩm này</span>
+                  </>
+                )}
+              </Button>
+            </>
+          )}
         </div>
       </header>
 
@@ -476,7 +545,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
         </div>
 
         {/* Mobile Bottom Sheet Overlay */}
-        {mobileControlsExpanded && (
+        {isOwner && mobileControlsExpanded && (
           <div 
             className="lg:hidden fixed inset-0 bg-black/40 z-40 transition-opacity duration-300"
             onClick={() => setMobileControlsExpanded(false)}
@@ -485,6 +554,7 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
         )}
 
         {/* Mobile Bottom Sheet */}
+        {isOwner && (
         <div 
           className={`lg:hidden fixed bottom-0 left-0 right-0 bg-card border-t border-border rounded-t-2xl shadow-2xl transition-transform duration-300 ease-out z-50 ${
             mobileControlsExpanded ? '' : 'translate-y-[calc(100%-56px)]'
@@ -957,8 +1027,10 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
             </div>
           </div>
         </div>
+        )} {/* end isOwner mobile sheet */}
 
-        {/* Desktop Sidebar */}
+        {/* Desktop Sidebar — only shown for product owners */}
+        {isOwner && (
         <div className="hidden lg:flex lg:w-80 shrink-0 bg-card border-l overflow-y-auto flex-col">
           <div className="p-4 flex flex-col gap-4">
             {/* 3D Controls */}
@@ -1481,9 +1553,8 @@ export function EditorClient({ product: initialProduct, initialConfig }: EditorC
             </CollapsibleCard>
           </div>
         </div>
+        )} {/* end isOwner desktop sidebar */}
       </div>
-
-      {/* Extractor Dialogs */}
       <ImageExtractor
         sceneManager={sceneManager}
         productName={product.name}

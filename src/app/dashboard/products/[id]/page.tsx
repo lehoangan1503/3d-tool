@@ -1,7 +1,7 @@
 import { redirect, notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { EditorClient } from "@/components/editor/editor-client";
-import type { Product, ProductConfig, ThreeJSSettingsJson } from "@/types/product";
+import type { Product, ProductConfig, ThreeJSSettingsJson, UserProfile } from "@/types/product";
 import { settingsJsonToConfig } from "@/types/product";
 
 interface PageProps {
@@ -18,16 +18,18 @@ export default async function ProductEditorPage({ params }: PageProps) {
     redirect("/login");
   }
 
+  // Fetch product — any authenticated user can view any product
   const { data: product, error } = await supabase
     .from("products")
     .select("*")
     .eq("id", id)
-    .eq("user_id", user.id)
     .single();
 
   if (error || !product) {
     notFound();
   }
+
+  const isOwner = product.user_id === user.id;
 
   // Config MUST come from database - no fallback to defaults
   if (!product.threejs_settings_id) {
@@ -48,6 +50,24 @@ export default async function ProductEditorPage({ params }: PageProps) {
 
   const initialConfig: ProductConfig = settingsJsonToConfig(settings.settings as ThreeJSSettingsJson);
 
-  // Use key to force remount when product ID changes (important for client-side navigation)
-  return <EditorClient key={product.id} product={product as Product} initialConfig={initialConfig} />;
+  // Fetch owner profile for display
+  let ownerProfile: UserProfile | null = null;
+  if (!isOwner) {
+    const { data: ownerData } = await supabase
+      .from("user_profiles")
+      .select("*")
+      .eq("user_id", product.user_id)
+      .single();
+    ownerProfile = ownerData as UserProfile | null;
+  }
+
+  return (
+    <EditorClient
+      key={product.id}
+      product={product as Product}
+      initialConfig={initialConfig}
+      isOwner={isOwner}
+      ownerProfile={ownerProfile}
+    />
+  );
 }

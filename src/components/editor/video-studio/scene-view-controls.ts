@@ -20,6 +20,8 @@ export interface SelectionInfo {
   layerId?: string;
   layerIndex?: number;
   object?: THREE.Object3D;
+  /** Index of the cue (in CueConfig.instances) that was hit. Only set when type="cue". */
+  cueIndex?: number;
 }
 
 const CLICK_THRESHOLD_PX = 5;
@@ -204,7 +206,7 @@ export class SceneViewControls {
           case "camera":
             return { type: "camera", object: current };
           case "cue":
-            return { type: "cue", object: current };
+            return { type: "cue", object: current, cueIndex: ud.cueIndex as number | undefined };
           case "wall":
             return { type: "wall", object: current };
           case "table":
@@ -579,6 +581,23 @@ export class SceneViewControls {
     this.setSelection({ type: null });
   }
 
+  /** Reposition the orbit camera to center on the given world-space position.
+   *  Preserves the current camera-to-target distance and direction so the view
+   *  does not feel like a sudden snap — only the focal point moves. */
+  focusOnPosition(center: THREE.Vector3): void {
+    if (!this.orbitControls) return;
+    const godCam = this.esm.getGodCamera();
+    if (!godCam) return;
+    const dist = godCam.position.distanceTo(this.orbitControls.target);
+    const dir = new THREE.Vector3()
+      .subVectors(godCam.position, this.orbitControls.target)
+      .normalize();
+    this.orbitControls.target.copy(center);
+    godCam.position.copy(center).addScaledVector(dir, dist);
+    godCam.lookAt(center);
+    this.orbitControls.update();
+  }
+
   private _enabled = true;
 
   setEnabled(enabled: boolean): void {
@@ -635,6 +654,14 @@ export class SceneViewControls {
 
   update(): void {
     if (this.orbitControls) this.orbitControls.update();
+    // Guard: if the selected object has been removed from the scene (parent===null),
+    // detach TransformControls immediately to prevent the "must be part of scene graph" error.
+    if (this.currentSelection.object && this.currentSelection.object.parent === null) {
+      this.detachTransformControls();
+      this.clearHighlight();
+      this.currentSelection = { type: null };
+      this.onSelectionChange?.({ type: null });
+    }
   }
 
   dispose(): void {

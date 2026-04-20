@@ -16,6 +16,7 @@ import {
   createShadowFloor,
   createWallShadowPlane,
   createLShapedShadowMesh,
+  createCornerFillMesh,
   createTableSurface,
   createFabricTexture,
   createStudioBackdrop,
@@ -110,6 +111,8 @@ export class ExtractorSceneManager {
   private _shadowOffsetZ = 0;
   private wallShadowPlane: THREE.Mesh | null = null;
   private tableSurface: THREE.Mesh | null = null;
+  // Curved corner fill — backs the shadow mesh's curved section so shadows look natural
+  private studioCornerFill: THREE.Mesh | null = null;
 
   // HDRI-driven shadow lights (one DirectionalLight per HDRI layer)
   private hdriShadowLights: Array<{
@@ -162,6 +165,10 @@ export class ExtractorSceneManager {
   private instancedMeshes: THREE.InstancedMesh[] = [];
   private sourceModelRef: THREE.Group | null = null;
   private currentCueConfig: CueConfig | null = null;
+
+  // Simulator mode: per-cue individual groups instead of InstancedMesh
+  private simulatorMode = false;
+  private simulatorCueGroups: THREE.Group[] = [];
 
   // Scene view (god camera)
   private godCamera: THREE.PerspectiveCamera | null = null;
@@ -377,6 +384,12 @@ export class ExtractorSceneManager {
       this.tableSurface.geometry.dispose();
       this.tableSurface = null;
     }
+    if (this.studioCornerFill) {
+      this.scene.remove(this.studioCornerFill);
+      (this.studioCornerFill.material as THREE.Material).dispose();
+      this.studioCornerFill.geometry.dispose();
+      this.studioCornerFill = null;
+    }
     for (const mesh of this.backgroundLayerMeshes) {
       this.scene.remove(mesh);
       mesh.geometry.dispose();
@@ -428,8 +441,9 @@ export class ExtractorSceneManager {
       light.shadow.camera.bottom = -12;
       light.shadow.bias = -0.0001;
       light.shadow.normalBias = 0.02;
-      light.shadow.radius = Math.max(shadow.blur ?? 3, 4);
+      light.shadow.radius = Math.max(layer.shadowBlur ?? shadow.blur ?? 3, 4);
       light.shadow.blurSamples = 20;
+      light.shadow.intensity = layer.shadowIntensity ?? 1.0;
 
       this.scene.add(light);
       this.scene.add(light.target);
@@ -461,8 +475,9 @@ export class ExtractorSceneManager {
       entry.light.color.set(layer.lightColor ?? '#ffffff');
       entry.light.userData = { baseIntensity };
       entry.light.castShadow = shadow.enabled;
-      entry.light.shadow.radius = Math.max(shadow.blur ?? 3, 4);
+      entry.light.shadow.radius = Math.max(layer.shadowBlur ?? shadow.blur ?? 3, 4);
       entry.light.shadow.blurSamples = 20;
+      entry.light.shadow.intensity = layer.shadowIntensity ?? 1.0;
     }
 
     if (this.shadowFloor) {
@@ -483,6 +498,7 @@ export class ExtractorSceneManager {
   setWallsVisible(visible: boolean): void {
     if (this.backdrop) this.backdrop.visible = visible;
     if (this.tableSurface) this.tableSurface.visible = visible;
+    if (this.studioCornerFill) this.studioCornerFill.visible = visible;
     for (const p of this.wallFramePlanes) p.visible = visible;
     for (const p of this.tableFramePlanes) p.visible = visible;
   }
@@ -1043,7 +1059,7 @@ export class ExtractorSceneManager {
     }
   }
 
-  /** Walk all cue materials (clonedModel + instancedMeshes) and set envMap */
+  /** Walk all cue materials (clonedModel + instancedMeshes + simulatorCueGroups) and set envMap */
   private applyCueEnvMap(envMap: THREE.Texture | null, intensity: number): void {
     if (this.clonedModel) {
       this.clonedModel.traverse((child) => {
@@ -1068,6 +1084,15 @@ export class ExtractorSceneManager {
           }
         }
       }
+    }
+    for (const group of this.simulatorCueGroups) {
+      group.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+          child.material.envMap = envMap;
+          child.material.envMapIntensity = intensity;
+          child.material.needsUpdate = true;
+        }
+      });
     }
   }
 
@@ -2177,6 +2202,13 @@ export class ExtractorSceneManager {
       this.scene.add(this.shadowFloor);
       // Restore saved manual transform for shadow floor (if any)
       this.applyShadowPlaneTransform(config);
+
+      // Curved corner fill: provides white backing geometry for the shadow mesh's
+      // curved section. Without this, mid-curve positions have no surface behind
+      // them and the shadow appears as a floating dark arc from the camera.
+      this.studioCornerFill = createCornerFillMesh(34, tableY, wallZ, '#ffffff');
+      this.studioCornerFill.userData = { type: 'corner-fill' };
+      this.scene.add(this.studioCornerFill);
     }
 
     // Setup cue instances
@@ -3270,6 +3302,17 @@ export class ExtractorSceneManager {
     return this.godCamera;
   }
 
+  /** Return the world-space center of all simulator cue groups (for camera focus). */
+  getSimulatorGroupsCenter(): THREE.Vector3 | null {
+    if (this.simulatorCueGroups.length === 0) return null;
+    const box = new THREE.Box3();
+    for (const group of this.simulatorCueGroups) {
+      box.expandByObject(group);
+    }
+    if (box.isEmpty()) return null;
+    return box.getCenter(new THREE.Vector3());
+  }
+
   /** Position studio camera from a CameraKeyframe — uses absolute world coordinates, preserves rotation */
   setCameraFromKeyframe(keyframe: CameraKeyframe): void {
     this.camera.position.set(keyframe.x, keyframe.y, keyframe.z);
@@ -3384,8 +3427,13 @@ export class ExtractorSceneManager {
     for (const entry of this.hdriLightHelpers) {
       objects.push(entry.helper);
     }
-    if (this.model) objects.push(this.model);
-    for (const im of this.instancedMeshes) objects.push(im);
+    if (this.simulatorMode) {
+      // Simulator: individual group clones (model is hidden)
+      objects.push(...this.simulatorCueGroups);
+    } else {
+      if (this.model) objects.push(this.model);
+      for (const im of this.instancedMeshes) objects.push(im);
+    }
     return objects;
   }
 
@@ -3411,6 +3459,7 @@ export class ExtractorSceneManager {
   // ---------------------------------------------------------------------------
 
   setupCueInstances(config: CueConfig): void {
+    if (this.simulatorMode) return; // Simulator uses individual groups, not InstancedMesh
     this.clearInstancedMeshes();
     this.currentCueConfig = config;
 
@@ -3457,7 +3506,11 @@ export class ExtractorSceneManager {
         const inst = instances[i];
         dummy.position.set(inst.positionX, inst.positionY, inst.positionZ);
         dummy.scale.setScalar(inst.scale);
-        dummy.rotation.set(config.spinX || 0, config.spinY, config.spinZ || 0);
+        dummy.rotation.set(
+          inst.rotationX ?? (config.spinX || 0),
+          inst.rotationY ?? (config.spinY || 0),
+          inst.rotationZ ?? (config.spinZ || 0),
+        );
         dummy.updateMatrix();
         im.setMatrixAt(i, dummy.matrix);
       }
@@ -3471,6 +3524,7 @@ export class ExtractorSceneManager {
   }
 
   updateCueInstances(config: CueConfig): void {
+    if (this.simulatorMode) return; // Simulator uses individual groups managed by setupSimulatorCueGroups
     this.currentCueConfig = config;
 
     if (!this.clonedModel) return;
@@ -3508,7 +3562,11 @@ export class ExtractorSceneManager {
         const inst = instances[i];
         dummy.position.set(inst.positionX, inst.positionY, inst.positionZ);
         dummy.scale.setScalar(inst.scale);
-        dummy.rotation.set(config.spinX || 0, config.spinY, config.spinZ || 0);
+        dummy.rotation.set(
+          inst.rotationX ?? (config.spinX || 0),
+          inst.rotationY ?? (config.spinY || 0),
+          inst.rotationZ ?? (config.spinZ || 0),
+        );
         dummy.updateMatrix();
         im.setMatrixAt(i, dummy.matrix);
       }
@@ -3552,9 +3610,104 @@ export class ExtractorSceneManager {
       im.dispose();
     }
     this.instancedMeshes = [];
-    if (this.clonedModel) {
+    // In simulator mode, visibility is managed by setupSimulatorCueGroups — never restore it here
+    if (this.clonedModel && !this.simulatorMode) {
       this.clonedModel.visible = true;
     }
+  }
+
+  // ─── Simulator mode: per-cue independent groups ───────────────────────────
+
+  /** Call once on the Simulator's dedicated ESM to enable per-cue group mode. */
+  enableSimulatorMode(): void {
+    this.simulatorMode = true;
+  }
+
+  private clearSimulatorCueGroups(): void {
+    for (const group of this.simulatorCueGroups) {
+      this.scene.remove(group);
+      group.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          (child.material as THREE.Material).dispose?.();
+        }
+      });
+    }
+    this.simulatorCueGroups = [];
+  }
+
+  /** Build one independent THREE.Group per CueInstance. Each group is a deep-clone
+   *  of the loaded model so it can be independently selected/transformed. */
+  private buildSimulatorCueGroup(inst: CueInstance, config: CueConfig): THREE.Group {
+    const source = this.clonedModel;
+    if (!source) return new THREE.Group();
+    const group = source.clone(true);
+    group.position.set(inst.positionX, inst.positionY, inst.positionZ);
+    group.scale.setScalar(inst.scale);
+    group.rotation.set(
+      inst.rotationX ?? (config.spinX || 0),
+      inst.rotationY ?? (config.spinY || 0),
+      inst.rotationZ ?? (config.spinZ || 0),
+    );
+    group.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = false;
+      }
+    });
+    return group;
+  }
+
+  setupSimulatorCueGroups(config: CueConfig): void {
+    if (!this.simulatorMode) return;
+    this.clearSimulatorCueGroups();
+    this.clearInstancedMeshes();
+    if (!this.clonedModel) return;
+
+    // Build groups BEFORE hiding clonedModel — clone(true) copies the visible flag,
+    // so if we hid the source first every cloned group would also be invisible.
+    const instances = config.instances;
+    for (let i = 0; i < instances.length; i++) {
+      const inst = instances[i];
+      const group = this.buildSimulatorCueGroup(inst, config);
+      group.visible = true; // Ensure visible even if clonedModel is transitioning
+      // Only set userData on the GROUP root — resolveHit walks .parent up to find it.
+      // Setting it on children would cause TransformControls to attach to a child mesh instead.
+      group.userData = { type: 'cue', cueIndex: i };
+      this.simulatorCueGroups.push(group);
+      this.scene.add(group);
+    }
+
+    // Hide the source model AFTER groups are built
+    this.clonedModel.visible = false;
+
+    this.currentCueConfig = config;
+    // Re-apply current envMap to all new groups
+    this.reapplyCurrentCueEnvMap();
+  }
+
+  /** Re-apply the currently active HDRI envMap to all simulator cue groups after rebuild.
+   *  Uses scene.environment (set by HDRI load) as the envMap source. */
+  private reapplyCurrentCueEnvMap(): void {
+    const envMap = this.scene.environment;
+    if (!envMap) return;
+    for (const group of this.simulatorCueGroups) {
+      group.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+          child.material.envMap = envMap;
+          child.material.envMapIntensity = 1.0;
+          child.material.needsUpdate = true;
+        }
+      });
+    }
+  }
+
+  updateSimulatorCueGroup(idx: number, posX: number, posY: number, posZ: number,
+    rotX: number, rotY: number, rotZ: number, scale: number): void {
+    const group = this.simulatorCueGroups[idx];
+    if (!group) return;
+    group.position.set(posX, posY, posZ);
+    group.rotation.set(rotX, rotY, rotZ);
+    group.scale.setScalar(scale);
   }
 
   dispose() {
@@ -3563,6 +3716,7 @@ export class ExtractorSceneManager {
     this.stopRecording();
     this.clearStudioElements();
     this.clearInstancedMeshes();
+    this.clearSimulatorCueGroups();
 
     if (this.cameraHelper) {
       this.scene.remove(this.cameraHelper);

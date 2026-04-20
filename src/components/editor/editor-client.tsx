@@ -434,105 +434,88 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
           </div>
         </div>
         <div className="flex items-center gap-1 sm:gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleAutoRotate}
+            title={isAutoRotating ? "Tạm dừng tự động xoay" : "Bắt đầu tự động xoay"}
+            className="h-8 w-8 sm:h-10 sm:w-10"
+          >
+            {isAutoRotating ? (
+              <Pause className="h-4 w-4 sm:h-5 sm:w-5" />
+            ) : (
+              <Play className="h-4 w-4 sm:h-5 sm:w-5" />
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleBackground}
+            title={isDarkBg ? "Nền sáng" : "Nền tối"}
+            className="h-8 w-8 sm:h-10 sm:w-10"
+          >
+            {isDarkBg ? (
+              <Sun className="h-4 w-4 sm:h-5 sm:w-5" />
+            ) : (
+              <Moon className="h-4 w-4 sm:h-5 sm:w-5" />
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setShowImageExtractor(true)}
+            title="Chụp ảnh"
+            className="h-8 w-8 sm:h-10 sm:w-10"
+          >
+            <Camera className="h-4 w-4 sm:h-5 sm:w-5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setShowVideoExtractor(true)}
+            title="Quay video"
+            className="h-8 w-8 sm:h-10 sm:w-10"
+          >
+            <Video className="h-4 w-4 sm:h-5 sm:w-5" />
+          </Button>
           {isOwner ? (
-            <>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={toggleAutoRotate}
-                title={isAutoRotating ? "Tạm dừng tự động xoay" : "Bắt đầu tự động xoay"}
-                className="h-8 w-8 sm:h-10 sm:w-10"
-              >
-                {isAutoRotating ? (
-                  <Pause className="h-4 w-4 sm:h-5 sm:w-5" />
-                ) : (
-                  <Play className="h-4 w-4 sm:h-5 sm:w-5" />
-                )}
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={toggleBackground}
-                title={isDarkBg ? "Nền sáng" : "Nền tối"}
-                className="h-8 w-8 sm:h-10 sm:w-10"
-              >
-                {isDarkBg ? (
-                  <Sun className="h-4 w-4 sm:h-5 sm:w-5" />
-                ) : (
-                  <Moon className="h-4 w-4 sm:h-5 sm:w-5" />
-                )}
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setShowImageExtractor(true)}
-                title="Chụp ảnh"
-                className="h-8 w-8 sm:h-10 sm:w-10"
-              >
-                <Camera className="h-4 w-4 sm:h-5 sm:w-5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setShowVideoExtractor(true)}
-                title="Quay video"
-                className="h-8 w-8 sm:h-10 sm:w-10"
-              >
-                <Video className="h-4 w-4 sm:h-5 sm:w-5" />
-              </Button>
-              <Button
-                onClick={handleSave}
-                disabled={saving || !hasChanges}
-                size="sm"
-                className="h-8 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm"
-              >
-                {saving ? (
-                  <>
-                    <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
-                    <span className="hidden sm:inline ml-1">{uploading ? "Đang tải lên..." : "Đang lưu..."}</span>
-                  </>
-                ) : (
-                  <>
-                    <Save className="h-3 w-3 sm:h-4 sm:w-4" />
-                    <span className="hidden sm:inline ml-1">Lưu</span>
-                  </>
-                )}
-              </Button>
-            </>
+            <Button
+              onClick={handleSave}
+              disabled={saving || !hasChanges}
+              size="sm"
+              className="h-8 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm"
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
+                  <span className="hidden sm:inline ml-1">{uploading ? "Đang tải lên..." : "Đang lưu..."}</span>
+                </>
+              ) : (
+                <>
+                  <Save className="h-3 w-3 sm:h-4 sm:w-4" />
+                  <span className="hidden sm:inline ml-1">Lưu</span>
+                </>
+              )}
+            </Button>
           ) : (
-            <>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={toggleBackground}
-                title={isDarkBg ? "Nền sáng" : "Nền tối"}
-                className="h-8 w-8 sm:h-10 sm:w-10"
-              >
-                {isDarkBg ? (
-                  <Sun className="h-4 w-4 sm:h-5 sm:w-5" />
-                ) : (
-                  <Moon className="h-4 w-4 sm:h-5 sm:w-5" />
-                )}
-              </Button>
-              <Button
-                onClick={handleClone}
-                disabled={cloning}
-                size="sm"
-                className="h-8 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm"
-              >
-                {cloning ? (
-                  <>
-                    <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
-                    <span className="hidden sm:inline ml-1">Đang sao chép...</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-3 w-3 sm:h-4 sm:w-4" />
-                    <span className="ml-1">Sao chép sản phẩm này</span>
-                  </>
-                )}
-              </Button>
-            </>
+            <Button
+              onClick={handleClone}
+              disabled={cloning}
+              size="sm"
+              className="h-8 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm"
+            >
+              {cloning ? (
+                <>
+                  <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
+                  <span className="hidden sm:inline ml-1">Đang sao chép...</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="h-3 w-3 sm:h-4 sm:w-4" />
+                  <span className="ml-1">Sao chép sản phẩm này</span>
+                </>
+              )}
+            </Button>
           )}
         </div>
       </header>

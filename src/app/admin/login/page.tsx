@@ -1,14 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { login } from "./actions";
+import { adminLogin } from "./actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, AlertCircle } from "lucide-react";
+import { Loader2, AlertCircle, ShieldCheck } from "lucide-react";
 
-export default function LoginPage() {
+export default function AdminLoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -16,7 +16,7 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
 
-    const result = await login(formData);
+    const result = await adminLogin(formData);
 
     if (result?.error) {
       setError(result.error);
@@ -28,13 +28,11 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md shadow-lg">
         <CardHeader className="text-center pb-2">
-          <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 rounded-full bg-primary/10">
-            <svg className="w-6 h-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-            </svg>
+          <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 rounded-full bg-amber-500/10">
+            <ShieldCheck className="w-6 h-6 text-amber-500" />
           </div>
-          <CardTitle className="text-2xl">Cue Customizer</CardTitle>
-          <CardDescription>Đăng nhập vào tài khoản của bạn</CardDescription>
+          <CardTitle className="text-2xl">Admin Portal</CardTitle>
+          <CardDescription>Đăng nhập vào trang quản trị</CardDescription>
         </CardHeader>
         <CardContent className="pt-4">
           <form action={handleSubmit} className="flex flex-col gap-4">
@@ -44,7 +42,7 @@ export default function LoginPage() {
                 id="email"
                 name="email"
                 type="email"
-                placeholder="you@example.com"
+                placeholder="admin@example.com"
                 required
                 autoComplete="email"
               />
@@ -69,14 +67,18 @@ export default function LoginPage() {
               </div>
             )}
 
-            <Button type="submit" className="w-full mt-2" disabled={loading}>
+            <Button
+              type="submit"
+              className="w-full mt-2 bg-amber-500 hover:bg-amber-600 text-white"
+              disabled={loading}
+            >
               {loading ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Đang tải...
                 </>
               ) : (
-                "Đăng Nhập"
+                "Đăng Nhập Admin"
               )}
             </Button>
           </form>

@@ -1,0 +1,46 @@
+-- =====================================================
+-- 013: Admin Role Setup
+-- =====================================================
+-- This migration does NOT create a new table.
+-- Admin role is stored directly in Supabase auth.users.app_metadata.
+--
+-- STEP 1 — Create a new user (or use an existing one), then run STEP 2.
+--
+-- STEP 2 — Grant admin role to an existing user by email:
+--
+--   UPDATE auth.users
+--   SET raw_app_meta_data = raw_app_meta_data || '{"role": "admin"}'::jsonb
+--   WHERE email = 'your-admin@example.com';
+--
+-- STEP 3 — Verify:
+--
+--   SELECT email, raw_app_meta_data
+--   FROM auth.users
+--   WHERE email = 'your-admin@example.com';
+--
+-- =====================================================
+-- ALTERNATIVE: Use the Supabase Admin REST API (curl)
+-- =====================================================
+-- 1. Get the user's UUID:
+--
+--   curl -X GET \
+--     'https://YOUR_PROJECT_REF.supabase.co/auth/v1/admin/users' \
+--     -H 'Authorization: Bearer YOUR_SERVICE_ROLE_KEY' \
+--     -H 'apikey: YOUR_SERVICE_ROLE_KEY'
+--
+-- 2. Set admin role (replace USER_ID):
+--
+--   curl -X PUT \
+--     'https://YOUR_PROJECT_REF.supabase.co/auth/v1/admin/users/USER_ID' \
+--     -H 'Authorization: Bearer YOUR_SERVICE_ROLE_KEY' \
+--     -H 'apikey: YOUR_SERVICE_ROLE_KEY' \
+--     -H 'Content-Type: application/json' \
+--     -d '{"app_metadata": {"role": "admin"}}'
+--
+-- =====================================================
+-- To REVOKE admin role:
+-- =====================================================
+--
+--   UPDATE auth.users
+--   SET raw_app_meta_data = raw_app_meta_data - 'role'
+--   WHERE email = 'your-admin@example.com';

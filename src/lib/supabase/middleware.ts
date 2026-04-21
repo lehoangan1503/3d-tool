@@ -37,15 +37,36 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
+  const { pathname } = request.nextUrl;
+  const isAdmin = user?.app_metadata?.role === "admin";
+
+  // ── Admin routes ────────────────────────────────────────────────────────────
+  // Redirect logged-in admins away from admin login
+  if (user && isAdmin && pathname === "/admin/login") {
+    const url = request.nextUrl.clone();
+    url.pathname = "/admin/dashboard";
+    return NextResponse.redirect(url);
+  }
+
+  // Protect all /admin/* routes except /admin/login
+  if (pathname.startsWith("/admin") && pathname !== "/admin/login") {
+    if (!user || !isAdmin) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/admin/login";
+      return NextResponse.redirect(url);
+    }
+  }
+
+  // ── Regular user routes ─────────────────────────────────────────────────────
   // Protect dashboard routes
-  if (!user && request.nextUrl.pathname.startsWith("/dashboard")) {
+  if (!user && pathname.startsWith("/dashboard")) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
   // Redirect logged-in users away from login page
-  if (user && request.nextUrl.pathname === "/login") {
+  if (user && pathname === "/login") {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     return NextResponse.redirect(url);

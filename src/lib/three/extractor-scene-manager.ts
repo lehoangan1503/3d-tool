@@ -27,8 +27,8 @@ import {
 import type { VideoStudioConfig, CameraKeyframe, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig, CueHdriConfig } from '@/types/video-studio';
 import { computeVideoDuration, createEasingFunction, applyDirection, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI } from '@/types/video-studio';
 import { compositeSurfaceFrames, preloadFrameImages } from './background-compositor';
-import { applyBumperEmissiveShaderMask } from './leather-material';
-import { isRubberMaterial } from './leather-config';
+import { applyBumperEmissiveShaderMask, applyLogoToExistingMaterial } from './leather-material';
+import { isRubberMaterial, isTopCapMaterial, isTopCapFaceMaterial, isCylinderLeatherMaterial } from './leather-config';
 
 // Available HDRI options (same as editor-client)
 export const HDRI_OPTIONS_FALLBACK = [
@@ -83,6 +83,7 @@ export class ExtractorSceneManager {
   private _surfaceEnvColor: string = '#ffffff';
   /** Cue-only HDRI env map (separate from studio surfaces) */
   private cueEnvRT: THREE.WebGLRenderTarget | null = null;
+  private cueEnvIntensity: number = 1.0;
   private lastCueHdriKey: string = '';
   private lastCueHdriLayersKey: string = '';
   private isDisposed = false;
@@ -169,6 +170,8 @@ export class ExtractorSceneManager {
   // Simulator mode: per-cue individual groups instead of InstancedMesh
   private simulatorMode = false;
   private simulatorCueGroups: THREE.Group[] = [];
+  // Per-instance surface texture overrides (disposed with the group)
+  private cueGroupSurfaceTextures: Map<number, THREE.Texture> = new Map();
 
   // Scene view (god camera)
   private godCamera: THREE.PerspectiveCamera | null = null;
@@ -1061,6 +1064,7 @@ export class ExtractorSceneManager {
 
   /** Walk all cue materials (clonedModel + instancedMeshes + simulatorCueGroups) and set envMap */
   private applyCueEnvMap(envMap: THREE.Texture | null, intensity: number): void {
+    this.cueEnvIntensity = intensity;
     if (this.clonedModel) {
       this.clonedModel.traverse((child) => {
         if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
@@ -1087,10 +1091,14 @@ export class ExtractorSceneManager {
     }
     for (const group of this.simulatorCueGroups) {
       group.traverse((child) => {
-        if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
-          child.material.envMap = envMap;
-          child.material.envMapIntensity = intensity;
-          child.material.needsUpdate = true;
+        if (!(child instanceof THREE.Mesh)) return;
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        for (const mat of mats) {
+          if (mat instanceof THREE.MeshStandardMaterial) {
+            mat.envMap = envMap;
+            mat.envMapIntensity = intensity;
+            mat.needsUpdate = true;
+          }
         }
       });
     }
@@ -3633,6 +3641,11 @@ export class ExtractorSceneManager {
       });
     }
     this.simulatorCueGroups = [];
+    // Dispose all per-instance surface texture overrides
+    for (const tex of this.cueGroupSurfaceTextures.values()) {
+      tex.dispose();
+    }
+    this.cueGroupSurfaceTextures.clear();
   }
 
   /** Build one independent THREE.Group per CueInstance. Each group is a deep-clone
@@ -3641,6 +3654,41 @@ export class ExtractorSceneManager {
     const source = this.clonedModel;
     if (!source) return new THREE.Group();
     const group = source.clone(true);
+    // THREE.clone(true) shares material instances — clone them so each group has
+    // independent materials and applySurfaceToSimulatorCueGroup doesn't bleed across groups.
+    // Also re-apply bumper emissive shader mask because .clone() drops onBeforeCompile,
+    // which would otherwise make the logo appear on all cylinder faces, not just the bottom.
+    // For the top cap face disc (solid-color material, no original .map), explicitly apply
+    // the logo with correct flipY=false; all other materials carry their logo via the clone chain.
+    group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (Array.isArray(child.material)) {
+        child.material = child.material.map((m: THREE.Material) => {
+          const cloned = m.clone();
+          const physMat = cloned as THREE.MeshPhysicalMaterial;
+          if (physMat.emissiveMap && isRubberMaterial(physMat.name, child.name)) {
+            applyBumperEmissiveShaderMask(physMat);
+          }
+          // Re-apply top cap face logo as emissive so it's always visible
+          // regardless of envMap/lighting. Safe to call unconditionally —
+          // emissive doesn't affect the existing diffuse map.
+          if (isTopCapFaceMaterial(physMat.name)) {
+            applyLogoToExistingMaterial(physMat, "topCapFace");
+          }
+          return cloned;
+        });
+      } else if (child.material) {
+        const cloned = child.material.clone();
+        const physMat = cloned as THREE.MeshPhysicalMaterial;
+        if (physMat.emissiveMap && isRubberMaterial(physMat.name, child.name)) {
+          applyBumperEmissiveShaderMask(physMat);
+        }
+        if (isTopCapFaceMaterial(physMat.name)) {
+          applyLogoToExistingMaterial(physMat, "topCapFace");
+        }
+        child.material = cloned;
+      }
+    });
     group.position.set(inst.positionX, inst.positionY, inst.positionZ);
     group.scale.setScalar(inst.scale);
     group.rotation.set(
@@ -3688,14 +3736,23 @@ export class ExtractorSceneManager {
   /** Re-apply the currently active HDRI envMap to all simulator cue groups after rebuild.
    *  Uses scene.environment (set by HDRI load) as the envMap source. */
   private reapplyCurrentCueEnvMap(): void {
-    const envMap = this.scene.environment;
+    const envMap = this.cueEnvRT?.texture ?? this.scene.environment;
     if (!envMap) return;
+    const intensity = this.cueEnvIntensity;
+    const applyEnv = (mat: THREE.Material) => {
+      if (mat instanceof THREE.MeshStandardMaterial) {
+        mat.envMap = envMap;
+        mat.envMapIntensity = intensity;
+        mat.needsUpdate = true;
+      }
+    };
     for (const group of this.simulatorCueGroups) {
       group.traverse((child) => {
-        if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
-          child.material.envMap = envMap;
-          child.material.envMapIntensity = 1.0;
-          child.material.needsUpdate = true;
+        if (!(child instanceof THREE.Mesh)) return;
+        if (Array.isArray(child.material)) {
+          child.material.forEach(applyEnv);
+        } else {
+          applyEnv(child.material);
         }
       });
     }
@@ -3708,6 +3765,111 @@ export class ExtractorSceneManager {
     group.position.set(posX, posY, posZ);
     group.rotation.set(rotX, rotY, rotZ);
     group.scale.setScalar(scale);
+  }
+
+  /**
+   * Load a surface image from `surfaceUrl` and apply it as the diffuse map to the
+   * body meshes of the simulator cue group at `idx`.  The previous override texture
+   * (if any) is disposed before the new one is stored.
+   */
+  async applySurfaceToSimulatorCueGroup(idx: number, surfaceUrl: string): Promise<void> {
+    const group = this.simulatorCueGroups[idx];
+    if (!group) return;
+
+    // Load the surface image at full quality (same URL as stored in DB)
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.crossOrigin = "anonymous";
+      image.onload = () => resolve(image);
+      image.onerror = reject;
+      image.src = surfaceUrl;
+    });
+
+    // Match SceneManager's adaptive texture size for full quality
+    const maxAnisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    const deviceMemoryGB = (navigator as unknown as Record<string, number>).deviceMemory;
+    const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+    const texSize = (!isMobile && (deviceMemoryGB === undefined || deviceMemoryGB > 4)) ? 4096 : 2048;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = texSize;
+    canvas.height = texSize;
+    canvas.getContext("2d")!.drawImage(img, 0, 0, texSize, texSize);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.flipY = false;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = true;
+    tex.anisotropy = maxAnisotropy;
+    tex.needsUpdate = true;
+
+    // Dispose previous override for this slot
+    const prev = this.cueGroupSurfaceTextures.get(idx);
+    if (prev) prev.dispose();
+    this.cueGroupSurfaceTextures.set(idx, tex);
+
+    // Apply to body materials only — skip rubber (bumper), top cap (joint cover),
+    // and cylinder leather (wrap) so logos/bumps don't bleed onto those meshes
+    const shouldSkip = (matName: string, meshName: string) =>
+      isRubberMaterial(matName, meshName) ||
+      isTopCapMaterial(matName, meshName) ||
+      isCylinderLeatherMaterial(matName, meshName);
+
+    group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const mat = child.material;
+      if (Array.isArray(mat)) {
+        mat.forEach((m) => {
+          if (m instanceof THREE.MeshStandardMaterial && !shouldSkip(m.name, child.name)) {
+            m.map = tex;
+            m.needsUpdate = true;
+          }
+        });
+      } else if (mat instanceof THREE.MeshStandardMaterial && !shouldSkip(mat.name, child.name)) {
+        mat.map = tex;
+        mat.needsUpdate = true;
+      }
+    });
+
+    this.render();
+  }
+
+  /** Restore the original surface (from clonedModel) for the cue group at `idx`. */
+  resetSimulatorCueGroupSurface(idx: number): void {
+    const group = this.simulatorCueGroups[idx];
+    const source = this.clonedModel;
+    if (!group || !source) return;
+
+    // Build a map of mesh name → original material map texture from the source model
+    const origTextures = new Map<string, THREE.Texture | null>();
+    source.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        const mat = Array.isArray(child.material) ? child.material[0] : child.material;
+        origTextures.set(child.name, (mat as THREE.MeshStandardMaterial)?.map ?? null);
+      }
+    });
+
+    group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const origTex = origTextures.get(child.name) ?? null;
+      const mats = Array.isArray(child.material) ? child.material : [child.material];
+      mats.forEach((m) => {
+        if (m instanceof THREE.MeshStandardMaterial) {
+          m.map = origTex;
+          m.needsUpdate = true;
+        }
+      });
+    });
+
+    // Dispose + remove override entry
+    const prev = this.cueGroupSurfaceTextures.get(idx);
+    if (prev) prev.dispose();
+    this.cueGroupSurfaceTextures.delete(idx);
+
+    this.render();
   }
 
   dispose() {

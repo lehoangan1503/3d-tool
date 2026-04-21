@@ -40,9 +40,14 @@ interface FrameCanvasProps {
   onDragEnd?: () => void;
   /** When true, hides all frame borders, handles, labels, and canvas UI chrome. */
   previewMode?: boolean;
+  /** Canvas width in pixels (default 2048) */
+  canvasWidth?: number;
+  /** Canvas height in pixels (default 2048) */
+  canvasHeight?: number;
 }
 
-const CANVAS_SIZE = 2048;
+/** Exported so consumers can fall back to the default when no prop is given */
+export const CANVAS_SIZE = 2048;
 const DISPLAY_SIZE = 600;
 
 export function FrameCanvas({
@@ -58,6 +63,8 @@ export function FrameCanvas({
   extractorReady,
   onDragEnd,
   previewMode = false,
+  canvasWidth = CANVAS_SIZE,
+  canvasHeight = CANVAS_SIZE,
 }: FrameCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const activeCanvasContainerRef = useRef<HTMLDivElement>(null);
@@ -118,7 +125,10 @@ export function FrameCanvas({
     };
   }, [axisConstraint]);
   
-  const renderScale = DISPLAY_SIZE / CANVAS_SIZE;
+  // Scale so the longest side fits within DISPLAY_SIZE
+  const renderScale = DISPLAY_SIZE / Math.max(canvasWidth, canvasHeight);
+  const displayWidth = canvasWidth * renderScale;
+  const displayHeight = canvasHeight * renderScale;
   const interactionScale = renderScale * canvasView.zoom;
   const selectedFrame = frames.find(f => f.id === selectedFrameId && isCueFrame(f)) as CueFrame | undefined;
   const selectedCueUsesStudioCapture = Boolean(
@@ -623,8 +633,8 @@ export function FrameCanvas({
         ref={containerRef}
         className="relative bg-background shadow-lg rounded-lg"
         style={{
-          width: DISPLAY_SIZE,
-          height: DISPLAY_SIZE,
+          width: displayWidth,
+          height: displayHeight,
           transform: `translate(${canvasView.panX}px, ${canvasView.panY}px) scale(${canvasView.zoom})`,
           transformOrigin: 'center center',
         }}
@@ -704,7 +714,7 @@ export function FrameCanvas({
         {/* Size indicator */}
         {!previewMode && (
           <div className="absolute top-2 left-2 bg-black/60 text-white text-xs px-2 py-1 rounded pointer-events-none z-30">
-            2048 × 2048
+            {canvasWidth} × {canvasHeight}
           </div>
         )}
 
@@ -841,4 +851,3 @@ export function FrameCanvas({
   );
 }
 
-export { CANVAS_SIZE, DISPLAY_SIZE };

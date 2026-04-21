@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { RotateCcw, Plus, Trash2, ChevronDown, ChevronUp } from "lucide-react";
 import type { CueConfig, CueInstance } from "@/types/video-studio";
-import { createCueInstance, MAX_CUE_INSTANCES } from "@/types/video-studio";
+import { createCueInstance, MAX_CUE_INSTANCES, CUE_BOUNDS } from "@/types/video-studio";
 
 interface CueSetupPanelProps {
   cueConfig: CueConfig;
@@ -150,8 +150,7 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
                     <Label className="text-xs text-muted-foreground">Vị trí X</Label>
                     <span className="text-xs text-muted-foreground tabular-nums">{instance.positionX.toFixed(1)}</span>
                   </div>
-                  <Slider value={[instance.positionX]} onValueChange={([v]) => updateInstance(i, { positionX: v })} min={-14} max={14} step={0.1} />
-                </div>
+                  <Slider value={[instance.positionX]} onValueChange={([v]) => updateInstance(i, { positionX: v })} min={-14} max={14} step={0.1} />                </div>
 
                 {/* Position Y */}
                 <div className="space-y-1.5">
@@ -159,7 +158,7 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
                     <Label className="text-xs text-muted-foreground">Vị trí Y</Label>
                     <span className="text-xs text-muted-foreground tabular-nums">{instance.positionY.toFixed(1)}</span>
                   </div>
-                  <Slider value={[instance.positionY]} onValueChange={([v]) => updateInstance(i, { positionY: v })} min={-10} max={10} step={0.1} />
+                  <Slider value={[instance.positionY]} onValueChange={([v]) => updateInstance(i, { positionY: v })} min={CUE_BOUNDS.yMin} max={10} step={0.1} />
                 </div>
 
                 {/* Position Z */}
@@ -168,7 +167,7 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
                     <Label className="text-xs text-muted-foreground">Vị trí Z</Label>
                     <span className="text-xs text-muted-foreground tabular-nums">{instance.positionZ.toFixed(1)}</span>
                   </div>
-                  <Slider value={[instance.positionZ]} onValueChange={([v]) => updateInstance(i, { positionZ: v })} min={-5} max={3} step={0.1} />
+                  <Slider value={[instance.positionZ]} onValueChange={([v]) => updateInstance(i, { positionZ: v })} min={CUE_BOUNDS.zMin} max={3} step={0.1} />
                 </div>
 
                 {/* Scale */}

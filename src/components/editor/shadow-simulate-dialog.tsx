@@ -18,7 +18,7 @@ import { ExtractorSceneManager as ESMClass, HDRI_OPTIONS_FALLBACK } from "@/lib/
 import type { VideoStudioConfig, CameraKeyframe, CueInstance } from "@/types/video-studio";
 import { DEFAULT_STUDIO_CONFIG, DEFAULT_CUE_HDRI, MAX_CUE_INSTANCES, createCueInstance } from "@/types/video-studio";
 import { forceWhiteWalls } from "@/lib/three/studio-helpers";
-import { Lightbulb, Move, RotateCcw, Maximize2, Loader2, Download, FileUp, CheckCircle2, XCircle, Eye, EyeOff, Pencil, Trash2, Check, X, Undo2, Redo2, Sun, ChevronDown, ChevronUp, Plus, Copy, ClipboardPaste } from "lucide-react";
+import { Lightbulb, Move, RotateCcw, Maximize2, Loader2, Download, FileUp, CheckCircle2, XCircle, Eye, EyeOff, Pencil, Trash2, Check, X, Undo2, Redo2, Sun, ChevronDown, ChevronUp, Plus, Copy, ClipboardPaste, Palette } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 // ─── Shadow Template type ────────────────────────────────────────────────────
@@ -149,6 +149,8 @@ interface ShadowSimulateDialogProps {
   onSave: (cfg: CueShadowConfig) => void;
   extractorRef: React.MutableRefObject<ExtractorSceneManager | null>;
   cueSettings: { phi: number; zoom: number; offsetX: number; offsetY: number; spinY: number };
+  /** Current product type — used to filter the product surface picker */
+  productType: "smooth" | "leather";
 }
 
 function TransformInput({ label, value, onChange, suffix = "" }: { label: string; value: number; onChange: (v: number) => void; suffix?: string }) {
@@ -174,7 +176,7 @@ function TransformInput({ label, value, onChange, suffix = "" }: { label: string
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
-export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfigChange, onSave, extractorRef, cueSettings }: ShadowSimulateDialogProps) {
+export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfigChange, onSave, extractorRef, cueSettings, productType }: ShadowSimulateDialogProps) {
   // Local shadow config (edit in-dialog, save on confirm)
   const [localCfg, setLocalCfg] = useState<CueShadowConfig>(() => ({ ...shadowConfig }));
   const localCfgRef = useRef(localCfg);
@@ -235,6 +237,15 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
     buildWhiteStudioConfig(shadowConfig).cueConfig.instances
   );
   const [selectedCueIndex, setSelectedCueIndex] = useState<number>(0);
+
+  // Product surface picker
+  const [surfacePickerOpen, setSurfacePickerOpen] = useState(false);
+  const [surfacePickerCueIdx, setSurfacePickerCueIdx] = useState<number | null>(null);
+  const [surfaceProducts, setSurfaceProducts] = useState<Array<{ id: string; name: string; surface_url: string | null; texture_url: string | null }>>([]);
+  const [surfaceProductsLoading, setSurfaceProductsLoading] = useState(false);
+  const [surfaceProductsPage, setSurfaceProductsPage] = useState(1);
+  const surfaceScrollRef = useRef<HTMLDivElement>(null);
+  const SURFACE_PAGE_SIZE = 12;
 
   // Refs — studioConfig is a REF (not state) to avoid React re-renders during drag/slider
   const previewContainerRef = useRef<HTMLDivElement>(null);
@@ -297,6 +308,12 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
       esm.setTransparentBackground(entry.wallsTransparent);
       esm.updateStudioPreviewConfig(configRef.current);
       esm.setupSimulatorCueGroups(configRef.current.cueConfig);
+      // Re-apply per-cue surface textures (history entries preserve sourceSurfaceUrl)
+      configRef.current.cueConfig.instances.forEach((inst, i) => {
+        if (inst.sourceSurfaceUrl) {
+          void esm.applySurfaceToSimulatorCueGroup(i, inst.sourceSurfaceUrl);
+        }
+      });
       esm.forcePreviewUpdate();
     }
   }, []);
@@ -612,6 +629,12 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
       await esm.setupStudioFromStudioConfig(cfg);
       forceWhiteWalls(esm);
       esm.setupSimulatorCueGroups(cfg.cueConfig);
+      // Re-apply any per-cue surface textures stored in config (e.g. after dialog reopen)
+      cfg.cueConfig.instances.forEach((inst, i) => {
+        if (inst.sourceSurfaceUrl) {
+          void esm.applySurfaceToSimulatorCueGroup(i, inst.sourceSurfaceUrl);
+        }
+      });
       // Focus godCamera on the loaded cue group so saved positions are immediately visible
       const grpCenter = esm.getSimulatorGroupsCenter();
       if (grpCenter) sceneViewRef.current?.focusOnPosition(grpCenter);
@@ -691,7 +714,7 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
     };
   }, [open]);
 
-  // ─── Handlers ──────────────────────────────────────────────────────────────
+  // ─── Surface picker IntersectionObserver — lazy-load + canvas downscale ───
   const handleSlider = useCallback((field: keyof CueShadowConfig, value: number) => {
     const next = { ...localCfgRef.current, [field]: value };
     localCfgRef.current = next;
@@ -799,7 +822,16 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
       cueConfig: { ...configRef.current.cueConfig, instances: updated },
     };
     setCueInstancesState(updated);
-    esmRef.current?.setupSimulatorCueGroups(configRef.current.cueConfig);
+    const addEsm = esmRef.current;
+    if (addEsm) {
+      addEsm.setupSimulatorCueGroups(configRef.current.cueConfig);
+      // Re-apply surfaces for existing instances (new instance has none yet)
+      updated.forEach((inst, i) => {
+        if (inst.sourceSurfaceUrl) {
+          void addEsm.applySurfaceToSimulatorCueGroup(i, inst.sourceSurfaceUrl);
+        }
+      });
+    }
     setSelectedCueIndex(updated.length - 1);
     scheduleConfigUpdate();
     snapshotNow();
@@ -815,7 +847,16 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
       cueConfig: { ...configRef.current.cueConfig, instances: updated },
     };
     setCueInstancesState(updated);
-    esmRef.current?.setupSimulatorCueGroups(configRef.current.cueConfig);
+    const rmEsm = esmRef.current;
+    if (rmEsm) {
+      rmEsm.setupSimulatorCueGroups(configRef.current.cueConfig);
+      // Re-apply surfaces for remaining instances
+      updated.forEach((inst, i) => {
+        if (inst.sourceSurfaceUrl) {
+          void rmEsm.applySurfaceToSimulatorCueGroup(i, inst.sourceSurfaceUrl);
+        }
+      });
+    }
     setSelectedCueIndex((prev) => {
       if (prev >= updated.length) return updated.length - 1;
       if (prev === idx) return Math.max(0, idx - 1);
@@ -824,6 +865,78 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
     scheduleConfigUpdate();
     snapshotNow();
   }, [scheduleConfigUpdate, snapshotNow]);
+
+  /** Open the surface picker for a specific cue instance */
+  const handleOpenSurfacePicker = useCallback(async (idx: number) => {
+    // Disable controls while browsing — do NOT stop the sceneViewAnimId loop
+    sceneViewRef.current?.setEnabled(false);
+    setSurfacePickerCueIdx(idx);
+    setSurfacePickerOpen(true);
+    setSurfaceProductsPage(1);
+    setSurfaceProductsLoading(true);
+    try {
+      const res = await fetch(`/api/products?type=${productType}&limit=50`);
+      const data = res.ok ? await res.json() : null;
+      setSurfaceProducts(data?.items ?? []);
+    } catch {
+      setSurfaceProducts([]);
+    } finally {
+      setSurfaceProductsLoading(false);
+    }
+  }, [productType]);
+
+  /** Apply a product's surface to a cue instance */
+  const handleSelectSurfaceProduct = useCallback(async (
+    product: { id: string; name: string; surface_url: string | null }
+  ) => {
+    if (surfacePickerCueIdx === null) return;
+    const esm = esmRef.current;
+    const surfaceUrl = product.surface_url;
+    try {
+      if (esm && surfaceUrl) {
+        await esm.applySurfaceToSimulatorCueGroup(surfacePickerCueIdx, surfaceUrl);
+      }
+      // Update the instance metadata (including surface URL for persistence)
+      const updated = configRef.current.cueConfig.instances.map((inst, i) =>
+        i === surfacePickerCueIdx
+          ? { ...inst, sourceProductId: product.id, sourceProductName: product.name, sourceSurfaceUrl: surfaceUrl ?? undefined }
+          : inst
+      );
+      configRef.current = {
+        ...configRef.current,
+        cueConfig: { ...configRef.current.cueConfig, instances: updated },
+      };
+      setCueInstancesState(updated);
+      snapshotNow();
+    } catch (err) {
+      console.error("Failed to apply surface:", err);
+    } finally {
+      setSurfacePickerOpen(false);
+      setSurfacePickerCueIdx(null);
+      sceneViewRef.current?.setEnabled(true);
+    }
+  }, [surfacePickerCueIdx, snapshotNow]);
+
+  /** Dismiss surface picker without changing surface */
+  const handleCloseSurfacePicker = useCallback(() => {
+    setSurfacePickerOpen(false);
+    setSurfacePickerCueIdx(null);
+    sceneViewRef.current?.setEnabled(true);
+  }, []);
+
+  /** Reset a cue instance surface back to the current product */
+  const handleResetCueSurface = useCallback((idx: number) => {
+    esmRef.current?.resetSimulatorCueGroupSurface(idx);
+    const updated = configRef.current.cueConfig.instances.map((inst, i) =>
+      i === idx ? { ...inst, sourceProductId: undefined, sourceProductName: undefined, sourceSurfaceUrl: undefined } : inst
+    );
+    configRef.current = {
+      ...configRef.current,
+      cueConfig: { ...configRef.current.cueConfig, instances: updated },
+    };
+    setCueInstancesState(updated);
+    snapshotNow();
+  }, [snapshotNow]);
 
   /** Capture 2048×2048 clean production-camera frame (matches live preview) */
   const captureStudio = useCallback((): string | null => {
@@ -1002,6 +1115,15 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
         esmRef.current?.setupSimulatorCueGroups(snap.cueConfig);
         const snapCenter = esmRef.current?.getSimulatorGroupsCenter();
         if (snapCenter) sceneViewRef.current?.focusOnPosition(snapCenter);
+        // Re-apply any per-cue surface overrides stored in the template
+        const esm = esmRef.current;
+        if (esm) {
+          snap.cueConfig.instances.forEach((inst, i) => {
+            if (inst.sourceSurfaceUrl) {
+              void esm.applySurfaceToSimulatorCueGroup(i, inst.sourceSurfaceUrl);
+            }
+          });
+        }
         scheduleConfigUpdate();
       }
 
@@ -1090,7 +1212,7 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
-          className="w-screen h-screen max-w-none rounded-none flex flex-col p-0 gap-0"
+          className="w-screen h-screen max-w-none rounded-none flex flex-col p-0 gap-0 overflow-hidden"
           onEscapeKeyDown={(e) => {
             e.preventDefault();
             sceneViewRef.current?.deselect();
@@ -1595,18 +1717,6 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
                               <span className="text-[10px] text-muted-foreground font-mono">{(layer.lightColor ?? "#ffffff").toUpperCase()}</span>
                             </div>
                           </div>
-                          {/* Light Intensity */}
-                          <div className="space-y-0.5">
-                            <Label className="text-[10px] text-muted-foreground">
-                              Cường độ đèn — {((layer.intensity ?? 1) * 100).toFixed(0)}%
-                            </Label>
-                            <Slider
-                              value={[layer.intensity ?? 1]}
-                              onValueChange={([v]) => handleStudioLight(idx, { intensity: v })}
-                              onValueCommit={() => snapshotNow()}
-                              min={0} max={3} step={0.05}
-                            />
-                          </div>
                           {/* Shadow Blur (per-light) */}
                           <div className="space-y-0.5">
                             <Label className="text-[10px] text-muted-foreground">
@@ -1678,30 +1788,53 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
                     <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-1.5">
                       <p className="text-[10px] text-muted-foreground mb-2">Click vào gậy để chọn và dùng gizmo di chuyển/xoay/tỉ lệ. Mỗi gậy có bóng riêng.</p>
                       {cueInstancesState.map((inst, idx) => (
-                        <div
-                          key={inst.id}
-                          className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 cursor-pointer transition-colors ${
-                            selectedCueIndex === idx
-                              ? "border-blue-500/60 bg-blue-500/10"
-                              : "border-border/40 bg-muted/10 hover:bg-muted/20"
-                          }`}
-                          onClick={() => setSelectedCueIndex(idx)}
-                        >
-                          <span className="text-[10px] font-medium flex-1">
-                            {inst.isMain ? "Gậy chính" : `Gậy ${idx + 1}`}
-                          </span>
-                          <span className="text-[9px] text-muted-foreground tabular-nums font-mono">
-                            ({inst.positionX.toFixed(1)}, {inst.positionY.toFixed(1)}, {inst.positionZ.toFixed(1)})
-                          </span>
-                          {!inst.isMain && (
+                        <div key={inst.id} className="space-y-0.5">
+                          <div
+                            className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 cursor-pointer transition-colors ${
+                              selectedCueIndex === idx
+                                ? "border-blue-500/60 bg-blue-500/10"
+                                : "border-border/40 bg-muted/10 hover:bg-muted/20"
+                            }`}
+                            onClick={() => setSelectedCueIndex(idx)}
+                          >
+                            <span className="text-[10px] font-medium flex-1">
+                              {inst.isMain ? "Gậy chính" : `Gậy ${idx + 1}`}
+                            </span>
+                            <span className="text-[9px] text-muted-foreground tabular-nums font-mono">
+                              ({inst.positionX.toFixed(1)}, {inst.positionY.toFixed(1)}, {inst.positionZ.toFixed(1)})
+                            </span>
+                            {/* Surface picker button */}
                             <button
                               type="button"
-                              className="p-0.5 rounded hover:bg-destructive/20 transition-colors shrink-0"
-                              onClick={(e) => { e.stopPropagation(); handleRemoveCue(idx); }}
-                              title="Xóa gậy"
+                              className="p-0.5 rounded hover:bg-muted/60 transition-colors shrink-0"
+                              onClick={(e) => { e.stopPropagation(); handleOpenSurfacePicker(idx); }}
+                              title="Chọn bề mặt từ sản phẩm khác"
                             >
-                              <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                              <Palette className={`h-3 w-3 ${inst.sourceProductId ? "text-blue-400" : "text-muted-foreground"}`} />
                             </button>
+                            {!inst.isMain && (
+                              <button
+                                type="button"
+                                className="p-0.5 rounded hover:bg-destructive/20 transition-colors shrink-0"
+                                onClick={(e) => { e.stopPropagation(); handleRemoveCue(idx); }}
+                                title="Xóa gậy"
+                              >
+                                <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                              </button>
+                            )}
+                          </div>
+                          {inst.sourceProductName && (
+                            <div className="flex items-center gap-1 pl-2">
+                              <span className="text-[9px] text-blue-400 truncate">🎨 {inst.sourceProductName}</span>
+                              <button
+                                type="button"
+                                className="text-[9px] text-muted-foreground hover:text-foreground ml-auto shrink-0"
+                                onClick={() => handleResetCueSurface(idx)}
+                                title="Khôi phục bề mặt gốc"
+                              >
+                                ✕
+                              </button>
+                            </div>
                           )}
                         </div>
                       ))}
@@ -1772,6 +1905,80 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
               </Button>
             </div>
           </DialogFooter>
+          {/* ── Surface product picker — inset overlay, avoids nested Radix Dialog issues ── */}
+          {surfacePickerOpen && (
+            <div className="absolute inset-0 z-50 flex">
+              {/* Backdrop — click to dismiss */}
+              <div className="flex-1 bg-black/50" onClick={handleCloseSurfacePicker} />
+              {/* Panel */}
+              <div className="w-80 bg-background border-l border-border flex flex-col h-full shadow-2xl">
+                <div className="flex items-start justify-between px-4 py-3 border-b shrink-0">
+                  <div>
+                    <p className="text-sm font-semibold">Chọn bề mặt</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Sản phẩm {productType === "leather" ? "da" : "trơn"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded-md p-1 hover:bg-muted/60 transition-colors mt-0.5"
+                    onClick={handleCloseSurfacePicker}
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                {/* List */}
+                <div
+                  ref={surfaceScrollRef}
+                  className="flex-1 overflow-y-auto overscroll-contain"
+                >
+                  {surfaceProductsLoading ? (
+                    <div className="flex items-center justify-center py-16 gap-2 text-muted-foreground text-sm">
+                      <Loader2 className="w-4 h-4 animate-spin" /> Đang tải...
+                    </div>
+                  ) : (() => {
+                    const filtered = surfaceProducts.filter(p => p.surface_url);
+                    const visible = filtered.slice(0, surfaceProductsPage * SURFACE_PAGE_SIZE);
+                    const hasMore = visible.length < filtered.length;
+                    if (filtered.length === 0) {
+                      return <p className="text-center text-sm text-muted-foreground py-16">Không có sản phẩm nào có bề mặt.</p>;
+                    }
+                    return (
+                      <div className="py-1">
+                        {visible.map((p) => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            className="flex items-center gap-3 w-full px-3 py-2 text-left hover:bg-muted/60 transition-colors border-b border-border/20 last:border-b-0"
+                            onClick={() => handleSelectSurfaceProduct(p)}
+                          >
+                            <div className="w-10 h-14 shrink-0 bg-muted rounded overflow-hidden flex items-center justify-center">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={p.surface_url!}
+                                alt={p.name}
+                                className="w-full h-full object-contain"
+                              />
+                            </div>
+                            <span className="text-xs font-medium leading-tight line-clamp-3 flex-1">{p.name}</span>
+                          </button>
+                        ))}
+                        {hasMore && (
+                          <button
+                            type="button"
+                            className="w-full py-2 text-xs text-muted-foreground hover:text-foreground border-t border-border/20 transition-colors"
+                            onClick={() => setSurfaceProductsPage(p => p + 1)}
+                          >
+                            Tải thêm ({filtered.length - visible.length} còn lại)
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 

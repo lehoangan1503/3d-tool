@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { resolveCreatorNames } from "@/lib/supabase/creator";
 import type { ExtractorReference, ExtractorFrame, CueFrame, ImageFrame } from "@/types/extractor";
 import { isCueFrame, isImageFrame } from "@/types/extractor";
 
-// GET /api/extractor-references - List user's references with pagination + search
+// GET /api/extractor-references - List ALL references globally (with creator info)
 export async function GET(request: Request) {
   try {
     const supabase = await createClient();
-    
-    // Get current user
+
     const { data: { user }, error: userError } = await supabase.auth.getUser();
     if (userError || !user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -19,13 +19,15 @@ export async function GET(request: Request) {
     const offset = Math.max(parseInt(searchParams.get("offset") ?? "0",  10), 0);
     const search = (searchParams.get("search") ?? "").trim();
 
-    // Fetch references with frames
     let query = supabase
       .from("extractor_references")
       .select(`
         id,
+        user_id,
         name,
         thumb_url,
+        canvas_width,
+        canvas_height,
         created_at,
         updated_at,
         extractor_frames (
@@ -49,7 +51,6 @@ export async function GET(request: Request) {
           shadow_config
         )
       `, { count: "exact" })
-      .eq("user_id", user.id)
       .order("updated_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -64,18 +65,23 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Failed to fetch references" }, { status: 500 });
     }
 
-    // Transform to match our types - handle both cue and image frame types
+    const creatorIds = (references ?? []).map((r: any) => r.user_id).filter(Boolean) as string[];
+    const creatorMap = await resolveCreatorNames(supabase, creatorIds);
+
     const result: ExtractorReference[] = (references || []).map((ref: any) => ({
       id: ref.id,
       name: ref.name,
       thumbUrl: ref.thumb_url ?? undefined,
+      canvasWidth: ref.canvas_width ?? 2048,
+      canvasHeight: ref.canvas_height ?? 2048,
       createdAt: ref.created_at,
       updatedAt: ref.updated_at,
+      createdByName: ref.user_id ? (creatorMap[ref.user_id] ?? "Unknown") : undefined,
       frames: (ref.extractor_frames || [])
         .sort((a: any, b: any) => a.frame_order - b.frame_order)
         .map((f: any): ExtractorFrame => {
           const frameType = f.frame_type || 'cue';
-          
+
           const baseFrame = {
             id: f.id,
             name: f.frame_name ?? undefined,
@@ -88,9 +94,8 @@ export async function GET(request: Request) {
               rotation: f.rotation,
             },
           };
-          
+
           if (frameType === 'image') {
-            // Image frame
             return {
               ...baseFrame,
               frameType: 'image' as const,
@@ -104,11 +109,9 @@ export async function GET(request: Request) {
               },
             } as ImageFrame;
           }
-          
-          // Cue frame (default)
+
           let hdriLayers = f.hdri_layers;
           if (!hdriLayers || (Array.isArray(hdriLayers) && hdriLayers.length === 0)) {
-            // Migrate old format to new
             hdriLayers = [{
               id: crypto.randomUUID(),
               hdriType: 'bloem_train_track_clear_2k.hdr',
@@ -116,7 +119,7 @@ export async function GET(request: Request) {
               rotationY: f.light_angle ?? 0,
             }];
           }
-          
+
           return {
             ...baseFrame,
             frameType: 'cue' as const,
@@ -145,14 +148,14 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const supabase = await createClient();
-    
+
     const { data: { user }, error: userError } = await supabase.auth.getUser();
     if (userError || !user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const body = await request.json();
-    const { name, frames } = body as { name: string; frames: ExtractorFrame[] };
+    const { name, frames, canvasWidth, canvasHeight } = body as { name: string; frames: ExtractorFrame[]; canvasWidth?: number; canvasHeight?: number };
 
     if (!name || !frames || !Array.isArray(frames)) {
       return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
@@ -161,7 +164,12 @@ export async function POST(request: Request) {
     // Create reference
     const { data: reference, error: refError } = await supabase
       .from("extractor_references")
-      .insert({ user_id: user.id, name })
+      .insert({
+        user_id: user.id,
+        name,
+        canvas_width: canvasWidth ?? 2048,
+        canvas_height: canvasHeight ?? 2048,
+      })
       .select()
       .single();
 
@@ -183,7 +191,7 @@ export async function POST(request: Request) {
         height: f.transform.height,
         rotation: f.transform.rotation,
       };
-      
+
       if (isCueFrame(f)) {
         return {
           ...baseRow,
@@ -210,7 +218,7 @@ export async function POST(request: Request) {
           image_settings: f.imageSettings,
         };
       }
-      
+
       return baseRow;
     });
 
@@ -220,7 +228,6 @@ export async function POST(request: Request) {
 
     if (framesError) {
       console.error("Create frames error:", framesError);
-      // Rollback reference
       await supabase.from("extractor_references").delete().eq("id", reference.id);
       return NextResponse.json({ error: "Failed to create frames" }, { status: 500 });
     }

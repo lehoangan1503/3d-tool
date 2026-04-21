@@ -822,17 +822,16 @@ function renderCompressedTextureToCanvas(
  */
 export function applyLogoToExistingMaterial(mat: THREE.Material, type: "rubber" | "topCapFace"): void {
   const physMat = mat as THREE.MeshStandardMaterial;
-  const originalMap = physMat.map;
 
-  // Top cap face is a flat disc — make it double-sided so the logo remains visible
-  // when the cue is rotated and the face ends up pointing away from the camera.
   if (type === "topCapFace") {
-    physMat.side = THREE.DoubleSide;
-  }
+    if (!topCapLogoImage || !TOP_CAP_CONFIG.logo.enabled) return;
 
-  if (!originalMap) {
-    // No texture map (e.g. solid-color "Plastic Black" material) — create one with logo
-    console.log(`[applyLogo] No map texture on "${mat.name}", creating solid color canvas with logo`);
+    // Always double-sided so the disc face is visible from both directions
+    physMat.side = THREE.DoubleSide;
+
+    // Use emissive map instead of diffuse: the logo is always visible regardless of
+    // envMap intensity or metalness/roughness.  Black background = no emission,
+    // white logo shape = emissive at logo color (additive, doesn't affect base material).
     const width = 2048;
     const height = 2048;
     const canvas = document.createElement("canvas");
@@ -840,17 +839,64 @@ export function applyLogoToExistingMaterial(mat: THREE.Material, type: "rubber" 
     canvas.height = height;
     const ctx = canvas.getContext("2d")!;
 
-    const bgColor = type === "rubber"
-      ? "#0a0a0a"
-      : (physMat.color ? `#${physMat.color.getHexString()}` : "#1a1a1a");
-    ctx.fillStyle = bgColor;
+    ctx.fillStyle = "#000000";
     ctx.fillRect(0, 0, width, height);
 
-    if (type === "rubber") {
-      drawRubberLogoOnCanvas(ctx, width, height);
-    } else if (type === "topCapFace") {
-      drawTopCapFaceLogoOnCanvas(ctx, width, height);
-    }
+    // Reuse the same UV center as drawTopCapFaceLogoOnCanvas
+    const logoScale = TOP_CAP_CONFIG.logo.scale;
+    const logoW = width * logoScale;
+    const logoH = (topCapLogoImage.height / topCapLogoImage.width) * logoW;
+    const uvCenterX = 0.25;
+    const uvCenterY = 0.75;
+    const logoX = width * uvCenterX - logoW / 2;
+    const logoY = height * uvCenterY - logoH / 2;
+
+    // Render logo in white — physMat.emissive color tints the emission
+    const whiteCanvas = document.createElement("canvas");
+    whiteCanvas.width = topCapLogoImage.width;
+    whiteCanvas.height = topCapLogoImage.height;
+    const whiteCtx = whiteCanvas.getContext("2d")!;
+    whiteCtx.drawImage(topCapLogoImage, 0, 0);
+    whiteCtx.globalCompositeOperation = "source-in";
+    whiteCtx.fillStyle = "#ffffff";
+    whiteCtx.fillRect(0, 0, whiteCanvas.width, whiteCanvas.height);
+
+    ctx.save();
+    ctx.globalAlpha = TOP_CAP_CONFIG.logo.opacity || 1.0;
+    ctx.drawImage(whiteCanvas, logoX, logoY, logoW, logoH);
+    ctx.restore();
+
+    const emissiveTexture = new THREE.CanvasTexture(canvas);
+    emissiveTexture.colorSpace = THREE.SRGBColorSpace;
+    emissiveTexture.flipY = false; // GLB UV convention — logo at canvas (0.25, 0.75)
+    emissiveTexture.wrapS = THREE.RepeatWrapping;
+    emissiveTexture.wrapT = THREE.RepeatWrapping;
+    emissiveTexture.needsUpdate = true;
+
+    const logoColor = TOP_CAP_CONFIG.logo.color || "#c0c0c0";
+    physMat.emissiveMap = emissiveTexture;
+    physMat.emissive = new THREE.Color(logoColor);
+    physMat.emissiveIntensity = 0.8;
+    physMat.needsUpdate = true;
+    console.log(`[applyLogo] Applied topCapFace emissive logo to "${mat.name}" (${width}x${height})`);
+    return;
+  }
+
+  // ---- rubber type ---- keep original diffuse-map path below ----
+  const originalMap = physMat.map;
+
+  if (!originalMap) {
+    console.log(`[applyLogo] No map texture on "${mat.name}", creating solid color rubber canvas with logo`);
+    const width = 2048;
+    const height = 2048;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d")!;
+
+    ctx.fillStyle = "#0a0a0a";
+    ctx.fillRect(0, 0, width, height);
+    drawRubberLogoOnCanvas(ctx, width, height);
 
     const newTexture = new THREE.CanvasTexture(canvas);
     newTexture.colorSpace = THREE.SRGBColorSpace;
@@ -861,7 +907,7 @@ export function applyLogoToExistingMaterial(mat: THREE.Material, type: "rubber" 
 
     physMat.map = newTexture;
     physMat.needsUpdate = true;
-    console.log(`[applyLogo] Applied ${type} logo on solid background for "${mat.name}" (${width}x${height})`);
+    console.log(`[applyLogo] Applied rubber logo on solid background for "${mat.name}" (${width}x${height})`);
     return;
   }
 

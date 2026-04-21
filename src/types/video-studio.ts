@@ -49,17 +49,38 @@ export const CAMERA_DIRECTION_PRESETS: CameraDirectionPreset[] = [
 
 export const MAX_CUE_INSTANCES = 5;
 
+/**
+ * Hard position limits derived from studio scene geometry:
+ *   - Back wall plane at z = -5.5
+ *   - Table surface at y = -7.5  (FRAME_TABLE_Y)
+ *   - Wall lateral extent ±17    (34 / 2)
+ * These are enforced in both the slider UI and the 3D drag controls.
+ */
+export const CUE_BOUNDS = {
+  xMin: -17,
+  xMax: 17,
+  yMin: -7.5,   // table surface
+  yMax: 16,     // wall top
+  zMin: -5.5,   // back wall plane
+  zMax: 6.5,    // front edge of table (FRAME_WALL_Z + FRAME_TABLE_DEPTH)
+} as const;
+
 export interface CueInstance {
   id: string;
-  positionX: number;  // -14 to 14
-  positionY: number;  // -1 to 10
-  positionZ: number;  // -5 to 3
+  positionX: number;  // CUE_BOUNDS.xMin to CUE_BOUNDS.xMax
+  positionY: number;  // CUE_BOUNDS.yMin to CUE_BOUNDS.yMax
+  positionZ: number;  // CUE_BOUNDS.zMin to CUE_BOUNDS.zMax
   scale: number;      // 4–12
   isMain: boolean;    // first cue is always main
   /** Per-instance rotation (radians). Only used in Simulator mode. Optional for backward compat. */
   rotationX?: number;
   rotationY?: number;
   rotationZ?: number;
+  /** Source product whose surface texture is applied to this cue instance (optional). */
+  sourceProductId?: string;
+  sourceProductName?: string;
+  /** Surface image URL to restore the custom texture when loading a template. */
+  sourceSurfaceUrl?: string;
 }
 
 export interface CueConfig {
@@ -288,6 +309,7 @@ export interface VideoStudioTemplate {
   config: VideoStudioConfig;
   createdAt?: string;
   updatedAt?: string;
+  createdByName?: string; // nickname or email of the creator
 }
 
 // ── Quality Presets ──

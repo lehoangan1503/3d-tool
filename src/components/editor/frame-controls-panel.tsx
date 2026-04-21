@@ -46,9 +46,12 @@ interface HdriOption {
 
 const PREVIEW_CANVAS = 2048;
 
-function LayoutPreviewSvg({ frames, size }: { frames: ExtractorFrame[]; size: number }) {
+function LayoutPreviewSvg({ frames, size, canvasW = 2048, canvasH = 2048 }: { frames: ExtractorFrame[]; size: number; canvasW?: number; canvasH?: number }) {
+  const aspect = canvasW / canvasH;
+  const svgW = aspect >= 1 ? size : Math.round(size * aspect);
+  const svgH = aspect <= 1 ? size : Math.round(size / aspect);
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${PREVIEW_CANVAS} ${PREVIEW_CANVAS}`} style={{ background: "#111827" }} className="rounded block flex-shrink-0">
+    <svg width={svgW} height={svgH} viewBox={`0 0 ${canvasW} ${canvasH}`} style={{ background: "#111827" }} className="rounded block flex-shrink-0">
       {frames.map((frame, i) => {
         const cx = frame.transform.x + frame.transform.width / 2;
         const cy = frame.transform.y + frame.transform.height / 2;
@@ -118,6 +121,13 @@ interface FrameControlsPanelProps {
 
   /** Callback to set a frame's screenshot (used by simulator to push studio capture) */
   onScreenshotCapture?: (frameId: string, dataUrl: string) => void;
+
+  /** Current product cue type — used to filter the surface product picker in shadow simulator */
+  productType?: "smooth" | "leather";
+
+  /** Canvas dimensions — used for proportional frame positioning */
+  canvasWidth?: number;
+  canvasHeight?: number;
 }
 
 // Persistent frames list pinned at the bottom of the panel
@@ -190,6 +200,9 @@ export function FrameControlsPanel({
   onRenderReference,
   extractorRef,
   onScreenshotCapture,
+  productType,
+  canvasWidth = 2048,
+  canvasHeight = 2048,
 }: FrameControlsPanelProps) {
   // Track which HDRI layer is being edited (by layer id)
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
@@ -399,7 +412,12 @@ export function FrameControlsPanel({
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="text-sm font-medium truncate">{ref.name}</div>
-                              <div className="text-xs text-muted-foreground">{ref.frames.length} khung</div>
+                              <div className="text-xs text-muted-foreground">
+                                {ref.frames.length} khung
+                                {ref.createdByName && (
+                                  <span className="ml-1.5 opacity-70">· {ref.createdByName}</span>
+                                )}
+                              </div>
                             </div>
                           </button>
                         );
@@ -822,7 +840,7 @@ export function FrameControlsPanel({
                     if (enabled) {
                       updates.transform = {
                         ...(selectedFrame.transform ?? {}),
-                        x: 0, y: 0, width: 2048, height: 2048,
+                        x: 0, y: 0, width: canvasWidth, height: canvasHeight,
                       };
                     }
                     onFrameChange({ ...selectedFrame, ...updates });
@@ -862,6 +880,7 @@ export function FrameControlsPanel({
                   setShadowSimulateOpen(false);
                 }}
                 extractorRef={extractorRef}
+                productType={productType ?? "smooth"}
                 cueSettings={{
                   phi: selectedFrame.cue.phi,
                   zoom: selectedFrame.cue.zoom,

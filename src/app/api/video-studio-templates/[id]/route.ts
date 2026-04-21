@@ -5,7 +5,7 @@ interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
-// GET /api/video-studio-templates/[id] - Get single template
+// GET /api/video-studio-templates/[id] - Get single template (global read)
 export async function GET(request: Request, { params }: RouteParams) {
   try {
     const { id } = await params;
@@ -33,7 +33,7 @@ export async function GET(request: Request, { params }: RouteParams) {
   }
 }
 
-// PUT /api/video-studio-templates/[id] - Update template
+// PUT /api/video-studio-templates/[id] - Update template (owner only)
 export async function PUT(request: Request, { params }: RouteParams) {
   try {
     const { id } = await params;
@@ -42,6 +42,20 @@ export async function PUT(request: Request, { params }: RouteParams) {
     const { data: { user }, error: userError } = await supabase.auth.getUser();
     if (userError || !user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Verify ownership — only the creator may update
+    const { data: existing } = await supabase
+      .from("video_studio_templates")
+      .select("created_by")
+      .eq("id", id)
+      .single();
+
+    if (!existing) {
+      return NextResponse.json({ error: "Template not found" }, { status: 404 });
+    }
+    if (existing.created_by && existing.created_by !== user.id) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const body = await request.json();
@@ -74,7 +88,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
   }
 }
 
-// DELETE /api/video-studio-templates/[id] - Delete template
+// DELETE /api/video-studio-templates/[id] - Delete template (owner only)
 export async function DELETE(request: Request, { params }: RouteParams) {
   try {
     const { id } = await params;
@@ -83,6 +97,20 @@ export async function DELETE(request: Request, { params }: RouteParams) {
     const { data: { user }, error: userError } = await supabase.auth.getUser();
     if (userError || !user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Verify ownership — only the creator may delete
+    const { data: existing } = await supabase
+      .from("video_studio_templates")
+      .select("created_by")
+      .eq("id", id)
+      .single();
+
+    if (!existing) {
+      return NextResponse.json({ error: "Template not found" }, { status: 404 });
+    }
+    if (existing.created_by && existing.created_by !== user.id) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const { error } = await supabase

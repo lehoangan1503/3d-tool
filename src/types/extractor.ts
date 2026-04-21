@@ -441,6 +441,19 @@ export function isImageFrame(frame: ExtractorFrame): frame is ImageFrame {
   return frame.frameType === "image";
 }
 
+/** Canvas ratio preset (stored in image_ratios table) */
+export interface ImageRatio {
+  id: string;
+  label: string;
+  width: number;
+  height: number;
+  isDefault: boolean;
+}
+
+/** Default canvas dimensions */
+export const DEFAULT_CANVAS_WIDTH = 2048;
+export const DEFAULT_CANVAS_HEIGHT = 2048;
+
 /** Saved reference (layout preset) */
 export interface ExtractorReference {
   id: string;
@@ -449,6 +462,9 @@ export interface ExtractorReference {
   thumbUrl?: string;
   createdAt?: string;
   updatedAt?: string;
+  createdByName?: string; // nickname or email of the creator
+  canvasWidth?: number;  // default 2048
+  canvasHeight?: number; // default 2048
 }
 
 export interface ExtractorReferenceGroup {
@@ -457,6 +473,7 @@ export interface ExtractorReferenceGroup {
   referenceIds: string[];
   createdAt?: string;
   updatedAt?: string;
+  createdByName?: string; // nickname or email of the creator
 }
 
 /** Default frame transform */
@@ -479,13 +496,26 @@ export const DEFAULT_CUE_SETTINGS: CueSettings = {
   studioShadow: { ...DEFAULT_CUE_SHADOW },
 };
 
+/** Default frame transform for a given canvas size.
+ *  Frame size ≈ 29% of the shorter canvas dimension, centred. */
+export function defaultFrameTransform(canvasW = DEFAULT_CANVAS_WIDTH, canvasH = DEFAULT_CANVAS_HEIGHT): FrameTransform {
+  const size = Math.round(Math.min(canvasW, canvasH) * 0.293);
+  return {
+    x: Math.round((canvasW - size) / 2),
+    y: Math.round((canvasH - size) / 2),
+    width: size,
+    height: size,
+    rotation: 0,
+  };
+}
+
 /** Create a new cue frame with defaults */
-export function createDefaultFrame(id?: string, order: number = 0): CueFrame {
+export function createDefaultFrame(id?: string, order: number = 0, canvasW = DEFAULT_CANVAS_WIDTH, canvasH = DEFAULT_CANVAS_HEIGHT): CueFrame {
   return {
     id: id || crypto.randomUUID(),
     order,
     frameType: "cue",
-    transform: { ...DEFAULT_FRAME_TRANSFORM },
+    transform: defaultFrameTransform(canvasW, canvasH),
     cue: {
       ...DEFAULT_CUE_SETTINGS,
       hdriLayers: [createDefaultHdriLayer()], // Fresh layer with new ID
@@ -494,12 +524,12 @@ export function createDefaultFrame(id?: string, order: number = 0): CueFrame {
 }
 
 /** Create a new image frame with defaults */
-export function createDefaultImageFrame(id?: string, order: number = 0): ImageFrame {
+export function createDefaultImageFrame(id?: string, order: number = 0, canvasW = DEFAULT_CANVAS_WIDTH, canvasH = DEFAULT_CANVAS_HEIGHT): ImageFrame {
   return {
     id: id || crypto.randomUUID(),
     order,
     frameType: "image",
-    transform: { ...DEFAULT_FRAME_TRANSFORM },
+    transform: defaultFrameTransform(canvasW, canvasH),
     imageSettings: { ...DEFAULT_IMAGE_SETTINGS },
   };
 }

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { resolveCreatorNames } from "@/lib/supabase/creator";
 
-// GET /api/extractor-reference-groups - List user's reference groups
+// GET /api/extractor-reference-groups - List ALL reference groups globally (with creator info)
 export async function GET() {
   try {
     const supabase = await createClient();
@@ -13,8 +14,7 @@ export async function GET() {
 
     const { data: groups, error } = await supabase
       .from("extractor_reference_groups")
-      .select("id, name, reference_ids, created_at, updated_at")
-      .eq("user_id", user.id)
+      .select("id, user_id, name, reference_ids, created_at, updated_at")
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -22,12 +22,16 @@ export async function GET() {
       return NextResponse.json({ error: "Failed to fetch groups" }, { status: 500 });
     }
 
+    const creatorIds = (groups ?? []).map((g: any) => g.user_id).filter(Boolean) as string[];
+    const creatorMap = await resolveCreatorNames(supabase, creatorIds);
+
     const result = (groups || []).map((g) => ({
       id: g.id,
       name: g.name,
       referenceIds: g.reference_ids ?? [],
       createdAt: g.created_at,
       updatedAt: g.updated_at,
+      createdByName: (g as any).user_id ? (creatorMap[(g as any).user_id] ?? "Unknown") : undefined,
     }));
 
     return NextResponse.json({ items: result });

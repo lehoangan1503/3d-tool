@@ -24,12 +24,15 @@ import { useReferenceList } from "@/hooks/use-reference-list";
 
 const PREVIEW_CANVAS = 2048;
 
-function LayoutPreviewSvg({ frames, size }: { frames: ExtractorFrame[]; size: number }) {
+function LayoutPreviewSvg({ frames, size, canvasW = 2048, canvasH = 2048 }: { frames: ExtractorFrame[]; size: number; canvasW?: number; canvasH?: number }) {
+  const aspect = canvasW / canvasH;
+  const svgW = aspect >= 1 ? size : Math.round(size * aspect);
+  const svgH = aspect <= 1 ? size : Math.round(size / aspect);
   return (
     <svg
-      width={size}
-      height={size}
-      viewBox={`0 0 ${PREVIEW_CANVAS} ${PREVIEW_CANVAS}`}
+      width={svgW}
+      height={svgH}
+      viewBox={`0 0 ${canvasW} ${canvasH}`}
       style={{ background: "#111827" }}
       className="rounded block flex-shrink-0"
     >

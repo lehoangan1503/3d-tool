@@ -3,6 +3,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import type { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import type { CameraKeyframe, CueConfig } from "@/types/video-studio";
+import { CUE_BOUNDS } from "@/types/video-studio";
 
 export interface SelectionInfo {
   type:
@@ -137,6 +138,11 @@ export class SceneViewControls {
               const domeR = 10; // HDRI_DOME_RADIUS
               obj.position.normalize().multiplyScalar(domeR);
             }
+          }
+
+          // Prevent cue from penetrating the back wall or table surface
+          if (this.currentSelection.type === "cue") {
+            this.clampCueObject(obj);
           }
 
           this.onObjectTransform(
@@ -455,6 +461,8 @@ export class SceneViewControls {
       if (!axis || axis === "y") pos.y -= dy * speed;
       if (axis === "z") pos.z -= dx * speed;
       obj.position.copy(pos);
+      // Clamp using actual bounding box so geometry can't penetrate wall/table
+      if (this.currentSelection.type === "cue") this.clampCueObject(obj);
     } else if (this.activeHotkey === "r") {
       // Rotate around world axis using quaternions (matches TransformControls behavior)
       const angle = -dy * Math.PI * 2;
@@ -544,6 +552,25 @@ export class SceneViewControls {
     this.transformControls.showX = true;
     this.transformControls.showY = true;
     this.transformControls.showZ = true;
+  }
+
+  /** 
+   * Physically clamp the cue object so none of its actual geometry penetrates
+   * the studio surfaces. Uses the world-space bounding box, so it works correctly
+   * regardless of scale or rotation — the cue surface stops exactly at the boundary.
+   */
+  private clampCueObject(obj: THREE.Object3D): void {
+    // Make sure the world matrix is current before measuring
+    obj.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(obj);
+    if (box.isEmpty()) return;
+
+    // Push the pivot far enough that the nearest surface edge clears each boundary
+    if (box.min.y < CUE_BOUNDS.yMin) obj.position.y += CUE_BOUNDS.yMin - box.min.y;
+    if (box.min.z < CUE_BOUNDS.zMin) obj.position.z += CUE_BOUNDS.zMin - box.min.z;
+    if (box.max.z > CUE_BOUNDS.zMax) obj.position.z -= box.max.z - CUE_BOUNDS.zMax;
+    if (box.min.x < CUE_BOUNDS.xMin) obj.position.x += CUE_BOUNDS.xMin - box.min.x;
+    if (box.max.x > CUE_BOUNDS.xMax) obj.position.x -= box.max.x - CUE_BOUNDS.xMax;
   }
 
   private handleMouseDown(e: MouseEvent) {
@@ -636,9 +663,12 @@ export class SceneViewControls {
   ): void {
     if (!this.currentSelection.object) return;
     const obj = this.currentSelection.object;
-    obj.position.copy(position);
+    // Apply scale + rotation first so the bounding box is correct when we clamp
     obj.rotation.copy(rotation);
     obj.scale.copy(scale);
+    obj.position.copy(position);
+    // Clamp using actual bounding box so geometry can't penetrate wall/table
+    if (this.currentSelection.type === "cue") this.clampCueObject(obj);
 
     // Trigger the same sync as dragging
     this.onObjectTransform?.(

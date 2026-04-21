@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { resolveCreatorNames } from "@/lib/supabase/creator";
 
-// GET /api/video-studio-templates - List user's templates with pagination + search
+// GET /api/video-studio-templates - List ALL templates globally (with creator info)
 export async function GET(request: Request) {
   try {
     const supabase = await createClient();
@@ -12,21 +13,20 @@ export async function GET(request: Request) {
     }
 
     const { searchParams } = new URL(request.url);
-    const limit  = Math.min(parseInt(searchParams.get("limit")  ?? "40", 10), 100);
-    const offset = Math.max(parseInt(searchParams.get("offset") ?? "0",  10), 0);
-    const search = (searchParams.get("search") ?? "").trim();
+    const limit     = Math.min(parseInt(searchParams.get("limit")  ?? "40", 10), 100);
+    const offset    = Math.max(parseInt(searchParams.get("offset") ?? "0",  10), 0);
+    const search    = (searchParams.get("search") ?? "").trim();
     const productId = searchParams.get("product_id");
 
     let query = supabase
       .from("video_studio_templates")
-      .select("*", { count: "exact" })
+      .select("id, product_id, name, config, created_at, updated_at, created_by", { count: "exact" })
       .order("updated_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
     if (productId) {
       query = query.eq("product_id", productId);
     }
-
     if (search) {
       query = query.ilike("name", `%${search}%`);
     }
@@ -38,7 +38,24 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Failed to fetch templates" }, { status: 500 });
     }
 
-    return NextResponse.json({ items: templates ?? [], total: count ?? 0 });
+    const creatorIds = (templates ?? [])
+      .map((t: any) => t.created_by)
+      .filter(Boolean) as string[];
+    const creatorMap = await resolveCreatorNames(supabase, creatorIds);
+
+    const items = (templates ?? []).map((t: any) => ({
+      id: t.id,
+      productId: t.product_id,
+      name: t.name,
+      config: t.config,
+      createdAt: t.created_at,
+      updatedAt: t.updated_at,
+      createdBy: t.created_by ?? null,
+      createdByName: t.created_by ? (creatorMap[t.created_by] ?? "Unknown") : null,
+      isOwner: t.created_by === user.id,
+    }));
+
+    return NextResponse.json({ items, total: count ?? 0 });
   } catch (error) {
     console.error("GET /api/video-studio-templates error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
@@ -68,7 +85,7 @@ export async function POST(request: Request) {
 
     const { data: template, error } = await supabase
       .from("video_studio_templates")
-      .insert({ product_id, name, config })
+      .insert({ product_id, name, config, created_by: user.id })
       .select()
       .single();
 

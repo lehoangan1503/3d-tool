@@ -21,11 +21,10 @@ export async function GET(request: Request, { params }: RouteParams) {
     const { data: reference, error } = await supabase
       .from("extractor_references")
       .select(`
-        id, name, thumb_url, created_at, updated_at,
+        id, name, thumb_url, canvas_width, canvas_height, created_at, updated_at,
         extractor_frames (*, frame_name)
       `)
       .eq("id", id)
-      .eq("user_id", user.id)
       .single();
 
     if (error || !reference) {
@@ -37,6 +36,8 @@ export async function GET(request: Request, { params }: RouteParams) {
       id: reference.id,
       name: reference.name,
       thumbUrl: (reference as any).thumb_url ?? undefined,
+      canvasWidth: (reference as any).canvas_width ?? 2048,
+      canvasHeight: (reference as any).canvas_height ?? 2048,
       createdAt: reference.created_at,
       updatedAt: reference.updated_at,
       frames: (reference.extractor_frames || [])
@@ -113,7 +114,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
     }
 
     const body = await request.json();
-    const { name, frames } = body as { name?: string; frames?: ExtractorFrame[] };
+    const { name, frames, canvasWidth, canvasHeight } = body as { name?: string; frames?: ExtractorFrame[]; canvasWidth?: number; canvasHeight?: number };
 
     // Verify ownership
     const { data: existing } = await supabase
@@ -127,11 +128,15 @@ export async function PUT(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "Reference not found" }, { status: 404 });
     }
 
-    // Update name if provided
-    if (name) {
+    // Update name and/or canvas dims if provided
+    if (name || canvasWidth !== undefined || canvasHeight !== undefined) {
+      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (name) updates.name = name;
+      if (canvasWidth !== undefined) updates.canvas_width = canvasWidth;
+      if (canvasHeight !== undefined) updates.canvas_height = canvasHeight;
       await supabase
         .from("extractor_references")
-        .update({ name, updated_at: new Date().toISOString() })
+        .update(updates)
         .eq("id", id);
     }
 

@@ -25,6 +25,8 @@ import type {
   VideoStudioTemplate,
 } from "@/types/video-studio";
 
+type TemplateWithMeta = VideoStudioTemplate & { isOwner?: boolean };
+
 const NEW_TEMPLATE_VALUE = "__new__";
 
 export interface StudioTemplateSelectorHandle {
@@ -47,7 +49,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
   }: StudioTemplateSelectorProps,
   ref: Ref<StudioTemplateSelectorHandle>
 ) {
-  const [templates, setTemplates] = useState<VideoStudioTemplate[]>([]);
+  const [templates, setTemplates] = useState<TemplateWithMeta[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
@@ -87,15 +89,16 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
     if (template) onLoadConfig(template.config);
   };
 
-  /** Open save — if a template is selected, show choice dialog; otherwise go straight to "save new" */
+  /** Open save — if a template is selected AND owned, show choice dialog; otherwise go straight to "save new" */
   const handleSaveClick = useCallback(() => {
-    if (selectedId) {
+    const selected = selectedId ? templates.find((t) => t.id === selectedId) : null;
+    if (selected?.isOwner) {
       setShowSaveChoiceDialog(true);
     } else {
       setSaveName("");
       setShowSaveDialog(true);
     }
-  }, [selectedId]);
+  }, [selectedId, templates]);
 
   useImperativeHandle(ref, () => ({ triggerSave: handleSaveClick }), [handleSaveClick]);
 
@@ -204,7 +207,12 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
             </SelectItem>
             {templates.map((t) => (
               <SelectItem key={t.id} value={t.id}>
-                {t.name}
+                <span className="flex flex-col leading-tight">
+                  <span>{t.name}</span>
+                  {t.createdByName && (
+                    <span className="text-[10px] text-muted-foreground">{t.createdByName}</span>
+                  )}
+                </span>
               </SelectItem>
             ))}
           </SelectContent>
@@ -214,7 +222,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
           variant="ghost"
           size="icon"
           className="h-8 w-8"
-          disabled={isLoading || isSaving}
+          disabled={isLoading || isSaving || (!!selectedId && !templates.find(t => t.id === selectedId)?.isOwner)}
           onClick={handleSaveClick}
           title={selectedId ? "Lưu mẫu" : "Lưu thành mẫu mới"}
         >
@@ -225,7 +233,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
           variant="ghost"
           size="icon"
           className="h-8 w-8"
-          disabled={!selectedId || isLoading || isSaving}
+          disabled={!selectedId || isLoading || isSaving || !templates.find(t => t.id === selectedId)?.isOwner}
           onClick={handleDelete}
           title="Xóa mẫu"
         >

@@ -5,14 +5,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
-import { Camera, Download, Save, Loader2, HelpCircle, ChevronDown, FolderDown, Undo2, Redo2, Eye, EyeOff } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Camera, Download, Save, Loader2, HelpCircle, ChevronDown, FolderDown, Undo2, Redo2, Eye, EyeOff, Plus } from "lucide-react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import { FrameCanvas, CANVAS_SIZE } from "./frame-canvas";
 import { FrameControlsPanel } from "./frame-controls-panel";
 import { DownloadMultipleDialog } from "./download-multiple-dialog";
-import type { ExtractorFrame, ExtractorReference, TemplateKey, CueFrame, ImageFrame, ImageGradient, HdriLayer } from "@/types/extractor";
-import { createDefaultFrame, createDefaultImageFrame, DEFAULT_CUE_SHADOW, FRAME_TEMPLATES, isCueFrame, isImageFrame, STUDIO_WHITE_HDRI } from "@/types/extractor";
+import type { ExtractorFrame, ExtractorReference, TemplateKey, CueFrame, ImageFrame, ImageGradient, HdriLayer, ImageRatio } from "@/types/extractor";
+import { createDefaultFrame, createDefaultImageFrame, DEFAULT_CUE_SHADOW, FRAME_TEMPLATES, isCueFrame, isImageFrame, STUDIO_WHITE_HDRI, DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT } from "@/types/extractor";
 import type { CueHdriConfig } from "@/types/video-studio";
 import { DEFAULT_CUE_HDRI } from "@/types/video-studio";
 import { resolveStorageUrl } from "@/lib/resolve-storage-url";
@@ -64,6 +66,14 @@ async function renderCueFrameViaStudio(
     // matching the preview pipeline from the Simulator dialog exactly.
     studioEsm.enableSimulatorMode();
     studioEsm.setupSimulatorCueGroups(snapshot.cueConfig);
+    // Re-apply per-cue surface textures stored in the snapshot (await so surfaces
+    // are loaded before the final render call below).
+    const surfacePromises = snapshot.cueConfig.instances.map((inst, i) =>
+      inst.sourceSurfaceUrl
+        ? studioEsm.applySurfaceToSimulatorCueGroup(i, inst.sourceSurfaceUrl)
+        : Promise.resolve()
+    );
+    await Promise.all(surfacePromises);
 
     // Apply all config properties (cue transforms, shadow, HDRI, camera)
     studioEsm.updateStudioPreviewConfig(snapshot);
@@ -141,11 +151,12 @@ function drawImageWithObjectFit(ctx: CanvasRenderingContext2D, img: HTMLImageEle
 interface ImageExtractorProps {
   sceneManager: SceneManager | null;
   productName: string;
+  productType: "smooth" | "leather";
   onClose: () => void;
   open: boolean;
 }
 
-export function ImageExtractor({ sceneManager, productName, onClose, open }: ImageExtractorProps) {
+export function ImageExtractor({ sceneManager, productName, productType, onClose, open }: ImageExtractorProps) {
   // Frames state with full undo/redo support
   const {
     value: frames,
@@ -195,6 +206,15 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
   const [hiddenFrameIds, setHiddenFrameIds] = useState<Set<string>>(new Set());
   const [previewMode, setPreviewMode] = useState(false);
 
+  // Canvas ratio state
+  const [canvasWidth, setCanvasWidth] = useState(DEFAULT_CANVAS_WIDTH);
+  const [canvasHeight, setCanvasHeight] = useState(DEFAULT_CANVAS_HEIGHT);
+  const [imageRatios, setImageRatios] = useState<ImageRatio[]>([]);
+  const [showAddRatioPopover, setShowAddRatioPopover] = useState(false);
+  const [newRatioWidth, setNewRatioWidth] = useState("");
+  const [newRatioHeight, setNewRatioHeight] = useState("");
+  const [isAddingRatio, setIsAddingRatio] = useState(false);
+
   // Load HDRI options (same as editor-client)
   useEffect(() => {
     if (!open) return;
@@ -218,6 +238,12 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
     }
 
     loadHdris();
+
+    // Load canvas ratio presets
+    fetch("/api/image-ratios")
+      .then((r) => r.json())
+      .then(({ ratios }) => { if (Array.isArray(ratios)) setImageRatios(ratios); })
+      .catch(() => {/* keep existing ratios */});
   }, [open]);
 
   // Initialize shared extractor when dialog opens
@@ -283,25 +309,39 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
 
     (async () => {
       extractor.stopLivePreview();
+      const studioEsm = new ExtractorSceneManager(2048, 2048);
       const screenshots: Record<string, string> = {};
-      for (const frame of cueFrames) {
-        // If this frame has shadow enabled with a captured result, reuse it directly
-        if (frame.cue.studioShadow?.enabled && frame.cue.studioShadow?.studioCapture) {
-          screenshots[frame.id] = frame.cue.studioShadow.studioCapture;
-          continue;
+      try {
+        for (const frame of cueFrames) {
+          const shadow = frame.cue.studioShadow;
+          // Dynamically re-render shadow frames using the current cue model
+          if (shadow?.enabled && shadow.studioConfigSnapshot) {
+            const model = sceneManager?.getModelForClone() ?? null;
+            screenshots[frame.id] = await renderCueFrameViaStudio(
+              model,
+              shadow.studioConfigSnapshot,
+              Math.round(frame.transform.width),
+              Math.round(frame.transform.height),
+              studioEsm,
+              shadow.wallsTransparent,
+            );
+            continue;
+          }
+          extractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
+          extractor.setModelRotation(frame.cue.spinY);
+          extractor.setCameraPhi(frame.cue.phi, 2);
+          extractor.setCameraZoom(frame.cue.zoom);
+          extractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
+          if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
+            await extractor.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
+            await extractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
+          } else if (frame.cue.lightAngle !== undefined) {
+            extractor.setHdriRotation(frame.cue.lightAngle);
+          }
+          screenshots[frame.id] = extractor.captureFrame("png");
         }
-        extractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
-        extractor.setModelRotation(frame.cue.spinY);
-        extractor.setCameraPhi(frame.cue.phi, 2);
-        extractor.setCameraZoom(frame.cue.zoom);
-        extractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
-        if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
-          await extractor.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
-          await extractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
-        } else if (frame.cue.lightAngle !== undefined) {
-          extractor.setHdriRotation(frame.cue.lightAngle);
-        }
-        screenshots[frame.id] = extractor.captureFrame("png");
+      } finally {
+        studioEsm.dispose();
       }
       setFrameScreenshots(screenshots);
       extractor.startLivePreview();
@@ -346,31 +386,50 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
         resetFrames(data.frames); // load → clear history
         setSelectedReferenceId(id);
         setSelectedFrameId(null);
+        // Restore canvas ratio saved with the reference
+        if (data.canvasWidth && data.canvasHeight) {
+          setCanvasWidth(data.canvasWidth);
+          setCanvasHeight(data.canvasHeight);
+        }
 
         // Render all cue frames immediately so every frame shows real content
         const extractor = extractorRef.current;
         if (extractor && extractorReady) {
           extractor.stopLivePreview();
+          const studioEsm = new ExtractorSceneManager(2048, 2048);
           const screenshots: Record<string, string> = {};
-          for (const frame of data.frames) {
-            if (!isCueFrame(frame)) continue;
-            // Reuse shadow capture if this frame has shadow enabled
-            if (frame.cue.studioShadow?.enabled && frame.cue.studioShadow?.studioCapture) {
-              screenshots[frame.id] = frame.cue.studioShadow.studioCapture;
-              continue;
+          try {
+            for (const frame of data.frames) {
+              if (!isCueFrame(frame)) continue;
+              const shadow = frame.cue.studioShadow;
+              // Dynamically re-render shadow frames using the current cue model
+              if (shadow?.enabled && shadow.studioConfigSnapshot) {
+                const model = sceneManager?.getModelForClone() ?? null;
+                screenshots[frame.id] = await renderCueFrameViaStudio(
+                  model,
+                  shadow.studioConfigSnapshot,
+                  Math.round(frame.transform.width),
+                  Math.round(frame.transform.height),
+                  studioEsm,
+                  shadow.wallsTransparent,
+                );
+                continue;
+              }
+              extractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
+              extractor.setModelRotation(frame.cue.spinY);
+              extractor.setCameraPhi(frame.cue.phi, 2);
+              extractor.setCameraZoom(frame.cue.zoom);
+              extractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
+              if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
+                await extractor.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
+                await extractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
+              } else if (frame.cue.lightAngle !== undefined) {
+                extractor.setHdriRotation(frame.cue.lightAngle);
+              }
+              screenshots[frame.id] = extractor.captureFrame("png");
             }
-            extractor.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
-            extractor.setModelRotation(frame.cue.spinY);
-            extractor.setCameraPhi(frame.cue.phi, 2);
-            extractor.setCameraZoom(frame.cue.zoom);
-            extractor.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
-            if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
-              await extractor.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
-              await extractor.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
-            } else if (frame.cue.lightAngle !== undefined) {
-              extractor.setHdriRotation(frame.cue.lightAngle);
-            }
-            screenshots[frame.id] = extractor.captureFrame("png");
+          } finally {
+            studioEsm.dispose();
           }
           setFrameScreenshots(screenshots);
           extractor.startLivePreview();
@@ -434,19 +493,20 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
   }, [frames]);
 
   const handleAddFrame = () => {
-    const newFrame = createDefaultFrame(undefined, frames.length);
-    // Offset new frame slightly to avoid overlap
-    newFrame.transform.x = 524 + frames.length * 50;
-    newFrame.transform.y = 524 + frames.length * 50;
+    const newFrame = createDefaultFrame(undefined, frames.length, canvasWidth, canvasHeight);
+    // Offset subsequent frames slightly so they don't all stack on top of each other
+    const offset = Math.min(frames.length * Math.round(Math.min(canvasWidth, canvasHeight) * 0.025), Math.min(canvasWidth, canvasHeight) * 0.3);
+    newFrame.transform.x = Math.round(newFrame.transform.x - newFrame.transform.width / 2 * 0.15 + offset);
+    newFrame.transform.y = Math.round(newFrame.transform.y - newFrame.transform.height / 2 * 0.15 + offset);
     setFrames([...frames, newFrame]); // discrete — undoable
     setSelectedFrameId(newFrame.id);
   };
 
   const handleAddImageFrame = () => {
-    const newFrame = createDefaultImageFrame(undefined, frames.length);
-    // Offset new frame slightly to avoid overlap
-    newFrame.transform.x = 524 + frames.length * 50;
-    newFrame.transform.y = 524 + frames.length * 50;
+    const newFrame = createDefaultImageFrame(undefined, frames.length, canvasWidth, canvasHeight);
+    const offset = Math.min(frames.length * Math.round(Math.min(canvasWidth, canvasHeight) * 0.025), Math.min(canvasWidth, canvasHeight) * 0.3);
+    newFrame.transform.x = Math.round(newFrame.transform.x - newFrame.transform.width / 2 * 0.15 + offset);
+    newFrame.transform.y = Math.round(newFrame.transform.y - newFrame.transform.height / 2 * 0.15 + offset);
     setFrames([...frames, newFrame]); // discrete — undoable
     setSelectedFrameId(newFrame.id);
   };
@@ -557,7 +617,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
         })
       );
 
-      // Render current canvas state at 2048 then downscale to 496×496 for thumbnail
+      // Render current canvas state at the chosen resolution then downscale to 496px for thumbnail
       let thumbBlob: Blob | null = null;
       try {
         const refData: ExtractorReference = { id: "", name: "", frames: readyFrames };
@@ -567,10 +627,13 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
         await new Promise((r) => {
           fullImg.onload = r;
         });
+        const aspect = canvasWidth / canvasHeight;
+        const thumbW = aspect >= 1 ? 496 : Math.round(496 * aspect);
+        const thumbH = aspect <= 1 ? 496 : Math.round(496 / aspect);
         const tc = document.createElement("canvas");
-        tc.width = 496;
-        tc.height = 496;
-        tc.getContext("2d")!.drawImage(fullImg, 0, 0, 496, 496);
+        tc.width = thumbW;
+        tc.height = thumbH;
+        tc.getContext("2d")!.drawImage(fullImg, 0, 0, thumbW, thumbH);
         URL.revokeObjectURL(fullImg.src);
         thumbBlob = await new Promise<Blob>((resolve, reject) => {
           tc.toBlob((b) => (b ? resolve(b) : reject(new Error("Thumb blob failed"))), "image/png");
@@ -586,7 +649,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
         const res = await fetch(`/api/extractor-references/${selectedReferenceId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: currentRef?.name || saveName.trim(), frames: readyFrames }),
+          body: JSON.stringify({ name: currentRef?.name || saveName.trim(), frames: readyFrames, canvasWidth, canvasHeight }),
         });
 
         if (!res.ok) throw new Error("Update failed");
@@ -596,7 +659,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
         const res = await fetch("/api/extractor-references", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: saveName.trim(), frames: readyFrames }),
+          body: JSON.stringify({ name: saveName.trim(), frames: readyFrames, canvasWidth, canvasHeight }),
         });
 
         if (!res.ok) throw new Error("Save failed");
@@ -684,18 +747,18 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
     try {
       // Create composite canvas
       const canvas = document.createElement("canvas");
-      canvas.width = CANVAS_SIZE;
-      canvas.height = CANVAS_SIZE;
+      canvas.width = canvasWidth;
+      canvas.height = canvasHeight;
       const ctx = canvas.getContext("2d")!;
 
       // Clear with transparency
-      ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
       // Get model from main scene
       const model = sceneManager.getModelForClone();
 
       // Create ONE extractor for export (full resolution)
-      const exportExtractor = new ExtractorSceneManager(2048, 2048);
+      const exportExtractor = new ExtractorSceneManager(canvasWidth, canvasHeight);
       if (model) exportExtractor.setModel(model);
 
       // Load a default HDRI first (will be overridden per frame)
@@ -830,12 +893,12 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
 
       // Create composite canvas
       const canvas = document.createElement("canvas");
-      canvas.width = CANVAS_SIZE;
-      canvas.height = CANVAS_SIZE;
+      canvas.width = canvasWidth;
+      canvas.height = canvasHeight;
       const ctx = canvas.getContext("2d")!;
 
       // Clear with transparency
-      ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
       // Reuse shared bulk extractor if one was prepared (avoids re-creating WebGL context per render)
       const ownExtractor = !bulkExportExtractorRef.current;
@@ -847,7 +910,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
         // Single render path — stop live preview so export has the GPU to itself
         extractorRef.current?.stopLivePreview();
         const model = sceneManager.getModelForClone();
-        exportExtractor = new ExtractorSceneManager(2048, 2048);
+        exportExtractor = new ExtractorSceneManager(canvasWidth, canvasHeight);
         if (model) exportExtractor.setModel(model);
         const defaultHdriUrl = `/hdri/${encodeURIComponent("bloem_train_track_clear_2k.hdr")}`;
         await exportExtractor.loadHDRI(defaultHdriUrl);
@@ -985,7 +1048,7 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
     extractorRef.current?.stopLivePreview();
 
     const model = sceneManager.getModelForClone();
-    const ext = new ExtractorSceneManager(2048, 2048);
+    const ext = new ExtractorSceneManager(canvasWidth, canvasHeight);
     if (model) ext.setModel(model);
     const hdriUrl = sceneManager.getCurrentHdriUrl();
     await ext.loadHDRI(hdriUrl);
@@ -1004,6 +1067,40 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
     // Restart live preview now that no export extractor is competing for GPU
     extractorRef.current?.startLivePreview();
   }, []);
+
+  const handleSelectRatio = useCallback((ratioId: string) => {
+    const ratio = imageRatios.find((r) => r.id === ratioId);
+    if (!ratio) return;
+    setCanvasWidth(ratio.width);
+    setCanvasHeight(ratio.height);
+  }, [imageRatios]);
+
+  const handleAddCustomRatio = useCallback(async () => {
+    const w = parseInt(newRatioWidth, 10);
+    const h = parseInt(newRatioHeight, 10);
+    if (!w || !h || w < 1024 || h < 1024) return;
+    setIsAddingRatio(true);
+    try {
+      const res = await fetch("/api/image-ratios", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ width: w, height: h }),
+      });
+      if (res.ok) {
+        const { ratio } = await res.json();
+        setImageRatios((prev) => [...prev, ratio]);
+        setCanvasWidth(ratio.width);
+        setCanvasHeight(ratio.height);
+        setNewRatioWidth("");
+        setNewRatioHeight("");
+        setShowAddRatioPopover(false);
+      }
+    } catch (err) {
+      console.error("Failed to add ratio:", err);
+    } finally {
+      setIsAddingRatio(false);
+    }
+  }, [newRatioWidth, newRatioHeight]);
 
   const selectedFrame = frames.find((f) => f.id === selectedFrameId) || null;
   const [showHelp, setShowHelp] = useState(false);
@@ -1045,6 +1142,71 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={redo} disabled={!canRedo} title="Làm lại (⇧⌘Z)">
                   <Redo2 className="h-4 w-4" />
                 </Button>
+              </div>
+
+              {/* Canvas Ratio Selector */}
+              <div className="flex items-center gap-1">
+                <Select
+                  value={imageRatios.find((r) => r.width === canvasWidth && r.height === canvasHeight)?.id ?? ""}
+                  onValueChange={handleSelectRatio}
+                >
+                  <SelectTrigger className="h-8 w-44 text-xs">
+                    <SelectValue placeholder={`${canvasWidth} × ${canvasHeight}`} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {imageRatios.map((r) => (
+                      <SelectItem key={r.id} value={r.id} className="text-xs">
+                        {r.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <Popover open={showAddRatioPopover} onOpenChange={setShowAddRatioPopover}>
+                  <PopoverTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" title="Thêm tỉ lệ tuỳ chỉnh">
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-52 p-3 space-y-3">
+                    <p className="text-xs font-medium">Tỉ lệ tuỳ chỉnh (px)</p>
+                    <p className="text-[10px] text-muted-foreground">Tối thiểu 1024px mỗi chiều</p>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <Label className="text-[10px] text-muted-foreground">Rộng</Label>
+                        <Input
+                          type="number"
+                          min={1024}
+                          max={8192}
+                          className="h-7 text-xs mt-1"
+                          placeholder="2048"
+                          value={newRatioWidth}
+                          onChange={(e) => setNewRatioWidth(e.target.value)}
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <Label className="text-[10px] text-muted-foreground">Cao</Label>
+                        <Input
+                          type="number"
+                          min={1024}
+                          max={8192}
+                          className="h-7 text-xs mt-1"
+                          placeholder="2048"
+                          value={newRatioHeight}
+                          onChange={(e) => setNewRatioHeight(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      className="w-full h-7 text-xs"
+                      disabled={!newRatioWidth || !newRatioHeight || isAddingRatio}
+                      onClick={handleAddCustomRatio}
+                    >
+                      {isAddingRatio ? <Loader2 className="h-3 w-3 animate-spin" /> : "Thêm & Áp dụng"}
+                    </Button>
+                  </PopoverContent>
+                </Popover>
               </div>
 
               {/* How to use dropdown */}
@@ -1161,6 +1323,8 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
                   extractorReady={extractorReady}
                   onDragEnd={commitFrames}
                   previewMode={previewMode}
+                  canvasWidth={canvasWidth}
+                  canvasHeight={canvasHeight}
                 />
 
                 {/* Controls Panel */}
@@ -1190,6 +1354,9 @@ export function ImageExtractor({ sceneManager, productName, onClose, open }: Ima
                   onRenderReference={handleRenderReference}
                   extractorRef={extractorRef}
                   onScreenshotCapture={handleScreenshotCapture}
+                  productType={productType}
+                  canvasWidth={canvasWidth}
+                  canvasHeight={canvasHeight}
                 />
               </div>
             </div>

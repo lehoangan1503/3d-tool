@@ -1541,6 +1541,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
       <ImageExtractor
         sceneManager={sceneManager}
         productName={product.name}
+        productType={product.type}
         open={showImageExtractor}
         onClose={() => setShowImageExtractor(false)}
       />

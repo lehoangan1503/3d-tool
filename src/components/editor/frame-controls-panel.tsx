@@ -335,6 +335,7 @@ export function FrameControlsPanel({
   };
 
   const selectedRefName = selectedReferenceId ? references.find((r) => r.id === selectedReferenceId)?.name ?? "Chưa đặt tên" : null;
+  const selectedRefIsOwned = selectedReferenceId ? (references.find((r) => r.id === selectedReferenceId)?.isOwned ?? false) : false;
 
   // No frame selected - show reference/template controls
   if (!selectedFrame) {
@@ -469,7 +470,7 @@ export function FrameControlsPanel({
               ) : (
                 <>
                   <span className="flex-1 text-sm truncate text-muted-foreground">{selectedRefName ?? "Bố cục mới"}</span>
-                  {selectedReferenceId && (
+                  {selectedReferenceId && selectedRefIsOwned && (
                     <>
                       <Button
                         variant="ghost"

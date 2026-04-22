@@ -83,8 +83,8 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
   const productRef = useRef(product);
   productRef.current = product;
 
-  // Unsaved changes warning
-  const { confirmNavigation } = useUnsavedChangesWarning(hasChanges);
+  // Unsaved changes warning — only meaningful for owners (non-owners can't save)
+  const { confirmNavigation } = useUnsavedChangesWarning(isOwner && hasChanges);
 
   // Load available HDRIs from /public/hdri (via API)
   useEffect(() => {
@@ -528,7 +528,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
         </div>
 
         {/* Mobile Bottom Sheet Overlay */}
-        {isOwner && mobileControlsExpanded && (
+        {mobileControlsExpanded && (
           <div 
             className="lg:hidden fixed inset-0 bg-black/40 z-40 transition-opacity duration-300"
             onClick={() => setMobileControlsExpanded(false)}
@@ -537,7 +537,6 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
         )}
 
         {/* Mobile Bottom Sheet */}
-        {isOwner && (
         <div 
           className={`lg:hidden fixed bottom-0 left-0 right-0 bg-card border-t border-border rounded-t-2xl shadow-2xl transition-transform duration-300 ease-out z-50 ${
             mobileControlsExpanded ? '' : 'translate-y-[calc(100%-56px)]'
@@ -582,6 +581,12 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
               <span className="flex items-center gap-1"><Move className="h-3 w-3" /> Hai ngón để di chuyển</span>
             </div>
             <div className="flex flex-col gap-3">
+              {/* Preview-only banner for non-owners */}
+              {!isOwner && (
+                <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400 leading-relaxed">
+                  <span className="font-semibold">Chế độ xem trước.</span> Thay đổi chỉ hiển thị trên máy bạn. Nhấn <span className="font-semibold">Sao chép</span> để lưu thật sự.
+                </div>
+              )}
               {/* Surface Upload */}
               <CollapsibleCard
                 title="Bề mặt"
@@ -1010,12 +1015,17 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
             </div>
           </div>
         </div>
-        )} {/* end isOwner mobile sheet */}
 
-        {/* Desktop Sidebar — only shown for product owners */}
-        {isOwner && (
+        {/* Desktop Sidebar */}
         <div className="hidden lg:flex lg:w-80 shrink-0 bg-card border-l overflow-y-auto flex-col">
           <div className="p-4 flex flex-col gap-4">
+            {/* Preview-only banner for non-owners */}
+            {!isOwner && (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400 leading-relaxed">
+                <span className="font-semibold">Chế độ xem trước.</span> Bạn đang xem cue của người khác. Mọi thay đổi chỉ hiển thị trên máy bạn và không được lưu. Nhấn{" "}
+                <span className="font-semibold">Sao chép</span> để tạo bản sao và chỉnh sửa thật sự.
+              </div>
+            )}
             {/* 3D Controls */}
             <CollapsibleCard
               title="Điều khiển 3D"
@@ -1536,7 +1546,6 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
             </CollapsibleCard>
           </div>
         </div>
-        )} {/* end isOwner desktop sidebar */}
       </div>
       <ImageExtractor
         sceneManager={sceneManager}

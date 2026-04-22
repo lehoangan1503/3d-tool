@@ -77,6 +77,7 @@ export async function GET(request: Request) {
       createdAt: ref.created_at,
       updatedAt: ref.updated_at,
       createdByName: ref.user_id ? (creatorMap[ref.user_id] ?? "Unknown") : undefined,
+      isOwned: ref.user_id === user.id,
       frames: (ref.extractor_frames || [])
         .sort((a: any, b: any) => a.frame_order - b.frame_order)
         .map((f: any): ExtractorFrame => {

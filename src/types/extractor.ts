@@ -465,6 +465,7 @@ export interface ExtractorReference {
   createdByName?: string; // nickname or email of the creator
   canvasWidth?: number;  // default 2048
   canvasHeight?: number; // default 2048
+  isOwned?: boolean;     // true if the current user owns this reference
 }
 
 export interface ExtractorReferenceGroup {

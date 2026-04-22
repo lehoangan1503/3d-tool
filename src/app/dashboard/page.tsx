@@ -43,10 +43,13 @@ export default async function DashboardPage() {
 
   const showFirstLoginDialog = !profile.nickname;
 
+  const isAdmin = user.app_metadata?.role === "admin";
+
   return (
     <DashboardClient
       profile={profile}
       showFirstLoginDialog={showFirstLoginDialog}
+      isAdmin={isAdmin}
     />
   );
 }

@@ -244,6 +244,7 @@ export function FrameControlsPanel({
   // Local state for slider drag (for smooth UI, only commit on release)
   const [localRotationX, setLocalRotationX] = useState<number | null>(null);
   const [localRotationY, setLocalRotationY] = useState<number | null>(null);
+  const [zoomInputValue, setZoomInputValue] = useState<string | null>(null);
 
   const updateTransform = (key: keyof ExtractorFrame["transform"], value: number) => {
     if (!selectedFrame) return;
@@ -669,8 +670,20 @@ export function FrameControlsPanel({
                 <Input
                   type="text"
                   inputMode="decimal"
-                  value={selectedFrame.cue.zoom.toFixed(1)}
-                  onChange={(e) => updateCue("zoom", Math.max(0.5, Math.min(5, parseNumber(e.target.value, 1))))}
+                  value={zoomInputValue ?? selectedFrame.cue.zoom.toFixed(1)}
+                  onChange={(e) => {
+                    setZoomInputValue(e.target.value);
+                    const parsed = parseFloat(e.target.value);
+                    if (!isNaN(parsed)) {
+                      updateCue("zoom", Math.max(0.5, Math.min(5, parsed)));
+                    }
+                  }}
+                  onBlur={() => {
+                    const parsed = parseFloat(zoomInputValue ?? "");
+                    const clamped = Math.max(0.5, Math.min(5, isNaN(parsed) ? 1 : parsed));
+                    updateCue("zoom", clamped);
+                    setZoomInputValue(null);
+                  }}
                   className="h-8"
                 />
                 <span className="text-sm text-muted-foreground">x</span>

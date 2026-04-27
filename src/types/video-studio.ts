@@ -279,6 +279,11 @@ export interface VideoStudioConfig {
   quality: "2k" | "2k120";
   shadow: { enabled: boolean; intensity: number; blur: number; softness: number; offsetX: number; offsetY: number };
   hdriFile: string;
+  /** When true, wall and table surfaces use a flat MeshBasicMaterial (pure white) that is
+   *  completely unaffected by studio lights / env map. Matches Simulator Studio behaviour. */
+  surfaceLightDisabled?: boolean;
+  /** Output aspect ratio for recording. Defaults to "16:9". */
+  videoRatio?: VideoRatio;
   /** @deprecated Unified HDRI now used. Wall/table use envMapIntensity on SurfaceConfig. */
   surfaceHdri?: { enabled: boolean; hdriFile: string; rotationX: number; rotationY: number; intensity: number };
 }
@@ -299,6 +304,8 @@ export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
   quality: "2k",
   shadow: { enabled: true, intensity: 0.35, blur: 4, softness: 0.5, offsetX: 0, offsetY: 0 },
   hdriFile: "ferndale_studio_07_2k.hdr",
+  surfaceLightDisabled: true,
+  videoRatio: "16:9",
 };
 
 // ── Studio Template (DB record) ──
@@ -318,6 +325,43 @@ export const VIDEO_QUALITY_PRESETS = {
   "2k":    { width: 2560, height: 1440, bitrate: 20_000_000, fps: 60 },
   "2k120": { width: 2560, height: 1440, bitrate: 30_000_000, fps: 120 },
 } as const;
+
+// ── Video Ratio ──
+
+export type VideoRatio = "16:9" | "1:1" | "9:16" | "4:5" | "4:3";
+
+export interface VideoRatioPreset {
+  id: VideoRatio;
+  label: string;
+  /** Width relative to 1440-height baseline */
+  width: number;
+  height: number;
+}
+
+/** All ratios share height=1440 so pixel density stays consistent across formats. */
+export const VIDEO_RATIO_PRESETS: VideoRatioPreset[] = [
+  { id: "16:9", label: "16:9 Ngang",  width: 2560, height: 1440 },
+  { id: "4:3",  label: "4:3 Ngang",   width: 1920, height: 1440 },
+  { id: "1:1",  label: "1:1 Vuông",   width: 1440, height: 1440 },
+  { id: "4:5",  label: "4:5 Dọc",     width: 1152, height: 1440 },
+  { id: "9:16", label: "9:16 Dọc",    width:  810, height: 1440 },
+];
+
+/** Resolve final recording dimensions from quality + ratio */
+export function getRecordingDimensions(
+  quality: "2k" | "2k120",
+  ratio: VideoRatio = "16:9"
+): { width: number; height: number; bitrate: number; fps: number } {
+  const qp = VIDEO_QUALITY_PRESETS[quality];
+  const rp = VIDEO_RATIO_PRESETS.find(r => r.id === ratio) ?? VIDEO_RATIO_PRESETS[0];
+  const scaleFactor = qp.height / 1440;
+  return {
+    width: Math.round(rp.width * scaleFactor),
+    height: Math.round(rp.height * scaleFactor),
+    bitrate: Math.round(qp.bitrate * (rp.width / 2560)),
+    fps: qp.fps,
+  };
+}
 
 // ── Utility: Compute video duration from camera path ──
 
@@ -460,6 +504,8 @@ export function ensureFullConfig(partial: Partial<VideoStudioConfig>): VideoStud
     hdriConfig: partial.hdriConfig?.layers ? partial.hdriConfig : d.hdriConfig,
     cueHdri: { ...d.cueHdri, ...partial.cueHdri },
     shadow: { ...d.shadow, ...partial.shadow },
+    surfaceLightDisabled: partial.surfaceLightDisabled ?? d.surfaceLightDisabled,
+    videoRatio: partial.videoRatio ?? d.videoRatio,
   };
 }
 

@@ -25,10 +25,11 @@ import {
   loadPBRTexturePack,
 } from './studio-background';
 import type { VideoStudioConfig, CameraKeyframe, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig, CueHdriConfig } from '@/types/video-studio';
-import { computeVideoDuration, createEasingFunction, applyDirection, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI } from '@/types/video-studio';
+import { computeVideoDuration, createEasingFunction, applyDirection, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI, getRecordingDimensions } from '@/types/video-studio';
 import { compositeSurfaceFrames, preloadFrameImages } from './background-compositor';
 import { applyBumperEmissiveShaderMask, applyLogoToExistingMaterial } from './leather-material';
 import { isRubberMaterial, isTopCapMaterial, isTopCapFaceMaterial, isCylinderLeatherMaterial } from './leather-config';
+import { createWhiteImmuneMaterial } from './studio-helpers';
 
 // Available HDRI options (same as editor-client)
 export const HDRI_OPTIONS_FALLBACK = [
@@ -2150,7 +2151,11 @@ export class ExtractorSceneManager {
 
     // Subdivided wall geometry for better displacement mapping
     const wallGeo = new THREE.PlaneGeometry(34, 24, 64, 64);
-    this.backdrop = new THREE.Mesh(wallGeo, wallMaterial);
+    const wallMeshMat: THREE.Material = config.surfaceLightDisabled
+      ? createWhiteImmuneMaterial()
+      : wallMaterial;
+    if (config.surfaceLightDisabled) wallMaterial.dispose();
+    this.backdrop = new THREE.Mesh(wallGeo, wallMeshMat);
     this.backdrop.position.set(0, 4.5, -5.5);
     this.scene.add(this.backdrop);
     this.backdrop.userData = { type: 'wall' };
@@ -2180,7 +2185,11 @@ export class ExtractorSceneManager {
 
     // Subdivided table geometry for displacement
     const tableGeo = new THREE.PlaneGeometry(34, tableDepth, 64, 64);
-    this.tableSurface = new THREE.Mesh(tableGeo, tableMaterial);
+    const tableMeshMat: THREE.Material = config.surfaceLightDisabled
+      ? createWhiteImmuneMaterial()
+      : tableMaterial;
+    if (config.surfaceLightDisabled) tableMaterial.dispose();
+    this.tableSurface = new THREE.Mesh(tableGeo, tableMeshMat);
     this.tableSurface.rotation.x = -Math.PI / 2;
     this.tableSurface.position.y = tableY;
     this.tableSurface.position.z = -5.5 + tableDepth / 2;
@@ -2211,10 +2220,23 @@ export class ExtractorSceneManager {
       // Restore saved manual transform for shadow floor (if any)
       this.applyShadowPlaneTransform(config);
 
-      // Curved corner fill: provides white backing geometry for the shadow mesh's
-      // curved section. Without this, mid-curve positions have no surface behind
-      // them and the shadow appears as a floating dark arc from the camera.
+      // Curved corner fill: provides backing geometry for the shadow mesh's curved section.
+      // Material matches the surface mode: MeshStandardMaterial when studio lights affect
+      // surfaces (so the curve blends with wall/table), MeshBasicMaterial (pure white, unlit)
+      // when surface light is disabled.
       this.studioCornerFill = createCornerFillMesh(34, tableY, wallZ, '#ffffff');
+      if (!config.surfaceLightDisabled) {
+        // Swap to MeshStandardMaterial so studio lights affect the curve the same as wall/table.
+        (this.studioCornerFill.material as THREE.Material).dispose();
+        this.studioCornerFill.material = new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          roughness: 0.35,
+          metalness: 0,
+          side: THREE.FrontSide,
+          envMap: surfaceEnv,
+          envMapIntensity: 0.6,
+        });
+      }
       this.studioCornerFill.userData = { type: 'corner-fill' };
       this.scene.add(this.studioCornerFill);
     }
@@ -2417,11 +2439,18 @@ export class ExtractorSceneManager {
     // 60fps is the reference rate for spin speed (0.02 rad/frame at 60fps = 1.2 rad/s).
     // Delta-time scaling ensures the same angular velocity on any display refresh rate.
     const SPIN_REF_MS = 1000 / 60;
+    // Cap preview at 60fps — saves GPU on high-refresh displays and keeps memory bandwidth free.
+    const PREVIEW_FRAME_MS = 1000 / 60;
     let prevPreviewTimestamp = -1;
 
     const animate = (timestamp: number) => {
       if (this.isDisposed || !this.studioConfigRef) return;
       this.animationFrameId = requestAnimationFrame(animate);
+
+      // Throttle to 60fps max
+      const sinceLastFrame = prevPreviewTimestamp < 0 ? PREVIEW_FRAME_MS : timestamp - prevPreviewTimestamp;
+      if (sinceLastFrame < PREVIEW_FRAME_MS) return;
+
       const cfg = this.studioConfigRef;
       const deltaMs = prevPreviewTimestamp < 0
         ? SPIN_REF_MS
@@ -2530,15 +2559,21 @@ export class ExtractorSceneManager {
 
   /** Apply per-surface roughness from config and tint surface envMap with studio light color */
   private updateSurfaceHdri(config: VideoStudioConfig): void {
-    const targets: Array<{ mesh: THREE.Mesh | null; roughness?: number }> = [
-      { mesh: this.backdrop, roughness: config.wallSurface.roughness },
-      { mesh: this.tableSurface, roughness: config.tableSurface.roughness },
-    ];
+    // When surfaceLightDisabled the wall/table use MeshBasicMaterial — skip all env map updates.
+    if (config.surfaceLightDisabled) return;
 
     // Use the first enabled studio light's color for surface tint
     const firstEnabledLayer = (config.hdriConfig?.layers ?? []).find(l => l.enabled !== false);
     const surfaceColor = firstEnabledLayer?.lightColor ?? '#ffffff';
     const surfaceEnv = this.getSurfaceEnvMap(surfaceColor);
+
+    const targets: Array<{ mesh: THREE.Mesh | null; roughness?: number }> = [
+      { mesh: this.backdrop, roughness: config.wallSurface.roughness },
+      { mesh: this.tableSurface, roughness: config.tableSurface.roughness },
+      // Corner fill curve must match surface tint so it blends seamlessly with wall/table.
+      { mesh: this.studioCornerFill },
+    ];
+
     for (const { mesh, roughness } of targets) {
       if (!mesh) continue;
       const mat = mesh.material as THREE.MeshStandardMaterial;
@@ -2558,7 +2593,11 @@ export class ExtractorSceneManager {
   ): Promise<Blob> {
     if (!this.model) throw new Error('No model loaded');
 
-    const qp = VIDEO_QUALITY_PRESETS[config.quality] ?? VIDEO_QUALITY_PRESETS["2k"];
+    // Resolve output dimensions from quality + ratio (ratio overrides width)
+    const dims = getRecordingDimensions(
+      config.quality ?? "2k",
+      config.videoRatio ?? "16:9"
+    );
 
     // Stop live preview and all background render loops FIRST to free GPU resources
     // and eliminate competing draw calls during recording setup.
@@ -2567,8 +2606,8 @@ export class ExtractorSceneManager {
     return new Promise((resolve, reject) => {
       // Use device pixel ratio during recording for sharp output (matching preview quality)
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      this.renderer.setSize(qp.width, qp.height);
-      this.camera.aspect = qp.width / qp.height;
+      this.renderer.setSize(dims.width, dims.height);
+      this.camera.aspect = dims.width / dims.height;
       this.camera.updateProjectionMatrix();
 
       this.setupStudioFromStudioConfig(config).then(async () => {
@@ -2579,28 +2618,29 @@ export class ExtractorSceneManager {
         // Pre-compile all shaders to avoid GPU stalls on the first recorded frames.
         this.renderer.compile(this.scene, this.camera);
 
-        // Warm-up: render 24 frames with browser-yield pauses between batches so the
-        // GPU can fully upload PBR textures (diffuse/normal/roughness/AO/displacement)
-        // and generate complete mipmap chains before MediaRecorder begins capturing.
-        for (let i = 0; i < 24; i++) {
+        // Warm-up: render 60 frames with 32ms yields every 8 frames so the GPU has
+        // enough time to fully upload PBR textures (diffuse/normal/roughness/AO/displacement),
+        // generate mipmap chains, and stabilise tone-mapping for the first recorded frame.
+        for (let i = 0; i < 60; i++) {
           this.renderer.render(this.scene, this.camera);
-          if (i % 6 === 5) {
-            // Yield to the event loop every 6 renders so the browser can flush
-            // pending GPU texture upload commands and DMA transfers.
-            await new Promise<void>(r => setTimeout(r, 0));
+          if (i % 8 === 7) {
+            // Two-frame yield (32ms ≈ 2×16ms) — lets the browser flush pending GPU
+            // texture upload commands, DMA transfers, and driver-side shader caching.
+            await new Promise<void>(r => setTimeout(r, 32));
           }
         }
-        // Final 16 ms yield to ensure all GPU work is complete before MediaRecorder starts.
-        await new Promise<void>(r => setTimeout(r, 16));
+        // Final 100ms yield to let the GPU drain its command queue and ensure the
+        // first captured frame is fully rendered at recording quality.
+        await new Promise<void>(r => setTimeout(r, 100));
 
-        this._startStudioRecordingLoop(config, qp, onProgress, resolve, reject);
+        this._startStudioRecordingLoop(config, dims, onProgress, resolve, reject);
       }).catch(reject);
     });
   }
 
   private _startStudioRecordingLoop(
     config: VideoStudioConfig,
-    qp: { readonly width: number; readonly height: number; readonly bitrate: number; readonly fps: number },
+    dims: { readonly width: number; readonly height: number; readonly bitrate: number; readonly fps: number },
     onProgress: ((p: number) => void) | undefined,
     resolve: (blob: Blob) => void,
     reject: (err: Error) => void
@@ -2636,13 +2676,13 @@ export class ExtractorSceneManager {
     // displays (e.g. 120 Hz macOS) writes WebM frame timestamps that are 5× too large, making
     // the video appear 5× longer than the wall-clock recording time. 60 fps produces correct
     // timestamps on all platforms. Preview can still run at 120 fps for smooth UX.
-    const RECORD_FPS = Math.min(qp.fps, 60);
+    const RECORD_FPS = Math.min(dims.fps, 60);
 
     // MediaRecorder setup
     const stream = this.renderer.domElement.captureStream(RECORD_FPS);
     this.mediaRecorder = new MediaRecorder(stream, {
       mimeType: getSupportedMimeType(),
-      videoBitsPerSecond: qp.bitrate,
+      videoBitsPerSecond: dims.bitrate,
     });
     this.recordedChunks = [];
     this.mediaRecorder.ondataavailable = (e) => {

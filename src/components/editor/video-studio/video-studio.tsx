@@ -35,8 +35,8 @@ import {
 } from "lucide-react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager, HDRI_OPTIONS_FALLBACK } from "@/lib/three/extractor-scene-manager";
-import type { VideoStudioConfig, CameraKeyframe, CueHdriConfig } from "@/types/video-studio";
-import { DEFAULT_STUDIO_CONFIG, DEFAULT_CUE_HDRI, VIDEO_QUALITY_PRESETS, ensureFullConfig, migrateVideoStudioConfig, computeVideoDuration } from "@/types/video-studio";
+import type { VideoStudioConfig, CameraKeyframe, CueHdriConfig, VideoRatio } from "@/types/video-studio";
+import { DEFAULT_STUDIO_CONFIG, DEFAULT_CUE_HDRI, VIDEO_QUALITY_PRESETS, VIDEO_RATIO_PRESETS, getRecordingDimensions, ensureFullConfig, migrateVideoStudioConfig, computeVideoDuration } from "@/types/video-studio";
 import { createDefaultHdriLayer, STUDIO_WHITE_HDRI } from "@/types/extractor";
 import { CameraControlsPanel } from "./camera-controls-panel";
 import { CueSetupPanel } from "./cue-setup-panel";
@@ -60,6 +60,91 @@ function TransformInput({ label, value, onChange, suffix = "" }: { label: string
         className="h-6 w-full rounded border border-border/50 bg-muted/30 px-1.5 text-xs font-mono tabular-nums text-foreground outline-none focus:border-blue-500/50"
       />
       {suffix && <span className="text-[10px] text-muted-foreground shrink-0">{suffix}</span>}
+    </div>
+  );
+}
+
+/** Overlay that dims the area outside the active recording crop while showing a clear border. */
+function RatioGuideOverlay({ ratio }: { ratio: VideoRatio }) {
+  const preset = VIDEO_RATIO_PRESETS.find((r) => r.id === ratio) ?? VIDEO_RATIO_PRESETS[0];
+  const ratioAspect = preset.width / preset.height;
+  // Use CSS to achieve letterbox/pillarbox via a transparent "window" on the container.
+  // The outer div fills the preview container; the inner rect is the active recording area.
+  return (
+    <div className="absolute inset-0 pointer-events-none z-20" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          // Compute active area via CSS custom properties — we use aspect-ratio trick:
+          // The active region is max-width/height fitting both the container and the ratio.
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {/* Semi-transparent overlay using clip-path to reveal only the active area */}
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "rgba(0,0,0,0.45)",
+            // Mask: transparent hole where the active area is
+            WebkitMaskImage: `url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25'><rect width='100%25' height='100%25' fill='white'/><rect id='h' fill='black'/></svg>")`,
+          }}
+        />
+        {/* Active frame border */}
+        <div
+          style={{
+            aspectRatio: `${ratioAspect}`,
+            maxWidth: "100%",
+            maxHeight: "100%",
+            width: `min(100%, calc(100vh * ${ratioAspect}))`,
+            border: "2px solid rgba(255,255,255,0.6)",
+            boxSizing: "border-box",
+            position: "relative",
+          }}
+        >
+          {/* Corner marks */}
+          {[
+            { top: 0, left: 0 },
+            { top: 0, right: 0 },
+            { bottom: 0, left: 0 },
+            { bottom: 0, right: 0 },
+          ].map((pos, i) => (
+            <span
+              key={i}
+              style={{
+                position: "absolute",
+                width: 14,
+                height: 14,
+                ...pos,
+                border: "2px solid white",
+                borderTopWidth: pos.bottom !== undefined ? 0 : 2,
+                borderBottomWidth: pos.top !== undefined ? 0 : 2,
+                borderLeftWidth: pos.right !== undefined ? 0 : 2,
+                borderRightWidth: pos.left !== undefined ? 0 : 2,
+              }}
+            />
+          ))}
+          {/* Ratio label */}
+          <span
+            style={{
+              position: "absolute",
+              bottom: 6,
+              right: 8,
+              fontSize: 10,
+              color: "rgba(255,255,255,0.7)",
+              fontFamily: "monospace",
+              background: "rgba(0,0,0,0.4)",
+              padding: "1px 5px",
+              borderRadius: 3,
+            }}
+          >
+            {ratio}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -497,6 +582,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     config.shadow.enabled,
     config.cueConfig.instances.length,
     config.hdriConfig.layers.length,
+    config.surfaceLightDisabled,
     open,
   ]);
 
@@ -569,15 +655,16 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
 
   const handleDownload = () => {
     if (!videoUrl) return;
-    const preset = VIDEO_QUALITY_PRESETS[config.quality];
-    const qualityLabel = `2k-${preset.fps}fps`;
+    const dims = getRecordingDimensions(config.quality, config.videoRatio ?? "16:9");
+    const qualityLabel = `${dims.width}x${dims.height}-${dims.fps}fps`;
+    const ratioLabel = (config.videoRatio ?? "16:9").replace(":", "x");
     const safeName = productName
       .replace(/[^a-zA-Z0-9-_]/g, "-")
       .replace(/-+/g, "-")
       .replace(/^-|-$/g, "");
     const a = document.createElement("a");
     a.href = videoUrl;
-    a.download = `${safeName}-studio-${qualityLabel}.webm`;
+    a.download = `${safeName}-studio-${ratioLabel}-${qualityLabel}.webm`;
     a.click();
   };
 
@@ -672,6 +759,10 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                   <span className="text-xs text-white/50">{!sceneReady ? "Đang thiết lập cảnh…" : "Đang cập nhật…"}</span>
                 </div>
               </div>
+              {/* Ratio guide overlay — only shown when a non-16:9 ratio is selected */}
+              {viewMode !== "scene" && config.videoRatio && config.videoRatio !== "16:9" && (
+                <RatioGuideOverlay ratio={config.videoRatio} />
+              )}
             </div>
 
             {/* Key hints for scene view */}
@@ -763,6 +854,16 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                   <SelectContent>
                     <SelectItem value="2k">2K 60fps</SelectItem>
                     <SelectItem value="2k120">2K 120fps</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={config.videoRatio ?? "16:9"} onValueChange={(v) => updateConfig("videoRatio", v as VideoRatio)}>
+                  <SelectTrigger className="h-7 w-24 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {VIDEO_RATIO_PRESETS.map((r) => (
+                      <SelectItem key={r.id} value={r.id}>{r.label}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -1116,6 +1217,17 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                           {expandedSections.has("lights") && (
                             <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
                               <p className="text-[10px] text-muted-foreground">Đèn studio kiểm soát hướng bóng và ánh sáng bề mặt. Nhấn G để di chuyển, S để thu phóng.</p>
+                              {/* Surface light disable toggle */}
+                              <label className="flex items-center gap-2 cursor-pointer select-none">
+                                <Checkbox
+                                  checked={config.surfaceLightDisabled === true}
+                                  onCheckedChange={(checked) => updateConfig("surfaceLightDisabled", checked === true)}
+                                  className="h-3 w-3"
+                                />
+                                <span className="text-[10px] text-muted-foreground leading-tight">
+                                  Tắt ảnh hưởng đèn lên bề mặt <span className="text-muted-foreground/50">(tường & bàn trắng thuần)</span>
+                                </span>
+                              </label>
                               {config.hdriConfig.layers.map((layer, idx) => (
                                 <div key={layer.id} className="rounded-md border border-border/40 bg-background/30 p-2 space-y-2">
                                   {/* Header */}

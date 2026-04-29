@@ -207,12 +207,17 @@ export class ExtractorSceneManager {
   private cameraTargetPos = new THREE.Vector3();
   private cameraSmoothEnabled = false;
 
+  // Reusable Object3D for instanced mesh matrix updates — avoids per-frame GC allocations.
+  private _spinDummy = new THREE.Object3D();
+
   // Animation state
   private animationFrameId: number | null = null;
   private mediaRecorder: MediaRecorder | null = null;
   private recordedChunks: Blob[] = [];
   private _spinPaused = false;
   private _isHelperDragging = false;
+  /** Shadow map type saved before recording; restored in onstop. */
+  private _recordingSavedShadowType: THREE.ShadowMapType | null = null;
 
   constructor(
     private width: number = 2048,
@@ -223,6 +228,7 @@ export class ExtractorSceneManager {
       antialias: true,
       alpha: true,
       preserveDrawingBuffer: true,
+      powerPreference: 'high-performance',
     });
     this.renderer.setSize(width, height);
     this.renderer.setPixelRatio(Math.min(
@@ -2604,8 +2610,11 @@ export class ExtractorSceneManager {
     this.stopVideoPreview();
 
     return new Promise((resolve, reject) => {
-      // Use device pixel ratio during recording for sharp output (matching preview quality)
-      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      // Set pixel ratio to 1 — dims already define the exact output resolution.
+      // Using devicePixelRatio here would silently render at DPR×resolution
+      // (e.g. 5120×2880 on a Retina display) wasting 4× GPU cycles without any
+      // quality benefit in the recorded file. resize() restores DPR after recording.
+      this.renderer.setPixelRatio(1);
       this.renderer.setSize(dims.width, dims.height);
       this.camera.aspect = dims.width / dims.height;
       this.camera.updateProjectionMatrix();
@@ -2615,12 +2624,43 @@ export class ExtractorSceneManager {
         this.camera.fov = 50;
         this.camera.updateProjectionMatrix();
 
+        // ── Recording GPU optimisations ─────────────────────────────────────────
+        //
+        // 1. Reduce shadow map resolution: 1024×1024 is indistinguishable at
+        //    1080p–1440p output and halves shadow VRAM + fill-rate cost.
+        //
+        // 2. Switch shadow type from VSMShadowMap → PCFSoftShadowMap.
+        //    VSM requires two full-canvas Gaussian blur passes (blurSamples=20 each)
+        //    every frame per light — extremely expensive.  PCFSoft uses single-pass
+        //    hardware PCF with similar perceptual quality and zero extra passes.
+        //
+        // 3. If the cue is not spinning, shadows are static for the entire recording.
+        //    We let the warmup renders build the shadow maps, then freeze auto-update
+        //    so the shadow depth pass is skipped on every animation frame.
+        //
+        // All settings are restored to preview quality in onstop.
+        const RECORD_SHADOW_SIZE = 1024;
+        const savedShadowType = this.renderer.shadowMap.type;
+        this._recordingSavedShadowType = savedShadowType;
+        type ShadowWithMap = THREE.LightShadow & { map: THREE.WebGLRenderTarget | null };
+
+        const clearShadowMap = (shadow: THREE.LightShadow) => {
+          shadow.mapSize.set(RECORD_SHADOW_SIZE, RECORD_SHADOW_SIZE);
+          shadow.map?.dispose();
+          (shadow as ShadowWithMap).map = null;
+        };
+
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        for (const { light } of this.hdriShadowLights) clearShadowMap(light.shadow);
+        if (this.frameShadowLight) clearShadowMap(this.frameShadowLight.shadow);
+
         // Pre-compile all shaders to avoid GPU stalls on the first recorded frames.
         this.renderer.compile(this.scene, this.camera);
 
         // Warm-up: render 60 frames with 32ms yields every 8 frames so the GPU has
         // enough time to fully upload PBR textures (diffuse/normal/roughness/AO/displacement),
         // generate mipmap chains, and stabilise tone-mapping for the first recorded frame.
+        // These renders also populate the shadow depth maps with PCFSoft data.
         for (let i = 0; i < 60; i++) {
           this.renderer.render(this.scene, this.camera);
           if (i % 8 === 7) {
@@ -2629,9 +2669,16 @@ export class ExtractorSceneManager {
             await new Promise<void>(r => setTimeout(r, 32));
           }
         }
-        // Final 100ms yield to let the GPU drain its command queue and ensure the
-        // first captured frame is fully rendered at recording quality.
+        // Final 100ms yield to let the GPU drain its command queue.
         await new Promise<void>(r => setTimeout(r, 100));
+
+        // Freeze shadow maps if the cue is static (no spin) — shadows don't change
+        // when only the camera moves, so skipping the shadow depth pass every frame
+        // saves one full render pass per shadow light.
+        const hasCueSpin = (config.cueConfig.spinSpeed > 0) || ((config.cueConfig.spinSpeedX || 0) > 0);
+        if (!hasCueSpin) {
+          this.renderer.shadowMap.autoUpdate = false;
+        }
 
         this._startStudioRecordingLoop(config, dims, onProgress, resolve, reject);
       }).catch(reject);
@@ -2650,8 +2697,38 @@ export class ExtractorSceneManager {
     // Hide all helpers/gizmos so they don't appear in the recorded video
     this.setHelpersVisible(false);
 
-    // Setup cue instances for recording
-    this.setupCueInstances(config.cueConfig);
+    // ── Scene graph freeze ────────────────────────────────────────────────────
+    // Disabling scene.matrixWorldAutoUpdate skips the full scene-graph traversal
+    // inside WebGLRenderer.render(). Studio objects are all static; only the
+    // camera needs updating each frame — THREE.js handles it automatically via
+    // the "camera.parent===null && camera.matrixWorldAutoUpdate===true" path.
+    // Spinning single cues are refreshed manually in renderFrame below.
+    this.scene.matrixWorldAutoUpdate = false;
+    const frozenObjects: THREE.Object3D[] = ([
+      this.backdrop,
+      this.shadowFloor,
+      this.wallShadowPlane,
+      this.tableSurface,
+      this.studioCornerFill,
+      this.frameShadowFloor,
+      this.frameWallBackdrop,
+      this.frameTableBackdrop,
+      ...this.backgroundLayerMeshes,
+      ...this.wallFramePlanes,
+      ...this.tableFramePlanes,
+      ...this.instancedMeshes,
+      ...this.hdriShadowLights.map(l => l.light as THREE.Object3D),
+      this.frameShadowLight as THREE.Object3D | null,
+    ] as (THREE.Object3D | null)[]).filter((o): o is THREE.Object3D => !!o);
+    for (const obj of frozenObjects) {
+      obj.matrixAutoUpdate = false;
+      obj.frustumCulled = false;
+    }
+
+    // NOTE: cue instances were already set up (with correct initial spin) during the
+    // warmup phase in startStudioRecording → setupStudioFromStudioConfig. Re-creating
+    // them here would dispose the warmed GPU buffers and allocate cold new ones,
+    // causing a buffer-upload stall on the very first recorded frames.
 
     // Save pre-recording spin state so we can restore it after recording
     const savedSpinY = config.cueConfig.spinY || 0;
@@ -2671,6 +2748,27 @@ export class ExtractorSceneManager {
     // Compute wall-clock duration in ms before MediaRecorder setup so the onstop closure can use it
     const durationMs = duration * 1000;
 
+    // ── Why encoder warmup is required ─────────────────────────────────────────
+    // The hardware video encoder (VideoToolbox on macOS, VP9 on Linux/Windows) starts
+    // a cold session every time mediaRecorder.start() is called. Startup takes 1–3 s:
+    //   • VPU resource allocation
+    //   • SPS/PPS parameter-set generation
+    //   • First I-frame encoding (large, expensive)
+    //   • Rate-control algorithm calibration
+    // If the animation starts at the same moment as the encoder, the VPU competes with
+    // the GPU for resources and produces dropped frames, encoding artefacts, and
+    // unstable bitrate — visible as "flashing and lagging" in the first 1–3 s.
+    //
+    // Fix: start the encoder IMMEDIATELY and feed it ENCODER_WARMUP_MS of the static
+    // start frame so it fully initialises before the camera begins moving.
+    // The warmup frames are surgically removed by passing ENCODER_WARMUP_MS as the
+    // timeslice to mediaRecorder.start(). Per the WebM/MediaRecorder spec, chunk 0
+    // (the first ondataavailable) always contains the EBML init segment + warmup clusters;
+    // all subsequent chunks are cluster-continuation data with predictable timestamps.
+    // We extract the EBML header from chunk 0, subtract firstClusterTimecode from all
+    // animation cluster timestamps, and reconstruct a clean video starting at t = 0.
+    const ENCODER_WARMUP_MS = 2000;
+
     // Cap captureStream at 60 fps regardless of quality preset.
     // Chrome has a known bug (chromium #639939) where captureStream at >60 fps on high-refresh
     // displays (e.g. 120 Hz macOS) writes WebM frame timestamps that are 5× too large, making
@@ -2678,19 +2776,52 @@ export class ExtractorSceneManager {
     // timestamps on all platforms. Preview can still run at 120 fps for smooth UX.
     const RECORD_FPS = Math.min(dims.fps, 60);
 
-    // MediaRecorder setup
+    // ── MediaRecorder + ondataavailable ────────────────────────────────────────
+    // We call mediaRecorder.start(ENCODER_WARMUP_MS) so the first timeslice fires
+    // automatically at t = ENCODER_WARMUP_MS. Subsequent slices fire every
+    // ENCODER_WARMUP_MS and on stop(). Per the MediaRecorder/WebM spec:
+    //   • Chunk 0 (warmup timeslice): always an EBML init segment + warmup clusters
+    //   • Chunks 1+ (animation): always cluster-continuation data, timestamps increasing
+    // This is deterministic — no EBML-restart ambiguity like with requestData().
     const stream = this.renderer.domElement.captureStream(RECORD_FPS);
     this.mediaRecorder = new MediaRecorder(stream, {
       mimeType: getSupportedMimeType(),
       videoBitsPerSecond: dims.bitrate,
     });
     this.recordedChunks = [];
+
+    let warmupBlob: Blob | null = null;
+    let warmupFlushed = false; // set true after first timeslice ondataavailable fires
+
     this.mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) this.recordedChunks.push(e.data);
+      if (e.data.size === 0) return;
+      if (!warmupFlushed) {
+        warmupFlushed = true;
+        warmupBlob = e.data; // warmup chunk — will be stripped down to header only
+      } else {
+        this.recordedChunks.push(e.data); // animation chunk(s)
+      }
     };
 
     this.mediaRecorder.onstop = async () => {
       this.setHelpersVisible(true);
+      // Restore all recording GPU optimisations so preview quality is unaffected.
+      this.renderer.shadowMap.autoUpdate = true;
+      this.renderer.shadowMap.type = this._recordingSavedShadowType ?? THREE.VSMShadowMap;
+      // Restore scene graph auto-update and per-object properties.
+      this.scene.matrixWorldAutoUpdate = true;
+      for (const obj of frozenObjects) {
+        obj.matrixAutoUpdate = true;
+        obj.frustumCulled = true;
+      }
+      type ShadowWithMap = THREE.LightShadow & { map: THREE.WebGLRenderTarget | null };
+      const restoreShadowMap = (shadow: THREE.LightShadow) => {
+        shadow.mapSize.set(2048, 2048);
+        shadow.map?.dispose();
+        (shadow as ShadowWithMap).map = null;
+      };
+      for (const { light } of this.hdriShadowLights) restoreShadowMap(light.shadow);
+      if (this.frameShadowLight) restoreShadowMap(this.frameShadowLight.shadow);
       // Restore pre-recording spin state to prevent rotation drift
       if (this.currentCueConfig) {
         this.currentCueConfig = {
@@ -2703,14 +2834,72 @@ export class ExtractorSceneManager {
       if (this.clonedModel) {
         this.clonedModel.rotation.set(savedSpinX, savedSpinY, savedSpinZ);
       }
-      // Reset instanced meshes too
       if (this.instancedMeshes.length > 0 && this.currentCueConfig) {
         this.setupCueInstances(this.currentCueConfig);
       }
-      // Chrome's MediaRecorder writes incorrect WebM Duration metadata (chromium #639939).
-      // Fix it by patching the EBML container with the known wall-clock duration.
-      const rawBlob = new Blob(this.recordedChunks, { type: getSupportedMimeType() });
-      const fixedBlob = await fixWebmDuration(rawBlob, durationMs, { logger: false });
+
+      let outBlob: Blob;
+      let finalDurationMs = durationMs;
+
+      if (warmupBlob && this.recordedChunks.length > 0) {
+        // With start(timeslice), animation chunks are always cluster-continuation data
+        // (no EBML header restart). Combine all animation chunks into one buffer.
+        const animChunkBufs = await Promise.all(this.recordedChunks.map(c => c.arrayBuffer()));
+        const totalAnimSize = animChunkBufs.reduce((s, b) => s + b.byteLength, 0);
+        const animCombined = new Uint8Array(totalAnimSize);
+        let writeOffset = 0;
+        for (const buf of animChunkBufs) {
+          animCombined.set(new Uint8Array(buf), writeOffset);
+          writeOffset += buf.byteLength;
+        }
+        const animBuf = animCombined.buffer;
+
+        // Extract the structural WebM header (EBML + Info + Tracks) from warmup chunk 0.
+        const warmupBuf = await warmupBlob.arrayBuffer();
+        const rawHeaderBuf = this._extractWebmHeader(warmupBuf);
+
+        // Animation clusters start at ~ENCODER_WARMUP_MS; subtract firstTc to re-zero.
+        const firstTc = this._getFirstClusterTimecode(animBuf);
+        const adjustBy = firstTc > 0 ? firstTc : ENCODER_WARMUP_MS;
+
+        const adjAnim = this._adjustWebmClusterTimecodes(animBuf, adjustBy);
+
+        // Compute actual content duration from the last cluster timecode after adjustment.
+        // Chrome's keyframe interval may not align exactly with ENCODER_WARMUP_MS, causing
+        // firstTc > ENCODER_WARMUP_MS and the adjusted content to be shorter than durationMs.
+        // Using the actual last cluster time as Duration prevents a freeze gap at the end.
+        const FRAME_MS = Math.round(1000 / RECORD_FPS);
+        const lastTcAfterAdj = this._getLastClusterTimecode(adjAnim);
+        if (lastTcAfterAdj > 0 && lastTcAfterAdj + FRAME_MS < durationMs * 0.95) {
+          // Actual content is noticeably shorter than expected — use real duration to avoid gap.
+          finalDurationMs = lastTcAfterAdj + FRAME_MS;
+        }
+
+        console.log('[VideoStudio] timeslice trim →', {
+          warmupBlobSize: warmupBuf.byteLength,
+          animBufSize: animBuf.byteLength,
+          chunks: this.recordedChunks.length,
+          firstTc,
+          adjustBy,
+          lastTcAfterAdj,
+          finalDurationMs,
+          expectedDurationMs: durationMs,
+          animBufFirstBytes: Array.from(new Uint8Array(animBuf.slice(0, 16))).map(b => b.toString(16).padStart(2, '0')).join(' '),
+        });
+
+        const headerBuf = this._patchEbmlDuration(rawHeaderBuf, finalDurationMs);
+        outBlob = new Blob([headerBuf, adjAnim], { type: getSupportedMimeType() });
+      } else {
+        // Fallback: warmup split didn't happen cleanly — combine all data as-is
+        // and let fixWebmDuration patch the duration normally.
+        const allBlobs = ([warmupBlob, ...this.recordedChunks]).filter((b): b is Blob => !!b);
+        outBlob = new Blob(allBlobs, { type: getSupportedMimeType() });
+      }
+
+      // fixWebmDuration: only patches Duration if currently <= 0 in the blob.
+      // Our _patchEbmlDuration already wrote finalDurationMs, so this is a safety
+      // net for the rare case where the Duration element wasn't found.
+      const fixedBlob = await fixWebmDuration(outBlob, finalDurationMs, { logger: false });
       resolve(fixedBlob);
     };
     this.mediaRecorder.onerror = () => {
@@ -2718,39 +2907,94 @@ export class ExtractorSceneManager {
       reject(new Error('Recording failed'));
     };
 
-    // Wall-clock based timing: progress and stop are driven by elapsed real time so that
-    // every device produces a video with the same duration and the same camera speed,
-    // regardless of GPU rendering throughput.
-    const recordingStartTime = performance.now();
-    // Throttle the rAF loop to match the stream's capture rate (60 fps max).
-    const frameDuration = 1000 / RECORD_FPS;
-    // Spin speed is defined as "0.02 rad/frame at 60 fps" (1.2 rad/s).
-    // Scale each frame's delta by the ratio of this frame's period to the 60fps period
-    // so spin angular velocity is identical at 60fps and 120fps.
-    const spinTimeScale = frameDuration / (1000 / 60);
-    let lastFrameTime = -1;
+    // Reference period for spin speed normalisation (0.02 rad/frame at 60fps = 1.2 rad/s).
+    const SPIN_REF_MS = 1000 / 60;
+    // Each video frame spans exactly FRAME_INTERVAL_MS of wall time.
+    const FRAME_INTERVAL_MS = 1000 / RECORD_FPS;
+    // Constant spin delta per rendered frame — guaranteed consistent speed in the video.
+    const spinPerFrame = FRAME_INTERVAL_MS / SPIN_REF_MS;
+
+    // Phase tracking
+    let loopStart = -1;       // rAF timestamp of first animate() tick
+    let frameCount = -1;      // last rendered integer-frame index (prevents >1 render per slot)
+    let encoderWarmupDone = false;
+    let recordingStartTime = -1;
+
     const start = config.cameraStart;
     const end = effectiveEnd;
     const cue = config.cueConfig;
+    // Whether the cue spins — used in renderFrame to trigger manual world-matrix update.
+    const hasAnySpin = (cue.spinSpeed > 0) || ((cue.spinSpeedX || 0) > 0);
+
+    // Pre-allocate camera keyframe object — mutated in-place each frame to avoid GC.
+    const kf = {
+      x: start.x, y: start.y, z: start.z,
+      rotationX: start.rotationX ?? 0,
+      rotationY: start.rotationY ?? 0,
+      rotationZ: start.rotationZ ?? 0,
+    };
+    const startRX = start.rotationX ?? 0, endRX = end.rotationX ?? 0;
+    const startRY = start.rotationY ?? 0, endRY = end.rotationY ?? 0;
+    const startRZ = start.rotationZ ?? 0, endRZ = end.rotationZ ?? 0;
 
     const renderFrame = (t: number) => {
-      const interpolatedKeyframe: CameraKeyframe = {
-        x: start.x + (end.x - start.x) * t,
-        y: start.y + (end.y - start.y) * t,
-        z: start.z + (end.z - start.z) * t,
-        rotationX: (start.rotationX ?? 0) + ((end.rotationX ?? 0) - (start.rotationX ?? 0)) * t,
-        rotationY: (start.rotationY ?? 0) + ((end.rotationY ?? 0) - (start.rotationY ?? 0)) * t,
-        rotationZ: (start.rotationZ ?? 0) + ((end.rotationZ ?? 0) - (start.rotationZ ?? 0)) * t,
-      };
-      this.setCameraFromKeyframe(interpolatedKeyframe);
+      // Mutate pre-allocated object to avoid per-frame heap allocation.
+      kf.x = start.x + (end.x - start.x) * t;
+      kf.y = start.y + (end.y - start.y) * t;
+      kf.z = start.z + (end.z - start.z) * t;
+      kf.rotationX = startRX + (endRX - startRX) * t;
+      kf.rotationY = startRY + (endRY - startRY) * t;
+      kf.rotationZ = startRZ + (endRZ - startRZ) * t;
+      // Lightweight camera update for recording: skip gizmo sync, helper update,
+      // and updateProjectionMatrix (FOV is constant throughout recording).
+      this.camera.position.set(kf.x, kf.y, kf.z);
+      this.camera.rotation.set(kf.rotationX, kf.rotationY, kf.rotationZ);
+      // scene.matrixWorldAutoUpdate=false → THREE.js only auto-updates the camera
+      // (root object, matrixWorldAutoUpdate=true). For a spinning single cue we must
+      // manually propagate rotation → local matrix → world matrix before rendering.
+      if (hasAnySpin && this.clonedModel && this.instancedMeshes.length === 0) {
+        this.clonedModel.updateMatrixWorld(true);
+      }
       this.renderer.render(this.scene, this.camera);
     };
 
     const animate = (timestamp: number) => {
-      const elapsedMs = performance.now() - recordingStartTime;
+      const now = performance.now();
+
+      // Throttle to exactly RECORD_FPS using integer frame counting.
+      // This eliminates the captureStream sampling race: renders and captureStream
+      // samples are in lock-step at the same rate, so every sampled frame is fresh
+      // and spin advances by exactly spinPerFrame per video frame (constant velocity).
+      if (loopStart < 0) loopStart = timestamp;
+      const targetFrame = Math.floor((timestamp - loopStart) / FRAME_INTERVAL_MS);
+      if (targetFrame <= frameCount) {
+        this.animationFrameId = requestAnimationFrame(animate);
+        return;
+      }
+      frameCount = targetFrame;
+
+      // ── Phase 1: Encoder warmup ─────────────────────────────────────────────
+      // Render static start frame until the timeslice ondataavailable fires.
+      // The encoder encodes simple identical frames and completes its cold-start
+      // sequence (VPU init, I-frame, rate-control calibration) before any motion.
+      if (!encoderWarmupDone) {
+        renderFrame(easingFn(0));
+        onProgress?.(0);
+        if (!warmupFlushed) {
+          // Timeslice hasn't fired yet — keep rendering warmup frames
+          this.animationFrameId = requestAnimationFrame(animate);
+          return;
+        }
+        // Timeslice fired → warmupBlob received → encoder is warm. Start animation.
+        encoderWarmupDone = true;
+        recordingStartTime = now;
+        // Fall through: render the first animation frame in this same rAF tick.
+      }
+
+      // ── Phase 2: Animation recording ───────────────────────────────────────
+      const elapsedMs = now - recordingStartTime;
 
       if (this.isDisposed || elapsedMs >= durationMs) {
-        // Render exact final frame so the video ends precisely at the end keyframe position
         renderFrame(easingFn(1));
         onProgress?.(100);
         this.animationFrameId = null;
@@ -2758,25 +3002,16 @@ export class ExtractorSceneManager {
         return;
       }
 
-      // Throttle: skip this rAF tick if less than one frame period has elapsed
-      const sinceLastFrame = lastFrameTime < 0 ? frameDuration : timestamp - lastFrameTime;
-      if (sinceLastFrame < frameDuration) {
-        this.animationFrameId = requestAnimationFrame(animate);
-        return;
-      }
-      // Drift-corrected advance so timing stays accurate over long recordings
-      lastFrameTime = lastFrameTime < 0 ? timestamp : lastFrameTime + frameDuration;
-
       const progress = Math.min(1, elapsedMs / durationMs);
       onProgress?.(Math.round(progress * 100));
 
-      // Cue spin — time-normalized to 60fps reference so speed is identical at 120fps and 60fps
+      // Advance cue spin by exactly one frame's worth (constant angular velocity).
       const hasSpinY = cue.spinSpeed > 0;
       const hasSpinX = (cue.spinSpeedX || 0) > 0;
       if (hasSpinY || hasSpinX) {
         this.spinCueInstances(
-          hasSpinY ? cue.spinSpeed * 0.02 * spinTimeScale : 0,
-          hasSpinX ? (cue.spinSpeedX || 0) * 0.02 * spinTimeScale : 0
+          hasSpinY ? cue.spinSpeed * 0.02 * spinPerFrame : 0,
+          hasSpinX ? (cue.spinSpeedX || 0) * 0.02 * spinPerFrame : 0
         );
       }
 
@@ -2784,8 +3019,170 @@ export class ExtractorSceneManager {
       this.animationFrameId = requestAnimationFrame(animate);
     };
 
-    this.mediaRecorder.start();
+    // Start encoding with timeslice = ENCODER_WARMUP_MS.
+    // The first ondataavailable (at t=ENCODER_WARMUP_MS) delivers the EBML init segment
+    // + warmup clusters (saved as warmupBlob). All subsequent chunks are animation
+    // cluster-continuation data with timestamps starting at ~ENCODER_WARMUP_MS.
+    this.mediaRecorder.start(ENCODER_WARMUP_MS);
     this.animationFrameId = requestAnimationFrame(animate);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // WebM warmup-trim helpers
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Return the absolute timecode (ms) of the first Cluster element in the buffer,
+   * or -1 if no cluster is found. Used to self-calibrate the timestamp offset that
+   * must be subtracted from all animation clusters regardless of whether Chrome
+   * restarted the WebM timeline from 0 or continued from ENCODER_WARMUP_MS.
+   */
+  private _getFirstClusterTimecode(buffer: ArrayBuffer): number {
+    const data = new Uint8Array(buffer);
+    for (let i = 0; i < data.length - 20; i++) {
+      if (data[i] === 0x1F && data[i + 1] === 0x43 && data[i + 2] === 0xB6 && data[i + 3] === 0x75) {
+        for (let j = i + 4; j < Math.min(i + 25, data.length - 5); j++) {
+          if (data[j] === 0xE7) {
+            const szByte = data[j + 1];
+            if (szByte >= 0x81 && szByte <= 0x84) {
+              const numBytes = szByte & 0x7F;
+              let tc = 0;
+              for (let b = 0; b < numBytes; b++) tc = (tc << 8) | data[j + 2 + b];
+              return tc;
+            }
+            return -1;
+          }
+        }
+        return -1;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Return the timecode (ms) of the LAST Cluster element in the buffer, or -1.
+   * Used to compute the actual content end time after timecode adjustment so that
+   * the Duration header is set to match content exactly (preventing end-freeze gaps).
+   */
+  private _getLastClusterTimecode(buffer: ArrayBuffer): number {
+    const data = new Uint8Array(buffer);
+    let lastTc = -1;
+    for (let i = 0; i < data.length - 20; i++) {
+      if (data[i] === 0x1F && data[i + 1] === 0x43 && data[i + 2] === 0xB6 && data[i + 3] === 0x75) {
+        for (let j = i + 4; j < Math.min(i + 25, data.length - 5); j++) {
+          if (data[j] === 0xE7) {
+            const szByte = data[j + 1];
+            if (szByte >= 0x81 && szByte <= 0x84) {
+              const numBytes = szByte & 0x7F;
+              let tc = 0;
+              for (let b = 0; b < numBytes; b++) tc = (tc << 8) | data[j + 2 + b];
+              lastTc = tc;
+            }
+            break;
+          }
+        }
+        i += 3;
+      }
+    }
+    return lastTc;
+  }
+
+  /**
+   * Return only the WebM container header bytes
+   * (EBML + Segment element open tag +
+   * SeekHead + Info + Tracks) from the raw bytes of a MediaRecorder chunk, stopping
+   * just before the first Cluster element. The cluster data (video frames) is
+   * intentionally not included — only the structural metadata is kept.
+   */
+  private _extractWebmHeader(buffer: ArrayBuffer): ArrayBuffer {
+    const data = new Uint8Array(buffer);
+    for (let i = 0; i < data.length - 4; i++) {
+      // Cluster element ID: 0x1F 0x43 0xB6 0x75
+      if (data[i] === 0x1F && data[i + 1] === 0x43 && data[i + 2] === 0xB6 && data[i + 3] === 0x75) {
+        return buffer.slice(0, i);
+      }
+    }
+    return buffer; // no cluster found — return full buffer as fallback
+  }
+
+  /**
+   * Write the correct Duration into a WebM EBML header buffer.
+   *
+   * Chrome's MediaRecorder sometimes writes a non-zero Duration into the EBML Info
+   * section of the warmup blob (encoding the warmup window length, not the animation
+   * duration). The fix-webm-duration library won't overwrite a Duration that is > 0,
+   * so we patch the bytes directly before blob reconstruction.
+   *
+   * EBML Duration element layout:
+   *   byte 0: 0x44   \
+   *   byte 1: 0x89   / 2-byte element ID
+   *   byte 2: 0x88   — size VINT: 8 bytes (double-precision float)
+   *   bytes 3–10: IEEE 754 big-endian double — the duration value in ms
+   *   (Some Chrome builds emit a 4-byte float: size byte 0x84, bytes 3–6.)
+   */
+  private _patchEbmlDuration(buffer: ArrayBuffer, durationMs: number): ArrayBuffer {
+    const data = new Uint8Array(buffer.slice(0)); // mutable copy
+    for (let i = 0; i < data.length - 3; i++) {
+      if (data[i] === 0x44 && data[i + 1] === 0x89) {
+        const szByte = data[i + 2];
+        if (szByte === 0x88) {
+          // 8-byte IEEE 754 double
+          const view = new DataView(data.buffer, i + 3, 8);
+          view.setFloat64(0, durationMs, false /* big-endian */);
+          return data.buffer;
+        } else if (szByte === 0x84) {
+          // 4-byte IEEE 754 float
+          const view = new DataView(data.buffer, i + 3, 4);
+          view.setFloat32(0, durationMs, false /* big-endian */);
+          return data.buffer;
+        }
+      }
+    }
+    return buffer; // Duration element not found — return original (fixWebmDuration will add it)
+  }
+
+  /**
+   * Re-zero WebM cluster timestamps by subtracting subtractMs from every Cluster
+   * Timecode element in the given raw bytes. This is needed after trimming the
+   * encoder-warmup chunk: the animation clusters were timestamped starting at
+   * ENCODER_WARMUP_MS in the original recording timeline and must be shifted to
+   * start at 0 ms so that the final video plays from the beginning.
+   *
+   * Chrome's MediaRecorder always uses the EBML "unknown" size VINT (8 bytes:
+   * 0x01 FF FF FF FF FF FF FF) for Cluster elements in live recordings. The
+   * Cluster Timecode element (ID 0xE7) therefore appears within the first ~25
+   * bytes of every cluster, making it safe to scan for without parsing the full
+   * EBML structure.
+   */
+  private _adjustWebmClusterTimecodes(buffer: ArrayBuffer, subtractMs: number): ArrayBuffer {
+    const data = new Uint8Array(buffer.slice(0)); // mutable copy
+    for (let i = 0; i < data.length - 20; i++) {
+      // Cluster element ID: 0x1F 0x43 0xB6 0x75
+      if (data[i] === 0x1F && data[i + 1] === 0x43 && data[i + 2] === 0xB6 && data[i + 3] === 0x75) {
+        // Scan the next 25 bytes for the Timecode element (ID = 0xE7).
+        for (let j = i + 4; j < Math.min(i + 25, data.length - 5); j++) {
+          if (data[j] === 0xE7) {
+            // data[j+1] is the VINT-encoded size of the Timecode value.
+            // Chrome uses a 1-byte VINT here: 0x81 = 1 data byte, 0x82 = 2, etc.
+            const szByte = data[j + 1];
+            if (szByte >= 0x81 && szByte <= 0x84) {
+              const numBytes = szByte & 0x7F; // strip the leading 1-bit of the VINT
+              // Read big-endian timecode value
+              let tc = 0;
+              for (let b = 0; b < numBytes; b++) tc = (tc << 8) | data[j + 2 + b];
+              const newTc = Math.max(0, tc - subtractMs);
+              // Write back big-endian
+              for (let b = 0; b < numBytes; b++) {
+                data[j + 2 + (numBytes - 1 - b)] = (newTc >> (b * 8)) & 0xFF;
+              }
+            }
+            break; // Timecode is always the first element in a cluster — done
+          }
+        }
+        i += 3; // advance past the 4-byte cluster ID (loop body adds 1 more)
+      }
+    }
+    return data.buffer;
   }
 
   /**
@@ -3244,10 +3641,9 @@ export class ExtractorSceneManager {
     // regardless of GPU rendering throughput.
     const durationMs = config.duration * 1000;
     const recordingStartTime = performance.now();
-    const frameDuration = 1000 / config.fps;
-    let lastFrameTime = -1;
 
     const animate = (timestamp: number) => {
+      void timestamp; // wall-clock timing is used; rAF timestamp only identifies the tick
       const elapsedMs = performance.now() - recordingStartTime;
 
       if (this.isDisposed || elapsedMs >= durationMs) {
@@ -3256,13 +3652,10 @@ export class ExtractorSceneManager {
         return;
       }
 
-      // Throttle: skip this rAF tick if less than one frame period has elapsed
-      const sinceLastFrame = lastFrameTime < 0 ? frameDuration : timestamp - lastFrameTime;
-      if (sinceLastFrame < frameDuration) {
-        this.animationFrameId = requestAnimationFrame(animate);
-        return;
-      }
-      lastFrameTime = lastFrameTime < 0 ? timestamp : lastFrameTime + frameDuration;
+      // No manual throttle — render every rAF tick so captureStream(fps) always has a
+      // fresh canvas frame to sample. captureStream self-limits the encoded output to
+      // config.fps; the drift-corrected throttle previously caused a just-below-threshold
+      // skip on high-refresh displays that produced irregular frame gaps (stutters).
 
       const progress = Math.min(1, elapsedMs / durationMs);
       onProgress?.(Math.round(progress * 100));
@@ -3626,10 +4019,12 @@ export class ExtractorSceneManager {
     if (!this.currentCueConfig) return;
 
     const instances = this.currentCueConfig.instances;
+    // Mutate spin values in-place — avoid object spread allocation every frame.
     const currentY = (this.currentCueConfig.spinY || 0) + spinDeltaY;
     const currentX = (this.currentCueConfig.spinX || 0) + spinDeltaX;
     const currentZ = this.currentCueConfig.spinZ || 0;
-    this.currentCueConfig = { ...this.currentCueConfig, spinY: currentY, spinX: currentX };
+    this.currentCueConfig.spinY = currentY;
+    this.currentCueConfig.spinX = currentX;
 
     if (instances.length <= 1 && this.instancedMeshes.length === 0) {
       if (this.clonedModel) {
@@ -3638,7 +4033,8 @@ export class ExtractorSceneManager {
       return;
     }
 
-    const dummy = new THREE.Object3D();
+    // Reuse pre-allocated dummy — avoid `new THREE.Object3D()` allocation every frame.
+    const dummy = this._spinDummy;
     for (const im of this.instancedMeshes) {
       for (let i = 0; i < instances.length; i++) {
         const inst = instances[i];

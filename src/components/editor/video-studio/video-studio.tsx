@@ -210,6 +210,13 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rebuildTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const templateSelectorRef = useRef<StudioTemplateSelectorHandle>(null);
+  // Ref to throttle setProgress calls during recording — avoids a React re-render
+  // on every rAF tick (60fps). We update state at most once per 100ms (≤10 updates/s).
+  const lastProgressUpdateRef = useRef<number>(0);
+
+  // Flag shared with the sceneViewAnimate loop to pause controls.update() during
+  // recording. Avoids a competing rAF callback doing layout/transform work.
+  const isRecordingRef = useRef(false);
 
   // Keep a ref to config so SceneViewControls callback always reads latest
   const configRef = useRef(config);
@@ -411,10 +418,20 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               scale: { x: scale.x, y: scale.y, z: scale.z },
             });
             if (info.type === "camera") {
-              if (extractorRef.current) {
-                const kf = extractorRef.current.getCameraKeyframeFromPosition();
-                setConfig((prev) => ({ ...prev, cameraStart: kf }));
-              }
+              // Use position/rotation passed directly from the gizmo — getCameraKeyframeFromPosition()
+              // reads camera.rotation which is still stale because syncCameraFromGizmo() fires
+              // AFTER this callback, causing the typed value to snap back to the old one.
+              setConfig((prev) => ({
+                ...prev,
+                cameraStart: {
+                  x: position.x,
+                  y: position.y,
+                  z: position.z,
+                  rotationX: rotation.x,
+                  rotationY: rotation.y,
+                  rotationZ: rotation.z,
+                },
+              }));
             } else if (info.type === "cue") {
               setConfig((prev) => {
                 const instances = [...prev.cueConfig.instances];
@@ -499,7 +516,11 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       // Animation loop for scene view controls damping
       const sceneViewAnimate = () => {
         if (!extractorRef.current) return;
-        sceneViewControlsRef.current?.update();
+        // Pause controls damping during recording — avoids a competing rAF callback
+        // doing transform/layout work while the GPU is fully loaded by encoding.
+        if (!isRecordingRef.current) {
+          sceneViewControlsRef.current?.update();
+        }
         sceneViewAnimId = requestAnimationFrame(sceneViewAnimate);
       };
       sceneViewAnimate();
@@ -609,6 +630,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   const handleRecord = async () => {
     if (!extractorRef.current) return;
     setIsRecording(true);
+    isRecordingRef.current = true;
     setProgress(0);
     setError(null);
     setVideoUrl(null);
@@ -627,7 +649,17 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     }
 
     try {
-      const blob = await extractorRef.current.startStudioRecording(config, (p) => setProgress(p));
+      lastProgressUpdateRef.current = 0;
+      const blob = await extractorRef.current.startStudioRecording(config, (p) => {
+        // Throttle React state updates: setProgress at most every 100ms so the
+        // component doesn't re-render at 60fps while the GPU is under full load.
+        // Always forward the final 100 so the bar completes cleanly.
+        const now = performance.now();
+        if (p >= 100 || now - lastProgressUpdateRef.current >= 100) {
+          lastProgressUpdateRef.current = now;
+          setProgress(p);
+        }
+      });
       const url = URL.createObjectURL(blob);
       blobUrlsRef.current.push(url);
       videoUrlRef.current = url;
@@ -636,6 +668,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       setError(err instanceof Error ? err.message : "Recording failed");
     } finally {
       setIsRecording(false);
+      isRecordingRef.current = false;
       // Restore previous view mode
       setViewMode(prevViewMode);
       sceneViewControlsRef.current?.setEnabled(prevViewMode === "scene");

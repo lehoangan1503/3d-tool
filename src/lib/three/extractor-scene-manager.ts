@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import fixWebmDuration from 'fix-webm-duration';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type {
   ImageExtractorConfig,
   VideoExtractorConfig,
@@ -134,12 +135,12 @@ export class ExtractorSceneManager {
   private frameTableBackdrop: THREE.Mesh | null = null;
 
   // Frame shadow studio dimensions — SAME AS VIDEO STUDIO for consistency
-  // Video studio: wall at (0, 4.5, -5.5), 34×24; table at y=-7.5, depth=12
+  // Video studio: wall at (0, 10, -5.5), 34×24; table at y=-2, depth=12
   private static readonly FRAME_WALL_WIDTH = 34;
   private static readonly FRAME_WALL_HEIGHT = 24;
-  private static readonly FRAME_WALL_Y = 4.5;
+  private static readonly FRAME_WALL_Y = 10;
   private static readonly FRAME_WALL_Z = -5.5;
-  private static readonly FRAME_TABLE_Y = -7.5;
+  private static readonly FRAME_TABLE_Y = -2;
   private static readonly FRAME_TABLE_DEPTH = 12;
   private static readonly FRAME_SHADOW_FRUSTUM = 20;
 
@@ -216,6 +217,11 @@ export class ExtractorSceneManager {
   private recordedChunks: Blob[] = [];
   private _spinPaused = false;
   private _isHelperDragging = false;
+  /** When true, updateStudioPreviewConfig skips setCameraFromKeyframe so camera orbit controls can take effect */
+  private _cameraPlacementMode = false;
+  private _cameraOrbit: OrbitControls | null = null;
+  /** Timer used to delay clearing _cameraPlacementMode past the config-sync debounce to prevent camera jumps */
+  private _placementModeExpiryTimer: ReturnType<typeof setTimeout> | null = null;
   /** Shadow map type saved before recording; restored in onstop. */
   private _recordingSavedShadowType: THREE.ShadowMapType | null = null;
 
@@ -1764,7 +1770,7 @@ export class ExtractorSceneManager {
    * This light is completely separate from HDRI/cue lighting — it only affects the shadow.
    * A white (or custom-color) floor base and back wall are also added to create the
    * seamless-paper studio look used in the simulator capture.
-   * Layout matches Video Studio exactly: wall at (0, 4.5, -5.5), table at y=-7.5.
+   * Layout matches Video Studio exactly: wall at (0, 10, -5.5), table at y=-2.
    */
   setFrameShadow(config: {
     enabled: boolean;
@@ -2162,12 +2168,12 @@ export class ExtractorSceneManager {
       : wallMaterial;
     if (config.surfaceLightDisabled) wallMaterial.dispose();
     this.backdrop = new THREE.Mesh(wallGeo, wallMeshMat);
-    this.backdrop.position.set(0, 4.5, -5.5);
+    this.backdrop.position.set(0, 10, -5.5);
     this.scene.add(this.backdrop);
     this.backdrop.userData = { type: 'wall' };
 
     // Table: PBR texture with subdivided geometry
-    const tableY = -7.5;
+    const tableY = -2;
     const tableDepth = 12;
     const tablePack = findTexturePack(manifest, config.tableSurface.texturePreset);
     let tableMaterial: THREE.MeshStandardMaterial;
@@ -2427,7 +2433,7 @@ export class ExtractorSceneManager {
   }
 
   /** Start animated preview for Video Studio (cue positioned + camera at start) */
-  startStudioVideoPreview(config: VideoStudioConfig): void {
+  startStudioVideoPreview(config: VideoStudioConfig, preserveCamera = false): void {
     this.stopVideoPreview();
     if (!this.model) return;
 
@@ -2437,8 +2443,10 @@ export class ExtractorSceneManager {
     // Setup cue instances
     this.setupCueInstances(cue);
 
-    // Camera at start position
-    this.setCameraFromKeyframe(config.cameraStart);
+    // Camera at start position — skip if placement mode is active or caller requested preserve
+    if (!preserveCamera && !this._cameraPlacementMode) {
+      this.setCameraFromKeyframe(config.cameraStart);
+    }
     this.camera.fov = 50;
     this.camera.updateProjectionMatrix();
 
@@ -2471,6 +2479,7 @@ export class ExtractorSceneManager {
           hasSpinX ? (cfg.cueConfig.spinSpeedX || 0) * 0.02 * timeScale : 0
         );
       }
+      if (this._cameraOrbit) this._cameraOrbit.update();
       this.render();
     };
     animate(performance.now());
@@ -2517,8 +2526,10 @@ export class ExtractorSceneManager {
     // Update HDRI light helpers
     this.updateHdriLightHelpers(config);
 
-    // Sync camera position from config (handles template load + slider edits)
-    this.setCameraFromKeyframe(config.cameraStart);
+    // Sync camera position from config (handles template load + slider edits) — skip during placement mode
+    if (!this._cameraPlacementMode) {
+      this.setCameraFromKeyframe(config.cameraStart);
+    }
   }
 
   /** Apply shadow config via HDRI-driven shadow lights */
@@ -2609,13 +2620,22 @@ export class ExtractorSceneManager {
     // and eliminate competing draw calls during recording setup.
     this.stopVideoPreview();
 
+    // Dispose orbit controls before recording so DOM event handlers (pointer/wheel)
+    // cannot fire orbit.update() and override camera position mid-recording.
+    // After recording, setViewMode("camera") recreates the orbit from the end position.
+    if (this._cameraOrbit) {
+      this._cameraOrbit.dispose();
+      this._cameraOrbit = null;
+    }
+
     return new Promise((resolve, reject) => {
       // Set pixel ratio to 1 — dims already define the exact output resolution.
       // Using devicePixelRatio here would silently render at DPR×resolution
       // (e.g. 5120×2880 on a Retina display) wasting 4× GPU cycles without any
       // quality benefit in the recorded file. resize() restores DPR after recording.
       this.renderer.setPixelRatio(1);
-      this.renderer.setSize(dims.width, dims.height);
+      // Pass false to prevent Three.js from overwriting canvas CSS (width/height px style)
+      this.renderer.setSize(dims.width, dims.height, false);
       this.camera.aspect = dims.width / dims.height;
       this.camera.updateProjectionMatrix();
 
@@ -2694,6 +2714,21 @@ export class ExtractorSceneManager {
   ) {
     this.stopVideoPreview();
 
+    // Reset camera to the recorded start position. The warmup renders in startStudioRecording
+    // run with async yields, during which stale orbit event handlers could have moved the camera.
+    // This guarantees the canvas shows the correct start frame when mediaRecorder.start() fires.
+    this.setCameraFromKeyframe(config.cameraStart);
+
+    // Diagnostic: log actual values used for this recording
+    const _diagEnd = applyDirection(config.cameraStart, config.cameraEnd, "xyz");
+    const _diagDur = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz");
+    console.log('[VideoStudio] recording', {
+      start: { x: config.cameraStart.x?.toFixed(2), y: config.cameraStart.y?.toFixed(2), z: config.cameraStart.z?.toFixed(2) },
+      end: { x: _diagEnd.x?.toFixed(2), y: _diagEnd.y?.toFixed(2), z: _diagEnd.z?.toFixed(2) },
+      speed: config.cameraSpeed,
+      duration: `${_diagDur.toFixed(1)}s`,
+    });
+
     // Hide all helpers/gizmos so they don't appear in the recorded video
     this.setHelpersVisible(false);
 
@@ -2738,11 +2773,11 @@ export class ExtractorSceneManager {
     this.camera.fov = 50;
     this.camera.updateProjectionMatrix();
 
-    // Compute effective end position based on direction constraint
-    const effectiveEnd = applyDirection(config.cameraStart, config.cameraEnd, config.cameraDirection);
+    // Camera moves directly from start to end (full xyz interpolation)
+    const effectiveEnd = applyDirection(config.cameraStart, config.cameraEnd, "xyz");
 
     // Compute duration from path + speed
-    const duration = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, config.cameraDirection);
+    const duration = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz");
     const easingFn = createEasingFunction(config.easing);
 
     // Compute wall-clock duration in ms before MediaRecorder setup so the onstop closure can use it
@@ -2759,15 +2794,12 @@ export class ExtractorSceneManager {
     // the GPU for resources and produces dropped frames, encoding artefacts, and
     // unstable bitrate — visible as "flashing and lagging" in the first 1–3 s.
     //
-    // Fix: start the encoder IMMEDIATELY and feed it ENCODER_WARMUP_MS of the static
-    // start frame so it fully initialises before the camera begins moving.
-    // The warmup frames are surgically removed by passing ENCODER_WARMUP_MS as the
-    // timeslice to mediaRecorder.start(). Per the WebM/MediaRecorder spec, chunk 0
-    // (the first ondataavailable) always contains the EBML init segment + warmup clusters;
-    // all subsequent chunks are cluster-continuation data with predictable timestamps.
-    // We extract the EBML header from chunk 0, subtract firstClusterTimecode from all
-    // animation cluster timestamps, and reconstruct a clean video starting at t = 0.
-    const ENCODER_WARMUP_MS = 2000;
+    // Fix: start the encoder with no timeslice and render PRE_ROLL_MS of the static
+    // start frame (tracked by wall-clock performance.now()) so it fully initialises
+    // before camera motion begins. In onstop, all chunks are combined, and the first
+    // cluster at t >= PRE_ROLL_MS is found via _findClusterOffsetAtTime; everything
+    // before it is discarded, timestamps are re-zeroed, and Duration is patched.
+    const PRE_ROLL_MS = 2500; // wall-clock pre-roll for encoder warm-up
 
     // Cap captureStream at 60 fps regardless of quality preset.
     // Chrome has a known bug (chromium #639939) where captureStream at >60 fps on high-refresh
@@ -2776,13 +2808,6 @@ export class ExtractorSceneManager {
     // timestamps on all platforms. Preview can still run at 120 fps for smooth UX.
     const RECORD_FPS = Math.min(dims.fps, 60);
 
-    // ── MediaRecorder + ondataavailable ────────────────────────────────────────
-    // We call mediaRecorder.start(ENCODER_WARMUP_MS) so the first timeslice fires
-    // automatically at t = ENCODER_WARMUP_MS. Subsequent slices fire every
-    // ENCODER_WARMUP_MS and on stop(). Per the MediaRecorder/WebM spec:
-    //   • Chunk 0 (warmup timeslice): always an EBML init segment + warmup clusters
-    //   • Chunks 1+ (animation): always cluster-continuation data, timestamps increasing
-    // This is deterministic — no EBML-restart ambiguity like with requestData().
     const stream = this.renderer.domElement.captureStream(RECORD_FPS);
     this.mediaRecorder = new MediaRecorder(stream, {
       mimeType: getSupportedMimeType(),
@@ -2790,17 +2815,8 @@ export class ExtractorSceneManager {
     });
     this.recordedChunks = [];
 
-    let warmupBlob: Blob | null = null;
-    let warmupFlushed = false; // set true after first timeslice ondataavailable fires
-
     this.mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size === 0) return;
-      if (!warmupFlushed) {
-        warmupFlushed = true;
-        warmupBlob = e.data; // warmup chunk — will be stripped down to header only
-      } else {
-        this.recordedChunks.push(e.data); // animation chunk(s)
-      }
+      if (e.data.size > 0) this.recordedChunks.push(e.data);
     };
 
     this.mediaRecorder.onstop = async () => {
@@ -2839,61 +2855,32 @@ export class ExtractorSceneManager {
       }
 
       let outBlob: Blob;
-      let finalDurationMs = durationMs;
+      const finalDurationMs = durationMs;
 
-      if (warmupBlob && this.recordedChunks.length > 0) {
-        // With start(timeslice), animation chunks are always cluster-continuation data
-        // (no EBML header restart). Combine all animation chunks into one buffer.
-        const animChunkBufs = await Promise.all(this.recordedChunks.map(c => c.arrayBuffer()));
-        const totalAnimSize = animChunkBufs.reduce((s, b) => s + b.byteLength, 0);
-        const animCombined = new Uint8Array(totalAnimSize);
-        let writeOffset = 0;
-        for (const buf of animChunkBufs) {
-          animCombined.set(new Uint8Array(buf), writeOffset);
-          writeOffset += buf.byteLength;
-        }
-        const animBuf = animCombined.buffer;
+      // Combine all chunks into one buffer
+      const allBufs = await Promise.all(this.recordedChunks.map(c => c.arrayBuffer()));
+      const totalSize = allBufs.reduce((s, b) => s + b.byteLength, 0);
+      const combined = new Uint8Array(totalSize);
+      let writeOff = 0;
+      for (const buf of allBufs) { combined.set(new Uint8Array(buf), writeOff); writeOff += buf.byteLength; }
+      const combinedBuf = combined.buffer;
 
-        // Extract the structural WebM header (EBML + Info + Tracks) from warmup chunk 0.
-        const warmupBuf = await warmupBlob.arrayBuffer();
-        const rawHeaderBuf = this._extractWebmHeader(warmupBuf);
+      // Extract EBML structural header (everything before first cluster)
+      const rawHeaderBuf = this._extractWebmHeader(combinedBuf);
 
-        // Animation clusters start at ~ENCODER_WARMUP_MS; subtract firstTc to re-zero.
+      // Find where animation clusters start (first cluster at t >= PRE_ROLL_MS)
+      const animClusterOffset = this._findClusterOffsetAtTime(combinedBuf, PRE_ROLL_MS);
+
+      if (animClusterOffset > 0) {
+        const animBuf = combinedBuf.slice(animClusterOffset);
         const firstTc = this._getFirstClusterTimecode(animBuf);
-        const adjustBy = firstTc > 0 ? firstTc : ENCODER_WARMUP_MS;
-
+        const adjustBy = firstTc > 0 ? firstTc : PRE_ROLL_MS;
         const adjAnim = this._adjustWebmClusterTimecodes(animBuf, adjustBy);
-
-        // Compute actual content duration from the last cluster timecode after adjustment.
-        // Chrome's keyframe interval may not align exactly with ENCODER_WARMUP_MS, causing
-        // firstTc > ENCODER_WARMUP_MS and the adjusted content to be shorter than durationMs.
-        // Using the actual last cluster time as Duration prevents a freeze gap at the end.
-        const FRAME_MS = Math.round(1000 / RECORD_FPS);
-        const lastTcAfterAdj = this._getLastClusterTimecode(adjAnim);
-        if (lastTcAfterAdj > 0 && lastTcAfterAdj + FRAME_MS < durationMs * 0.95) {
-          // Actual content is noticeably shorter than expected — use real duration to avoid gap.
-          finalDurationMs = lastTcAfterAdj + FRAME_MS;
-        }
-
-        console.log('[VideoStudio] timeslice trim →', {
-          warmupBlobSize: warmupBuf.byteLength,
-          animBufSize: animBuf.byteLength,
-          chunks: this.recordedChunks.length,
-          firstTc,
-          adjustBy,
-          lastTcAfterAdj,
-          finalDurationMs,
-          expectedDurationMs: durationMs,
-          animBufFirstBytes: Array.from(new Uint8Array(animBuf.slice(0, 16))).map(b => b.toString(16).padStart(2, '0')).join(' '),
-        });
-
         const headerBuf = this._patchEbmlDuration(rawHeaderBuf, finalDurationMs);
         outBlob = new Blob([headerBuf, adjAnim], { type: getSupportedMimeType() });
       } else {
-        // Fallback: warmup split didn't happen cleanly — combine all data as-is
-        // and let fixWebmDuration patch the duration normally.
-        const allBlobs = ([warmupBlob, ...this.recordedChunks]).filter((b): b is Blob => !!b);
-        outBlob = new Blob(allBlobs, { type: getSupportedMimeType() });
+        // Fallback: no pre-roll boundary found — use full combined data
+        outBlob = new Blob(this.recordedChunks, { type: getSupportedMimeType() });
       }
 
       // fixWebmDuration: only patches Duration if currently <= 0 in the blob.
@@ -2915,9 +2902,10 @@ export class ExtractorSceneManager {
     const spinPerFrame = FRAME_INTERVAL_MS / SPIN_REF_MS;
 
     // Phase tracking
-    let loopStart = -1;       // rAF timestamp of first animate() tick
-    let frameCount = -1;      // last rendered integer-frame index (prevents >1 render per slot)
-    let encoderWarmupDone = false;
+    let loopStart = -1;
+    let frameCount = -1;
+    let preRollStart = -1;       // wall-clock time when pre-roll began
+    let animationStarted = false; // true once pre-roll finishes
     let recordingStartTime = -1;
 
     const start = config.cameraStart;
@@ -2973,22 +2961,22 @@ export class ExtractorSceneManager {
       }
       frameCount = targetFrame;
 
-      // ── Phase 1: Encoder warmup ─────────────────────────────────────────────
-      // Render static start frame until the timeslice ondataavailable fires.
-      // The encoder encodes simple identical frames and completes its cold-start
-      // sequence (VPU init, I-frame, rate-control calibration) before any motion.
-      if (!encoderWarmupDone) {
+      // ── Phase 1: Pre-roll (static frame, encoder warm-up) ──────────────────
+      // Render static start frame for PRE_ROLL_MS wall-clock time so the encoder
+      // completes its cold-start sequence (VPU init, I-frame, rate-control) before
+      // camera motion begins. Pre-roll clusters are trimmed in onstop.
+      if (!animationStarted) {
+        if (preRollStart < 0) preRollStart = now;
         renderFrame(easingFn(0));
         onProgress?.(0);
-        if (!warmupFlushed) {
-          // Timeslice hasn't fired yet — keep rendering warmup frames
+        if (now - preRollStart < PRE_ROLL_MS) {
           this.animationFrameId = requestAnimationFrame(animate);
           return;
         }
-        // Timeslice fired → warmupBlob received → encoder is warm. Start animation.
-        encoderWarmupDone = true;
+        // Pre-roll done — encoder is warm. Start animation.
+        animationStarted = true;
         recordingStartTime = now;
-        // Fall through: render the first animation frame in this same rAF tick.
+        // Fall through: render first animation frame in this same rAF tick.
       }
 
       // ── Phase 2: Animation recording ───────────────────────────────────────
@@ -3019,11 +3007,8 @@ export class ExtractorSceneManager {
       this.animationFrameId = requestAnimationFrame(animate);
     };
 
-    // Start encoding with timeslice = ENCODER_WARMUP_MS.
-    // The first ondataavailable (at t=ENCODER_WARMUP_MS) delivers the EBML init segment
-    // + warmup clusters (saved as warmupBlob). All subsequent chunks are animation
-    // cluster-continuation data with timestamps starting at ~ENCODER_WARMUP_MS.
-    this.mediaRecorder.start(ENCODER_WARMUP_MS);
+    // Start encoding with no timeslice — single/chunked output on stop(), cleanest for post-trim.
+    this.mediaRecorder.start();
     this.animationFrameId = requestAnimationFrame(animate);
   }
 
@@ -3085,6 +3070,33 @@ export class ExtractorSceneManager {
       }
     }
     return lastTc;
+  }
+
+  /**
+   * Scan WebM clusters and return the byte offset of the FIRST cluster whose
+   * Timecode element value is >= targetMs. Returns -1 if not found.
+   * Used to trim the pre-roll phase from a continuous recording.
+   */
+  private _findClusterOffsetAtTime(buffer: ArrayBuffer, targetMs: number): number {
+    const data = new Uint8Array(buffer);
+    for (let i = 0; i < data.length - 20; i++) {
+      if (data[i] === 0x1F && data[i + 1] === 0x43 && data[i + 2] === 0xB6 && data[i + 3] === 0x75) {
+        for (let j = i + 4; j < Math.min(i + 25, data.length - 5); j++) {
+          if (data[j] === 0xE7) {
+            const szByte = data[j + 1];
+            if (szByte >= 0x81 && szByte <= 0x84) {
+              const numBytes = szByte & 0x7F;
+              let tc = 0;
+              for (let b = 0; b < numBytes; b++) tc = (tc << 8) | data[j + 2 + b];
+              if (tc >= targetMs) return i;
+            }
+            break;
+          }
+        }
+        i += 3;
+      }
+    }
+    return -1;
   }
 
   /**
@@ -3699,8 +3711,8 @@ export class ExtractorSceneManager {
   /** Initialize scene view with god camera + studio camera frustum helper */
   initSceneView(): void {
     this.godCamera = new THREE.PerspectiveCamera(60, this.width / this.height, 0.1, 200);
-    this.godCamera.position.set(0, 5, 22);
-    this.godCamera.lookAt(0, 3, 0);
+    this.godCamera.position.set(0, 10.5, 22);
+    this.godCamera.lookAt(0, 8.5, 0);
 
     this.cameraHelper = new THREE.CameraHelper(this.camera);
     this.cameraHelper.visible = false;
@@ -3733,6 +3745,35 @@ export class ExtractorSceneManager {
       this.cameraHelper.visible = this.isSceneView;
     }
     if (this.cameraGizmo) this.cameraGizmo.visible = this.isSceneView;
+
+    // Enable orbit controls on studio camera in camera view so user can freely position it.
+    // Disable in scene view to avoid interfering with cue dragging.
+    if (mode === "camera") {
+      if (!this._cameraOrbit) {
+        const canvas = this.renderer.domElement;
+        const savedQuaternion = this.camera.quaternion.clone();
+        const savedPosition = this.camera.position.clone();
+        const dir = new THREE.Vector3();
+        this.camera.getWorldDirection(dir);
+        const orbitTarget = this.camera.position.clone().addScaledVector(dir, 5);
+        const orbit = new OrbitControls(this.camera, canvas);
+        this.camera.position.copy(savedPosition);
+        this.camera.quaternion.copy(savedQuaternion);
+        this.camera.updateMatrixWorld(true);
+        orbit.target.copy(orbitTarget);
+        orbit.screenSpacePanning = true;
+        orbit.enableDamping = false;
+        orbit.update();
+        this._cameraOrbit = orbit;
+      }
+      this._cameraPlacementMode = true;
+    } else {
+      if (this._cameraOrbit) {
+        this._cameraOrbit.dispose();
+        this._cameraOrbit = null;
+      }
+      this._cameraPlacementMode = false;
+    }
   }
 
   getViewMode(): "scene" | "camera" {
@@ -3820,6 +3861,75 @@ export class ExtractorSceneManager {
     };
   }
 
+  /** Enable/disable camera placement mode — while active, config syncs won't reset the camera position */
+  setCameraPlacementMode(active: boolean): void {
+    this._cameraPlacementMode = active;
+  }
+
+  /** Attach OrbitControls to the recording camera so the user can drag it into position */
+  enableCameraOrbitMode(canvas: HTMLCanvasElement): void {
+    // Cancel any pending placement mode expiry from a previous confirmation
+    if (this._placementModeExpiryTimer) {
+      clearTimeout(this._placementModeExpiryTimer);
+      this._placementModeExpiryTimer = null;
+    }
+    this._cameraPlacementMode = true;
+    if (this._cameraOrbit) {
+      this._cameraOrbit.dispose();
+      this._cameraOrbit = null;
+    }
+
+    // Save camera state: OrbitControls constructor calls update() with target=(0,0,0)
+    // which executes camera.lookAt(0,0,0) and rotates the camera — we must restore it.
+    const savedQuaternion = this.camera.quaternion.clone();
+    const savedPosition = this.camera.position.clone();
+
+    const dir = new THREE.Vector3();
+    this.camera.getWorldDirection(dir);
+    const orbitTarget = this.camera.position.clone().addScaledVector(dir, 5);
+
+    const orbit = new OrbitControls(this.camera, canvas);
+
+    // Restore camera exactly as it was (constructor's lookAt(0,0,0) corrupted it)
+    this.camera.position.copy(savedPosition);
+    this.camera.quaternion.copy(savedQuaternion);
+    this.camera.updateMatrixWorld(true);
+
+    orbit.target.copy(orbitTarget);
+    orbit.screenSpacePanning = true;
+    orbit.enableDamping = false;
+    orbit.update();
+    this._cameraOrbit = orbit;
+  }
+
+  /** Whether camera orbit controls are currently active */
+  hasCameraOrbitMode(): boolean {
+    return this._cameraOrbit !== null;
+  }
+
+  /** Remove camera orbit controls */
+  disableCameraOrbitMode(): void {
+    if (this._cameraOrbit) {
+      this._cameraOrbit.dispose();
+      this._cameraOrbit = null;
+    }
+    this._cameraPlacementMode = false;
+  }
+
+  /** Schedule _cameraPlacementMode = false after a delay that outlasts the 100ms config-sync debounce */
+  resetCameraPlacementModeAfterDelay(): void {
+    if (this._placementModeExpiryTimer) clearTimeout(this._placementModeExpiryTimer);
+    this._placementModeExpiryTimer = setTimeout(() => {
+      this._cameraPlacementMode = false;
+      this._placementModeExpiryTimer = null;
+    }, 300);
+  }
+
+  /** Expose the recording/studio camera so external orbit controls can manipulate it */
+  getRecordingCamera(): THREE.PerspectiveCamera {
+    return this.camera;
+  }
+
   private syncCameraGizmo(): void {
     if (!this.cameraGizmo) return;
     this.cameraGizmo.position.copy(this.camera.position);
@@ -3894,6 +4004,13 @@ export class ExtractorSceneManager {
       this.godCamera.updateProjectionMatrix();
     }
   }
+
+  /** Override studio camera aspect independently (e.g. for correct video-ratio preview framing). */
+  setStudioCameraAspect(aspect: number) {
+    this.camera.aspect = aspect;
+    this.camera.updateProjectionMatrix();
+  }
+
 
   // ---------------------------------------------------------------------------
   // Multi-cue InstancedMesh support
@@ -4310,6 +4427,11 @@ export class ExtractorSceneManager {
 
   dispose() {
     this.isDisposed = true;
+    this.disableCameraOrbitMode();
+    if (this._placementModeExpiryTimer) {
+      clearTimeout(this._placementModeExpiryTimer);
+      this._placementModeExpiryTimer = null;
+    }
     this.stopLivePreview();
     this.stopRecording();
     this.clearStudioElements();

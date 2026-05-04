@@ -3020,7 +3020,7 @@ export class ExtractorSceneManager {
    * Return the absolute timecode (ms) of the first Cluster element in the buffer,
    * or -1 if no cluster is found. Used to self-calibrate the timestamp offset that
    * must be subtracted from all animation clusters regardless of whether Chrome
-   * restarted the WebM timeline from 0 or continued from ENCODER_WARMUP_MS.
+   * restarted the WebM timeline from 0 or continued from the pre-roll period.
    */
   private _getFirstClusterTimecode(buffer: ArrayBuffer): number {
     const data = new Uint8Array(buffer);
@@ -3157,7 +3157,7 @@ export class ExtractorSceneManager {
    * Re-zero WebM cluster timestamps by subtracting subtractMs from every Cluster
    * Timecode element in the given raw bytes. This is needed after trimming the
    * encoder-warmup chunk: the animation clusters were timestamped starting at
-   * ENCODER_WARMUP_MS in the original recording timeline and must be shifted to
+   * PRE_ROLL_MS in the original recording timeline and must be shifted to
    * start at 0 ms so that the final video plays from the beginning.
    *
    * Chrome's MediaRecorder always uses the EBML "unknown" size VINT (8 bytes:

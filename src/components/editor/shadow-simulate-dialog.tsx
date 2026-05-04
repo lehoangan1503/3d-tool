@@ -463,6 +463,7 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
     if (srcW > 1 || srcH > 1) sourceEsm.resize(1, 1);
 
     let sceneViewAnimId: number | null = null;
+    let ro: ResizeObserver | null = null;
 
     const setup = async () => {
       const model = sourceEsm.getModelClone();
@@ -487,11 +488,23 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
       if (previewContainerRef.current && canvas) {
         canvas.style.width = "100%";
         canvas.style.height = "100%";
-        canvas.style.objectFit = "contain";
+        canvas.style.display = "block";
         previewContainerRef.current.innerHTML = "";
         previewContainerRef.current.appendChild(canvas);
         const rect = previewContainerRef.current.getBoundingClientRect();
-        esm.resize(rect.width, rect.height);
+        const w = Math.max(rect.width || 800, 1);
+        const h = Math.max(rect.height || Math.round(w * 9 / 16), 1);
+        esm.resize(w, h);
+
+        // Track container size so canvas buffer always matches displayed size
+        ro = new ResizeObserver(() => {
+          if (!previewContainerRef.current || !esmRef.current) return;
+          const r = previewContainerRef.current.getBoundingClientRect();
+          const rw = Math.max(r.width, 1);
+          const rh = Math.max(r.height, 1);
+          esmRef.current.resize(rw, rh);
+        });
+        ro.observe(previewContainerRef.current);
 
         esm.initSceneView();
         sceneViewRef.current = new SceneViewControls(
@@ -661,6 +674,7 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
     setup();
 
     return () => {
+      ro?.disconnect();
       setSceneReady(false);
       if (updateTimerRef.current) {
         clearTimeout(updateTimerRef.current);

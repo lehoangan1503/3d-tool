@@ -2819,7 +2819,13 @@ export class ExtractorSceneManager {
       if (e.data.size > 0) this.recordedChunks.push(e.data);
     };
 
-    this.mediaRecorder.onstop = async () => {
+    type ShadowWithMap = THREE.LightShadow & { map: THREE.WebGLRenderTarget | null };
+    const restoreRecordingState = () => {
+      // Cancel any in-flight animation RAF before restoring state.
+      if (this.animationFrameId !== null) {
+        cancelAnimationFrame(this.animationFrameId);
+        this.animationFrameId = null;
+      }
       this.setHelpersVisible(true);
       // Restore all recording GPU optimisations so preview quality is unaffected.
       this.renderer.shadowMap.autoUpdate = true;
@@ -2830,7 +2836,6 @@ export class ExtractorSceneManager {
         obj.matrixAutoUpdate = true;
         obj.frustumCulled = true;
       }
-      type ShadowWithMap = THREE.LightShadow & { map: THREE.WebGLRenderTarget | null };
       const restoreShadowMap = (shadow: THREE.LightShadow) => {
         shadow.mapSize.set(2048, 2048);
         shadow.map?.dispose();
@@ -2838,7 +2843,7 @@ export class ExtractorSceneManager {
       };
       for (const { light } of this.hdriShadowLights) restoreShadowMap(light.shadow);
       if (this.frameShadowLight) restoreShadowMap(this.frameShadowLight.shadow);
-      // Restore pre-recording spin state to prevent rotation drift
+      // Restore pre-recording spin state to prevent rotation drift.
       if (this.currentCueConfig) {
         this.currentCueConfig = {
           ...this.currentCueConfig,
@@ -2853,6 +2858,10 @@ export class ExtractorSceneManager {
       if (this.instancedMeshes.length > 0 && this.currentCueConfig) {
         this.setupCueInstances(this.currentCueConfig);
       }
+    };
+
+    this.mediaRecorder.onstop = async () => {
+      restoreRecordingState();
 
       let outBlob: Blob;
       const finalDurationMs = durationMs;
@@ -2890,7 +2899,7 @@ export class ExtractorSceneManager {
       resolve(fixedBlob);
     };
     this.mediaRecorder.onerror = () => {
-      this.setHelpersVisible(true);
+      restoreRecordingState();
       reject(new Error('Recording failed'));
     };
 

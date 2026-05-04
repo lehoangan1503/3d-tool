@@ -32,6 +32,8 @@ import {
   Lightbulb,
   Plus,
   Trash2,
+  Film,
+  Clapperboard,
 } from "lucide-react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager, HDRI_OPTIONS_FALLBACK } from "@/lib/three/extractor-scene-manager";
@@ -182,6 +184,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   const [isRebuilding, setIsRebuilding] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
   const [viewMode, setViewMode] = useState<"scene" | "camera">("camera");
+  const [mainTab, setMainTab] = useState<"editor" | "video">("editor");
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo>({ type: null });
   const [transformValues, setTransformValues] = useState<{
@@ -191,6 +194,9 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   } | null>(null);
   const [transformMode, setTransformMode] = useState<"translate" | "rotate" | "scale">("translate");
   const [hotkeyAxis, setHotkeyAxis] = useState<"x" | "y" | "z" | null>(null);
+  // Captured positions for display — only update on "Đặt" click, never from config changes
+  const [capturedStart, setCapturedStart] = useState<CameraKeyframe | null>(null);
+  const [capturedEnd, setCapturedEnd] = useState<CameraKeyframe | null>(null);
   // Track which section was auto-opened by selection (so we can close it on deselect)
   const autoExpandedSectionRef = useRef<string | null>(null);
 
@@ -201,15 +207,19 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   const isDraggingRef = useRef(false);
   const historyDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const viewModeRef = useRef<"scene" | "camera">("camera");
   const extractorRef = useRef<ExtractorSceneManager | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const minimapCanvasRef = useRef<HTMLCanvasElement>(null);
   const videoUrlRef = useRef<string | null>(null);
   const blobUrlsRef = useRef<string[]>([]);
   const sceneViewControlsRef = useRef<SceneViewControls | null>(null);
+  const sceneViewLoopRef = useRef<{ stop: () => void; start: () => void } | null>(null);
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rebuildTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const templateSelectorRef = useRef<StudioTemplateSelectorHandle>(null);
+  /** When true, the next rebuildScene will skip setCameraFromKeyframe so camera stays at current position */
+  const preserveCameraOnNextRebuildRef = useRef(false);
   // Ref to throttle setProgress calls during recording — avoids a React re-render
   // on every rAF tick (60fps). We update state at most once per 100ms (≤10 updates/s).
   const lastProgressUpdateRef = useRef<number>(0);
@@ -312,6 +322,22 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     [transformValues]
   );
 
+  /** Resize canvas to fill the container naturally; studio camera gets correct video-ratio aspect */
+  const resizePreviewCanvas = useCallback(() => {
+    const extractor = extractorRef.current;
+    const container = previewContainerRef.current;
+    if (!extractor || !container) return;
+    const containerW = container.clientWidth;
+    const containerH = container.clientHeight;
+    if (!containerW || !containerH) return;
+    // Editor canvas always uses container's natural dimensions — view is ratio-agnostic.
+    extractor.resize(containerW, containerH);
+    // Studio camera (used for "góc nhìn máy quay" view) needs the actual video aspect.
+    const ratio = configRef.current.videoRatio ?? "16:9";
+    const preset = VIDEO_RATIO_PRESETS.find((r) => r.id === ratio) ?? VIDEO_RATIO_PRESETS[0];
+    extractor.setStudioCameraAspect(preset.width / preset.height);
+  }, []);
+
   // Setup ExtractorSceneManager when dialog opens
   useEffect(() => {
     if (!open || !sceneManager) return;
@@ -340,13 +366,16 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       if (previewContainerRef.current && canvas) {
         canvas.style.width = "100%";
         canvas.style.height = "100%";
-        canvas.style.objectFit = "contain";
+        canvas.style.display = "block";
         previewContainerRef.current.innerHTML = "";
         previewContainerRef.current.appendChild(canvas);
         const rect = previewContainerRef.current.getBoundingClientRect();
-        extractor.resize(rect.width, rect.height);
-
-        // Initialize scene view and controls
+        const initW = Math.max(rect.width || 800, 1);
+        const initH = Math.max(rect.height || Math.round(initW * 9 / 16), 1);
+        extractor.resize(initW, initH);
+        const ratioId = configRef.current.videoRatio ?? "16:9";
+        const ratioPreset = VIDEO_RATIO_PRESETS.find((r) => r.id === ratioId) ?? VIDEO_RATIO_PRESETS[0];
+        extractor.setStudioCameraAspect(ratioPreset.width / ratioPreset.height);
         extractor.initSceneView();
         sceneViewControlsRef.current = new SceneViewControls(
           extractor,
@@ -417,22 +446,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               },
               scale: { x: scale.x, y: scale.y, z: scale.z },
             });
-            if (info.type === "camera") {
-              // Use position/rotation passed directly from the gizmo — getCameraKeyframeFromPosition()
-              // reads camera.rotation which is still stale because syncCameraFromGizmo() fires
-              // AFTER this callback, causing the typed value to snap back to the old one.
-              setConfig((prev) => ({
-                ...prev,
-                cameraStart: {
-                  x: position.x,
-                  y: position.y,
-                  z: position.z,
-                  rotationX: rotation.x,
-                  rotationY: rotation.y,
-                  rotationZ: rotation.z,
-                },
-              }));
-            } else if (info.type === "cue") {
+            if (info.type === "cue") {
               setConfig((prev) => {
                 const instances = [...prev.cueConfig.instances];
                 if (instances[0]) {
@@ -511,7 +525,15 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
 
       await extractor.setupStudioFromStudioConfig(config);
       extractor.startStudioVideoPreview(config);
+      // Apply initial view mode so orbit controls and _cameraPlacementMode are set correctly
+      // (the viewMode useEffect fires before extractorRef is set on first mount, so we must
+      // initialise the view mode explicitly here after the extractor is ready).
+      extractor.setViewMode(viewModeRef.current);
+      sceneViewControlsRef.current?.setEnabled(viewModeRef.current === "scene");
       setSceneReady(true);
+      // Re-apply correct canvas dimensions after first paint (container may not have had its final
+      // layout dimensions at the time of the initial resize above).
+      requestAnimationFrame(() => resizePreviewCanvas());
 
       // Animation loop for scene view controls damping
       const sceneViewAnimate = () => {
@@ -524,6 +546,17 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         sceneViewAnimId = requestAnimationFrame(sceneViewAnimate);
       };
       sceneViewAnimate();
+      sceneViewLoopRef.current = {
+        stop: () => {
+          if (sceneViewAnimId !== null) {
+            cancelAnimationFrame(sceneViewAnimId);
+            sceneViewAnimId = null;
+          }
+        },
+        start: () => {
+          if (sceneViewAnimId === null) sceneViewAnimate();
+        },
+      };
     };
 
     setup();
@@ -531,6 +564,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     return () => {
       setSceneReady(false);
       if (sceneViewAnimId) cancelAnimationFrame(sceneViewAnimId);
+      sceneViewLoopRef.current = null;
       sceneViewControlsRef.current?.dispose();
       sceneViewControlsRef.current = null;
       extractorRef.current?.stopVideoPreview();
@@ -541,6 +575,32 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     // Only re-run on open/close, not on config changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, sceneManager]);
+
+  // ResizeObserver: re-resize canvas when container changes
+  useEffect(() => {
+    if (!open || !previewContainerRef.current) return;
+    const ro = new ResizeObserver(() => {
+      if (!isRecordingRef.current) resizePreviewCanvas();
+    });
+    ro.observe(previewContainerRef.current);
+    return () => ro.disconnect();
+  }, [open, resizePreviewCanvas]);
+
+  // Re-size when videoRatio changes so camera aspect always matches recording ratio
+  useEffect(() => {
+    if (!open) return;
+    resizePreviewCanvas();
+  }, [open, config.videoRatio, resizePreviewCanvas]);
+
+  // Re-size canvas when switching back to editor tab (was hidden with display:none)
+  useEffect(() => {
+    if (mainTab === "editor" && open) {
+      requestAnimationFrame(() => resizePreviewCanvas());
+    }
+  }, [mainTab, open, resizePreviewCanvas]);
+
+  // Keep viewModeRef in sync so setup() can access the current value
+  useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
 
   // Sync view mode to extractor + enable/disable scene view controls
   useEffect(() => {
@@ -567,6 +627,8 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   // Rebuild scene for expensive changes (backgrounds, HDRI, shadow, instance count)
   const rebuildScene = useCallback(async () => {
     if (!extractorRef.current) return;
+    const preserveCamera = preserveCameraOnNextRebuildRef.current;
+    preserveCameraOnNextRebuildRef.current = false;
     setIsRebuilding(true);
     try {
       // Detach TransformControls before clearing scene — prevents
@@ -574,7 +636,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       sceneViewControlsRef.current?.deselect();
       extractorRef.current.stopVideoPreview();
       await extractorRef.current.setupStudioFromStudioConfig(config);
-      extractorRef.current.startStudioVideoPreview(config);
+      extractorRef.current.startStudioVideoPreview(config, preserveCamera);
     } finally {
       setIsRebuilding(false);
     }
@@ -616,22 +678,27 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   }, []);
 
   const handleSetStart = useCallback(() => {
-    if (!extractorRef.current) return;
-    const kf = extractorRef.current.getCameraKeyframeFromPosition();
+    const extractor = extractorRef.current;
+    if (!extractor) return;
+    const kf = extractor.getCameraKeyframeFromPosition();
     setConfig((prev) => ({ ...prev, cameraStart: kf }));
+    setCapturedStart(kf);
   }, []);
 
   const handleSetEnd = useCallback(() => {
-    if (!extractorRef.current) return;
-    const kf = extractorRef.current.getCameraKeyframeFromPosition();
+    const extractor = extractorRef.current;
+    if (!extractor) return;
+    const kf = extractor.getCameraKeyframeFromPosition();
     setConfig((prev) => ({ ...prev, cameraEnd: kf }));
+    setCapturedEnd(kf);
   }, []);
 
   const handleRecord = async () => {
     if (!extractorRef.current) return;
+    if (!capturedStart || !capturedEnd) return;
     setIsRecording(true);
     isRecordingRef.current = true;
-    setProgress(0);
+    sceneViewLoopRef.current?.stop();
     setError(null);
     setVideoUrl(null);
     sceneViewControlsRef.current?.setEnabled(false);
@@ -650,7 +717,15 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
 
     try {
       lastProgressUpdateRef.current = 0;
-      const blob = await extractorRef.current.startStudioRecording(config, (p) => {
+      // Use captured positions as the authoritative start/end for recording.
+      // capturedStart/End are only set by "Đặt" clicks and never corrupted by
+      // camera movement, so they are always the correct values.
+      const recordConfig = {
+        ...config,
+        cameraStart: capturedStart ?? config.cameraStart,
+        cameraEnd: capturedEnd ?? config.cameraEnd,
+      };
+      const blob = await extractorRef.current.startStudioRecording(recordConfig, (p) => {
         // Throttle React state updates: setProgress at most every 100ms so the
         // component doesn't re-render at 60fps while the GPU is under full load.
         // Always forward the final 100 so the bar completes cleanly.
@@ -664,18 +739,19 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       blobUrlsRef.current.push(url);
       videoUrlRef.current = url;
       setVideoUrl(url);
+      setMainTab("video");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Recording failed");
     } finally {
       setIsRecording(false);
       isRecordingRef.current = false;
+      sceneViewLoopRef.current?.start();
       // Restore previous view mode
       setViewMode(prevViewMode);
       sceneViewControlsRef.current?.setEnabled(prevViewMode === "scene");
-      // Restart preview at container size
+      // Restart preview with correct aspect ratio
       if (extractorRef.current && previewContainerRef.current) {
-        const rect = previewContainerRef.current.getBoundingClientRect();
-        extractorRef.current.resize(rect.width, rect.height);
+        resizePreviewCanvas();
         extractorRef.current.startStudioVideoPreview(config);
       }
     }
@@ -705,6 +781,9 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     setConfig(structuredClone(DEFAULT_STUDIO_CONFIG));
     setVideoUrl(null);
     setError(null);
+    templateSelectorRef.current?.resetSelection();
+    setCapturedStart(null);
+    setCapturedEnd(null);
   };
 
   return (
@@ -725,63 +804,142 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         }}
       >
         <DialogHeader className="px-6 pt-4 pb-2">
-          <DialogTitle className="flex items-center gap-2 flex-wrap">
-            <div className="flex items-center gap-2">
-              <Video className="h-5 w-5" /> Video Studio
+          <DialogTitle className="flex items-center gap-2">
+            {/* Left: branding + undo/redo */}
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-2">
+                <Video className="h-5 w-5" /> Video Studio
+              </div>
+              <div className="flex items-center gap-0.5">
+                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={undo} title="Hoàn tác (Ctrl+Z)">
+                  <Undo2 className="h-3.5 w-3.5" />
+                </Button>
+                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={redo} title="Làm lại (Ctrl+Shift+Z)">
+                  <Redo2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             </div>
-            <div className="flex items-center gap-0.5">
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={undo} title="Hoàn tác (Ctrl+Z)">
-                <Undo2 className="h-3.5 w-3.5" />
-              </Button>
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={redo} title="Làm lại (Ctrl+Shift+Z)">
-                <Redo2 className="h-3.5 w-3.5" />
-              </Button>
+            {/* Center: main tabs */}
+            <div className="flex-1 flex items-center justify-center">
+              <div className="flex items-center gap-1 bg-muted/50 rounded-lg p-0.5">
+                <Button
+                  variant={mainTab === "editor" ? "secondary" : "ghost"}
+                  size="sm"
+                  className="h-7 text-xs px-3"
+                  onClick={() => setMainTab("editor")}
+                >
+                  <Clapperboard className="h-3 w-3 mr-1.5" /> Quay phim
+                </Button>
+                <Button
+                  variant={mainTab === "video" ? "secondary" : "ghost"}
+                  size="sm"
+                  className="h-7 text-xs px-3"
+                  onClick={() => setMainTab("video")}
+                >
+                  <Film className="h-3 w-3 mr-1.5" /> Video kết quả
+                  {videoUrl && (
+                    <span className="ml-1.5 h-1.5 w-1.5 rounded-full bg-primary inline-block" />
+                  )}
+                </Button>
+              </div>
             </div>
-            {/* Selection & transform info badges — visible in scene view when an object is selected */}
-            {viewMode === "scene" && selectionInfo.type && (
-              <span className="ml-1 text-[11px] font-normal px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-400/40">
-                {SELECTION_LABELS_VN[selectionInfo.type] ?? selectionInfo.type}
-              </span>
-            )}
-            {viewMode === "scene" && selectionInfo.type && (
-              <span
-                className={`text-[11px] font-normal px-2 py-0.5 rounded-full border ${
-                  hotkeyAxis === "x"
-                    ? "bg-red-500/15 text-red-400 border-red-400/40"
-                    : hotkeyAxis === "y"
-                    ? "bg-green-500/15 text-green-400 border-green-400/40"
-                    : hotkeyAxis === "z"
-                    ? "bg-blue-500/15 text-blue-400 border-blue-400/40"
-                    : transformMode === "translate"
-                    ? "bg-emerald-500/15 text-emerald-400 border-emerald-400/40"
-                    : transformMode === "rotate"
-                    ? "bg-orange-500/15 text-orange-400 border-orange-400/40"
-                    : "bg-violet-500/15 text-violet-400 border-violet-400/40"
-                }`}
+            {/* Right: view mode toggles + selection badges */}
+            {/* All children use invisible (not conditional) so the right section never changes width when switching tabs */}
+            <div className="flex items-center gap-1 shrink-0">
+              {viewMode === "scene" && selectionInfo.type && (
+                <>
+                  <span className={`ml-1 text-[11px] font-normal px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-400/40 ${mainTab === "video" ? "invisible pointer-events-none" : ""}`}>
+                    {SELECTION_LABELS_VN[selectionInfo.type] ?? selectionInfo.type}
+                  </span>
+                  <span
+                    className={`text-[11px] font-normal px-2 py-0.5 rounded-full border ${mainTab === "video" ? "invisible pointer-events-none" : ""} ${
+                      hotkeyAxis === "x"
+                        ? "bg-red-500/15 text-red-400 border-red-400/40"
+                        : hotkeyAxis === "y"
+                        ? "bg-green-500/15 text-green-400 border-green-400/40"
+                        : hotkeyAxis === "z"
+                        ? "bg-blue-500/15 text-blue-400 border-blue-400/40"
+                        : transformMode === "translate"
+                        ? "bg-emerald-500/15 text-emerald-400 border-emerald-400/40"
+                        : transformMode === "rotate"
+                        ? "bg-orange-500/15 text-orange-400 border-orange-400/40"
+                        : "bg-violet-500/15 text-violet-400 border-violet-400/40"
+                    }`}
+                  >
+                    {(() => {
+                      const label = MODE_LABELS_VN[transformMode] ?? transformMode;
+                      return hotkeyAxis ? `${label} (trục ${hotkeyAxis.toUpperCase()})` : label;
+                    })()}
+                  </span>
+                </>
+              )}
+              <Button
+                variant={viewMode === "camera" ? "secondary" : "ghost"}
+                size="sm"
+                className={`h-7 text-xs ${mainTab === "video" ? "invisible pointer-events-none" : ""}`}
+                onClick={() => setViewMode("camera")}
               >
-                {(() => {
-                  const label = MODE_LABELS_VN[transformMode] ?? transformMode;
-                  return hotkeyAxis ? `${label} (trục ${hotkeyAxis.toUpperCase()})` : label;
-                })()}
-              </span>
-            )}
-            <div className="flex-1" />
-            <div className="flex items-center gap-1">
-              <Button variant={viewMode === "camera" ? "secondary" : "ghost"} size="sm" className="h-7 text-xs" onClick={() => setViewMode("camera")}>
                 <Camera className="h-3 w-3 mr-1" /> Góc nhìn máy quay
               </Button>
-              <Button variant={viewMode === "scene" ? "secondary" : "ghost"} size="sm" className="h-7 text-xs" onClick={() => setViewMode("scene")}>
-                <Eye className="h-3 w-3 mr-1" /> Quay phim
+              <Button
+                variant={viewMode === "scene" ? "secondary" : "ghost"}
+                size="sm"
+                className={`h-7 text-xs ${mainTab === "video" ? "invisible pointer-events-none" : ""}`}
+                onClick={() => setViewMode("scene")}
+              >
+                <Eye className="h-3 w-3 mr-1" /> Chỉnh sửa
               </Button>
             </div>
           </DialogTitle>
           <DialogDescription className="sr-only">Tạo video điện ảnh cho {productName}</DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-1 overflow-hidden relative">
+          {/* ====== VIDEO RESULT TAB ====== */}
+          {mainTab === "video" && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center p-8 gap-6 z-10">
+              {videoUrl ? (
+                <>
+                  <video
+                    src={videoUrl}
+                    controls
+                    autoPlay
+                    loop
+                    className="rounded-xl max-w-2xl w-full max-h-[70vh] object-contain shadow-2xl"
+                  />
+                  <div className="flex gap-3">
+                    <Button variant="outline" onClick={() => setMainTab("editor")}>
+                      Tiếp tục chỉnh sửa
+                    </Button>
+                    <Button onClick={handleDownload}>
+                      <Download className="h-4 w-4 mr-2" /> Tải xuống
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <div className="flex flex-col items-center gap-4 text-muted-foreground">
+                  <Film className="h-16 w-16 opacity-20" />
+                  <p className="text-base font-medium">Chưa có video</p>
+                  <p className="text-sm opacity-70">Hãy chỉnh sửa và quay phim để xem kết quả</p>
+                  <Button variant="outline" onClick={() => setMainTab("editor")}>
+                    <Clapperboard className="h-4 w-4 mr-2" /> Đến chỉnh sửa
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ====== EDITOR TAB (always mounted for WebGL continuity) ====== */}
+          <div className={`flex flex-1 overflow-hidden ${mainTab === "video" ? "hidden" : ""}`}>
           {/* Left: Preview */}
           <div className="flex-1 flex flex-col p-4 min-w-0">
-            <div ref={previewContainerRef} className="flex-1 bg-black rounded-lg overflow-hidden relative">
+            {/* 3D preview canvas — hidden during recording to free GPU/memory for encoding */}
+            <div
+              ref={previewContainerRef}
+              className={`bg-black rounded-lg overflow-hidden relative transition-all duration-300 ${
+                isRecording ? "hidden" : "flex-1"
+              }`}
+            >
               <div
                 className={`absolute inset-0 flex items-center justify-center bg-black/40 z-10 transition-opacity duration-500 pointer-events-none ${
                   !sceneReady || isRebuilding ? "opacity-100" : "opacity-0"
@@ -798,8 +956,32 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               )}
             </div>
 
+            {/* Recording progress — shown instead of canvas during recording */}
+            {isRecording && (
+              <div className="flex-1 flex flex-col items-center justify-center gap-4 bg-black rounded-lg p-8">
+                <Loader2 className="h-12 w-12 animate-spin text-primary/70" />
+                <div className="w-full max-w-md space-y-2">
+                  <div className="h-3 bg-muted rounded-full overflow-hidden">
+                    <div className="h-full bg-primary transition-all duration-300" style={{ width: `${progress}%` }} />
+                  </div>
+                  <p className="text-sm text-muted-foreground text-center">
+                    {(() => {
+                      const total = computeVideoDuration(capturedStart ?? config.cameraStart, capturedEnd ?? config.cameraEnd, config.cameraSpeed, "xyz");
+                      const elapsed = (progress / 100) * total;
+                      const fmt = (s: number) => {
+                        const m = Math.floor(s / 60);
+                        const sec = Math.round(s % 60);
+                        return m > 0 ? `${m}:${String(sec).padStart(2, "0")}` : `${s.toFixed(0)}s`;
+                      };
+                      return `Đang ghi… ${fmt(elapsed)} / ${fmt(total)} (${Math.round(progress)}%)`;
+                    })()}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Key hints for scene view */}
-            {viewMode === "scene" && (
+            {viewMode === "scene" && !isRecording && (
               <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground px-1 flex-wrap">
                 <span className="font-mono bg-muted px-1.5 py-0.5 rounded">G</span>
                 <span>Di chuyển</span>
@@ -810,34 +992,6 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                 <span className="font-mono bg-muted px-1.5 py-0.5 rounded">Esc</span>
                 <span>Bỏ chọn</span>
                 <span className="text-muted-foreground/60">— nhấp để chọn, kéo để xoay quanh</span>
-              </div>
-            )}
-
-            {/* Progress bar during recording */}
-            {isRecording && (
-              <div className="mt-2">
-                <div className="h-2 bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-primary transition-all duration-300" style={{ width: `${progress}%` }} />
-                </div>
-                <p className="text-xs text-muted-foreground mt-1 text-center">
-                  {(() => {
-                    const total = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, config.cameraDirection);
-                    const elapsed = (progress / 100) * total;
-                    const fmt = (s: number) => {
-                      const m = Math.floor(s / 60);
-                      const sec = Math.round(s % 60);
-                      return m > 0 ? `${m}:${String(sec).padStart(2, "0")}` : `${s.toFixed(0)}s`;
-                    };
-                    return `Đang ghi… ${fmt(elapsed)} / ${fmt(total)}`;
-                  })()}
-                </p>
-              </div>
-            )}
-
-            {/* Video playback */}
-            {videoUrl && !isRecording && (
-              <div className="mt-2">
-                <video src={videoUrl} controls className="w-full rounded-lg max-h-24" />
               </div>
             )}
 
@@ -872,9 +1026,15 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                 onLoadConfig={(c) => {
                   const migrated = migrateVideoStudioConfig(ensureFullConfig(c));
                   setConfig(migrated);
+                  // Template already has camera positions — treat them as captured so record is ready
+                  setCapturedStart(migrated.cameraStart ?? null);
+                  setCapturedEnd(migrated.cameraEnd ?? null);
                 }}
                 onNewTemplate={() => {
                   setConfig(structuredClone(DEFAULT_STUDIO_CONFIG));
+                  // Fresh template — clear captured so user must set positions manually
+                  setCapturedStart(null);
+                  setCapturedEnd(null);
                 }}
               />
 
@@ -1043,18 +1203,18 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                           {expandedSections.has("camera") && (
                             <div className="px-3 pb-3 pt-2 border-t border-border/30">
                               <CameraControlsPanel
-                                cameraDirection={config.cameraDirection}
-                                cameraStart={config.cameraStart}
-                                cameraEnd={config.cameraEnd}
+                                cameraStart={capturedStart ?? config.cameraStart}
+                                cameraEnd={capturedEnd ?? config.cameraEnd}
                                 cameraSpeed={config.cameraSpeed}
                                 easing={config.easing}
-                                onDirectionChange={(d) => updateConfig("cameraDirection", d)}
                                 onStartChange={(s) => updateConfig("cameraStart", s)}
                                 onEndChange={(e) => updateConfig("cameraEnd", e)}
                                 onSpeedChange={(s) => updateConfig("cameraSpeed", s)}
                                 onEasingChange={(e) => updateConfig("easing", e)}
                                 onSetStart={handleSetStart}
                                 onSetEnd={handleSetEnd}
+                                startPositionSet={capturedStart !== null}
+                                endPositionSet={capturedEnd !== null}
                               />
                             </div>
                           )}
@@ -1431,7 +1591,8 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               })()}
             </div>
           </div>
-        </div>
+          </div>{/* end editor tab inner flex */}
+        </div>{/* end outer relative container */}
 
         {/* Footer */}
         <DialogFooter className="px-6 py-4 border-t border-border">
@@ -1455,16 +1616,24 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               </>
             ) : (
               <>
-                {(() => {
-                  const sec = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, config.cameraDirection);
-                  const m = Math.floor(sec / 60);
-                  const s = Math.round(sec % 60);
-                  const label = m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `${sec.toFixed(1)}s`;
-                  return <span className="text-xs text-muted-foreground tabular-nums">{label}</span>;
-                })()}
-                <Button size="sm" onClick={handleRecord}>
-                  <Video className="h-4 w-4 mr-1" /> Ghi
-                </Button>
+                {capturedStart && capturedEnd ? (
+                  <>
+                    {(() => {
+                      const sec = computeVideoDuration(capturedStart, capturedEnd, config.cameraSpeed, "xyz");
+                      const m = Math.floor(sec / 60);
+                      const s = Math.round(sec % 60);
+                      const label = m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `${sec.toFixed(1)}s`;
+                      return <span className="text-xs text-muted-foreground tabular-nums">{label}</span>;
+                    })()}
+                    <Button size="sm" onClick={handleRecord}>
+                      <Video className="h-4 w-4 mr-1" /> Ghi
+                    </Button>
+                  </>
+                ) : (
+                  <span className="text-xs text-muted-foreground">
+                    {!capturedStart && !capturedEnd ? "Cần đặt vị trí bắt đầu và kết thúc" : !capturedStart ? "Cần đặt vị trí bắt đầu" : "Cần đặt vị trí kết thúc"}
+                  </span>
+                )}
               </>
             )}
             <Button variant="outline" size="sm" onClick={() => templateSelectorRef.current?.triggerSave()} disabled={isRecording}>

@@ -2,10 +2,11 @@
 
 import { useState, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Download, CheckCircle2, XCircle, ImageIcon } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Loader2, Download, CheckCircle2, XCircle, ImageIcon, ChevronDown } from "lucide-react";
 import JSZip from "jszip";
-import type { Product } from "@/types/product";
+import type { Product, LeatherColor, LeatherTextureType } from "@/types/product";
 import { MODEL_PATHS } from "@/types/product";
 import type { ExtractorReference, ExtractorReferenceGroup } from "@/types/extractor";
 import { SceneManager } from "@/lib/three/scene-manager";
@@ -27,7 +28,7 @@ interface Props {
 export function BulkImageTab({ products }: Props) {
   const [groups, setGroups] = useState<ExtractorReferenceGroup[]>([]);
   const [groupsLoaded, setGroupsLoaded] = useState(false);
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [selectedGroupIds, setSelectedGroupIds] = useState<Set<string>>(new Set());
 
   const [items, setItems] = useState<BulkItem[]>(() =>
     products.map((p) => ({ product: p, status: "pending" as ItemStatus }))
@@ -42,7 +43,7 @@ export function BulkImageTab({ products }: Props) {
       const res = await fetch("/api/extractor-reference-groups");
       if (!res.ok) return;
       const json = await res.json();
-      setGroups((json.data ?? json) as ExtractorReferenceGroup[]);
+      setGroups((json.items ?? json.data ?? json) as ExtractorReferenceGroup[]);
     } catch (e) {
       console.error("BulkImageTab: load groups error", e);
     } finally {
@@ -50,39 +51,52 @@ export function BulkImageTab({ products }: Props) {
     }
   }, [groupsLoaded]);
 
-  const fetchReferences = useCallback(async (group: ExtractorReferenceGroup): Promise<ExtractorReference[]> => {
+  const toggleGroup = (id: string) => {
+    setSelectedGroupIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const fetchReferencesForGroups = useCallback(async (groupList: ExtractorReferenceGroup[]): Promise<ExtractorReference[]> => {
+    const seen = new Set<string>();
     const results: ExtractorReference[] = [];
-    for (const refId of group.referenceIds) {
-      try {
-        const res = await fetch(`/api/extractor-references/${refId}`);
-        if (!res.ok) continue;
-        const ref = await res.json() as ExtractorReference;
-        results.push(ref);
-      } catch (e) {
-        console.error(`BulkImageTab: fetch reference ${refId} error`, e);
+    for (const group of groupList) {
+      for (const refId of group.referenceIds) {
+        if (seen.has(refId)) continue;
+        seen.add(refId);
+        try {
+          const res = await fetch(`/api/extractor-references/${refId}`);
+          if (!res.ok) continue;
+          const ref = await res.json() as ExtractorReference;
+          results.push(ref);
+        } catch (e) {
+          console.error(`BulkImageTab: fetch reference ${refId} error`, e);
+        }
       }
     }
     return results;
   }, []);
 
   const handleStart = useCallback(async () => {
-    if (!selectedGroupId || running) return;
-    const group = groups.find((g) => g.id === selectedGroupId);
-    if (!group) return;
+    if (selectedGroupIds.size === 0 || running) return;
+    const selectedGroups = groups.filter((g) => selectedGroupIds.has(g.id));
+    if (selectedGroups.length === 0) return;
 
     cancelledRef.current = false;
     setRunning(true);
     setDone(false);
     setItems(products.map((p) => ({ product: p, status: "pending" })));
 
-    const references = await fetchReferences(group);
+    const references = await fetchReferencesForGroups(selectedGroups);
 
     for (let i = 0; i < products.length; i++) {
       if (cancelledRef.current) break;
       const product = products[i];
       setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "in_progress" }; return n; });
 
-      // Create a tiny off-screen container + SceneManager to load the product model
       const container = document.createElement("div");
       container.style.cssText = "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;pointer-events:none;";
       document.body.appendChild(container);
@@ -92,8 +106,8 @@ export function BulkImageTab({ products }: Props) {
         await sm.applySurface({
           surfaceUrl: product.surface_url,
           productType: product.type,
-          leatherColor: product.color as import("@/types/product").LeatherColor | null,
-          leatherTexture: product.texture_type as import("@/types/product").LeatherTextureType | null,
+          leatherColor: product.color as LeatherColor | null,
+          leatherTexture: product.texture_type as LeatherTextureType | null,
           textureScale: 1,
         });
 
@@ -120,7 +134,7 @@ export function BulkImageTab({ products }: Props) {
 
     setRunning(false);
     setDone(true);
-  }, [selectedGroupId, running, groups, products, fetchReferences]);
+  }, [selectedGroupIds, running, groups, products, fetchReferencesForGroups]);
 
   const handleCancel = useCallback(() => { cancelledRef.current = true; }, []);
 
@@ -152,37 +166,47 @@ export function BulkImageTab({ products }: Props) {
   };
 
   const doneCount = items.filter((i) => i.status === "done").length;
+  const selCount = selectedGroupIds.size;
 
   return (
     <div className="flex flex-col gap-4 p-1">
       <div className="flex flex-col gap-1.5">
         <label className="text-sm font-medium text-zinc-300">Chọn nhóm khung ảnh</label>
-        <Select
-          value={selectedGroupId ?? ""}
-          onValueChange={(v) => setSelectedGroupId(v)}
-          onOpenChange={(open) => { if (open) loadGroups(); }}
-        >
-          <SelectTrigger className="bg-zinc-800 border-zinc-600 text-zinc-100">
-            <SelectValue placeholder="Chọn nhóm..." />
-          </SelectTrigger>
-          <SelectContent className="bg-zinc-800 border-zinc-700">
-            {groups.map((g) => (
-              <SelectItem key={g.id} value={g.id} className="text-zinc-100 focus:bg-zinc-700">
-                {g.name}
-              </SelectItem>
-            ))}
-            {groupsLoaded && groups.length === 0 && (
-              <div className="px-3 py-2 text-xs text-zinc-500">Chưa có nhóm nào</div>
+        <Popover onOpenChange={(open) => { if (open) loadGroups(); }}>
+          <PopoverTrigger asChild>
+            <Button variant="outline" className="w-full justify-between bg-zinc-800 border-zinc-600 text-zinc-100 hover:bg-zinc-700 hover:text-white">
+              {selCount === 0 ? "Chọn nhóm..." : `${selCount} nhóm đã chọn`}
+              <ChevronDown className="w-4 h-4 ml-2 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-64 bg-zinc-800 border-zinc-700 p-2">
+            {!groupsLoaded && (
+              <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-zinc-400">
+                <Loader2 className="w-3 h-3 animate-spin" /> Đang tải...
+              </div>
             )}
-          </SelectContent>
-        </Select>
+            {groupsLoaded && groups.length === 0 && (
+              <div className="px-2 py-1.5 text-xs text-zinc-500">Chưa có nhóm nào</div>
+            )}
+            {groups.map((g) => (
+              <label key={g.id} className="flex items-center gap-2.5 px-2 py-1.5 rounded cursor-pointer hover:bg-zinc-700 text-zinc-100 text-sm">
+                <Checkbox
+                  checked={selectedGroupIds.has(g.id)}
+                  onCheckedChange={() => toggleGroup(g.id)}
+                  className="border-zinc-500"
+                />
+                {g.name}
+              </label>
+            ))}
+          </PopoverContent>
+        </Popover>
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
         {!running ? (
           <Button
             size="sm"
-            disabled={!selectedGroupId || done}
+            disabled={selCount === 0 || done}
             onClick={handleStart}
             className="bg-blue-600 hover:bg-blue-700 text-white"
           >
@@ -222,10 +246,9 @@ export function BulkImageTab({ products }: Props) {
                     <button
                       key={name}
                       onClick={() => downloadBlob(name, blob)}
-                      className="text-xs px-2 py-0.5 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 hover:text-white truncate max-w-[160px]"
-                      title={name}
+                      className="text-xs px-2 py-0.5 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 hover:text-white"
                     >
-                      ↓ {name}
+                      ↓ {name.split("_").pop()}
                     </button>
                   ))}
                 </div>

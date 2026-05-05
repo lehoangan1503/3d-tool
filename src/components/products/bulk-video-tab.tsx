@@ -2,8 +2,9 @@
 
 import { useState, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Download, CheckCircle2, XCircle, Video } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Loader2, Download, CheckCircle2, XCircle, Video, ChevronDown } from "lucide-react";
 import JSZip from "jszip";
 import type { Product } from "@/types/product";
 import type { VideoStudioTemplate, VideoStudioConfig } from "@/types/video-studio";
@@ -13,8 +14,9 @@ import { loadProductIntoEsm } from "@/lib/three/load-product-for-esm";
 
 type ItemStatus = "pending" | "in_progress" | "done" | "failed";
 
-interface BulkItem {
+interface QueueItem {
   product: Product;
+  template: VideoStudioTemplate;
   status: ItemStatus;
   progress?: number;
   blob?: Blob;
@@ -38,11 +40,9 @@ function hasCamera(config: VideoStudioConfig): boolean {
 export function BulkVideoTab({ products }: Props) {
   const [templates, setTemplates] = useState<VideoStudioTemplate[]>([]);
   const [templatesLoaded, setTemplatesLoaded] = useState(false);
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [selectedTemplateIds, setSelectedTemplateIds] = useState<Set<string>>(new Set());
 
-  const [items, setItems] = useState<BulkItem[]>(() =>
-    products.map((p) => ({ product: p, status: "pending" as ItemStatus }))
-  );
+  const [items, setItems] = useState<QueueItem[]>([]);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
   const cancelledRef = useRef(false);
@@ -53,7 +53,7 @@ export function BulkVideoTab({ products }: Props) {
       const res = await fetch("/api/video-studio-templates?limit=100");
       if (!res.ok) return;
       const json = await res.json();
-      setTemplates((json.data ?? json.items ?? []) as VideoStudioTemplate[]);
+      setTemplates((json.items ?? json.data ?? []) as VideoStudioTemplate[]);
     } catch (e) {
       console.error("BulkVideoTab: load templates error", e);
     } finally {
@@ -61,29 +61,46 @@ export function BulkVideoTab({ products }: Props) {
     }
   }, [templatesLoaded]);
 
-  const selectedTemplate = selectedTemplateId
-    ? templates.find((t) => t.id === selectedTemplateId)
-    : null;
-  const templateReady = !!(selectedTemplate && hasCamera(selectedTemplate.config));
+  const toggleTemplate = (id: string) => {
+    setSelectedTemplateIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const readyTemplates = templates.filter((t) => selectedTemplateIds.has(t.id) && hasCamera(t.config));
+  const canStart = readyTemplates.length > 0 && !running;
 
   const handleStart = useCallback(async () => {
-    if (!selectedTemplate || !templateReady || running) return;
+    if (!canStart) return;
+
+    const selectedTemplates = templates.filter((t) => selectedTemplateIds.has(t.id) && hasCamera(t.config));
+    if (selectedTemplates.length === 0) return;
+
+    // Build flat queue: for each product × each template
+    const queue: QueueItem[] = [];
+    for (const product of products) {
+      for (const template of selectedTemplates) {
+        queue.push({ product, template, status: "pending" });
+      }
+    }
 
     cancelledRef.current = false;
     setRunning(true);
     setDone(false);
-    setItems(products.map((p) => ({ product: p, status: "pending" })));
+    setItems(queue);
 
-    const config = ensureFullConfig(selectedTemplate.config);
-
-    for (let i = 0; i < products.length; i++) {
+    for (let i = 0; i < queue.length; i++) {
       if (cancelledRef.current) break;
-      const product = products[i];
+      const { product, template } = queue[i];
       setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "in_progress", progress: 0 }; return n; });
 
       const esm = new ExtractorSceneManager(2048, 2048);
       try {
         await loadProductIntoEsm(product, esm);
+        const config = ensureFullConfig(template.config);
 
         const blob = await esm.startStudioRecording(config, (progress) => {
           setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], progress }; return n; });
@@ -92,7 +109,7 @@ export function BulkVideoTab({ products }: Props) {
         const videoUrl = URL.createObjectURL(blob);
         setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "done", blob, videoUrl, progress: 1 }; return n; });
       } catch (err) {
-        console.error("BulkVideoTab: product record error", err);
+        console.error("BulkVideoTab: record error", err);
         setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "failed", error: String(err) }; return n; });
       } finally {
         esm.dispose();
@@ -101,16 +118,16 @@ export function BulkVideoTab({ products }: Props) {
 
     setRunning(false);
     setDone(true);
-  }, [selectedTemplate, templateReady, running, products]);
+  }, [canStart, templates, selectedTemplateIds, products]);
 
   const handleCancel = useCallback(() => { cancelledRef.current = true; }, []);
 
   const handleDownloadAll = useCallback(async () => {
     const zip = new JSZip();
     for (const item of items) {
-      if (item.blob && item.product) {
+      if (item.blob) {
         const safeName = (item.product.name ?? item.product.id).replace(/[^a-zA-Z0-9-_]/g, "_");
-        const safeTemplate = (selectedTemplate?.name ?? "video").replace(/[^a-zA-Z0-9-_]/g, "_");
+        const safeTemplate = (item.template.name).replace(/[^a-zA-Z0-9-_]/g, "_");
         zip.file(`${safeName}_${safeTemplate}.webm`, item.blob);
       }
     }
@@ -121,68 +138,81 @@ export function BulkVideoTab({ products }: Props) {
     a.download = "bulk_videos.zip";
     a.click();
     URL.revokeObjectURL(url);
-  }, [items, selectedTemplate]);
+  }, [items]);
 
-  const downloadItem = (item: BulkItem) => {
+  const downloadItem = (item: QueueItem) => {
     if (!item.blob) return;
     const url = URL.createObjectURL(item.blob);
     const a = document.createElement("a");
     a.href = url;
     const safeName = (item.product.name ?? item.product.id).replace(/[^a-zA-Z0-9-_]/g, "_");
-    const safeTemplate = (selectedTemplate?.name ?? "video").replace(/[^a-zA-Z0-9-_]/g, "_");
+    const safeTemplate = item.template.name.replace(/[^a-zA-Z0-9-_]/g, "_");
     a.download = `${safeName}_${safeTemplate}.webm`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
   const doneCount = items.filter((i) => i.status === "done").length;
+  const selCount = selectedTemplateIds.size;
+  const totalJobs = products.length * readyTemplates.length;
 
   return (
     <div className="flex flex-col gap-4 p-1">
-      {/* Template selector */}
+      {/* Template multi-select */}
       <div className="flex flex-col gap-1.5">
         <label className="text-sm font-medium text-zinc-300">Chọn mẫu video</label>
-        <Select
-          value={selectedTemplateId ?? ""}
-          onValueChange={(v) => setSelectedTemplateId(v)}
-          onOpenChange={(open) => { if (open) loadTemplates(); }}
-        >
-          <SelectTrigger className="bg-zinc-800 border-zinc-600 text-zinc-100">
-            <SelectValue placeholder="Chọn mẫu..." />
-          </SelectTrigger>
-          <SelectContent className="bg-zinc-800 border-zinc-700">
-            {templates.map((t) => (
-              <SelectItem
-                key={t.id}
-                value={t.id}
-                className="text-zinc-100 focus:bg-zinc-700"
-                disabled={!hasCamera(t.config)}
-              >
-                {t.name}
-                {!hasCamera(t.config) && <span className="ml-1 text-xs text-zinc-500">(chưa có vị trí camera)</span>}
-              </SelectItem>
-            ))}
-            {templatesLoaded && templates.length === 0 && (
-              <div className="px-3 py-2 text-xs text-zinc-500">Chưa có mẫu nào</div>
+        <Popover onOpenChange={(open) => { if (open) loadTemplates(); }}>
+          <PopoverTrigger asChild>
+            <Button variant="outline" className="w-full justify-between bg-zinc-800 border-zinc-600 text-zinc-100 hover:bg-zinc-700 hover:text-white">
+              {selCount === 0 ? "Chọn mẫu..." : `${selCount} mẫu đã chọn`}
+              <ChevronDown className="w-4 h-4 ml-2 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-72 bg-zinc-800 border-zinc-700 p-2 max-h-60 overflow-y-auto">
+            {!templatesLoaded && (
+              <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-zinc-400">
+                <Loader2 className="w-3 h-3 animate-spin" /> Đang tải...
+              </div>
             )}
-          </SelectContent>
-        </Select>
-        {selectedTemplate && !templateReady && (
-          <p className="text-xs text-yellow-400">Mẫu này chưa có vị trí camera bắt đầu/kết thúc.</p>
+            {templatesLoaded && templates.length === 0 && (
+              <div className="px-2 py-1.5 text-xs text-zinc-500">Chưa có mẫu nào</div>
+            )}
+            {templates.map((t) => {
+              const ready = hasCamera(t.config);
+              return (
+                <label key={t.id} className={`flex items-center gap-2.5 px-2 py-1.5 rounded text-sm ${ready ? "cursor-pointer hover:bg-zinc-700 text-zinc-100" : "opacity-50 cursor-not-allowed text-zinc-400"}`}>
+                  <Checkbox
+                    checked={selectedTemplateIds.has(t.id)}
+                    onCheckedChange={() => ready && toggleTemplate(t.id)}
+                    disabled={!ready}
+                    className="border-zinc-500"
+                  />
+                  <span className="flex-1 truncate">{t.name}</span>
+                  {!ready && <span className="text-xs text-zinc-500 shrink-0">chưa có camera</span>}
+                </label>
+              );
+            })}
+          </PopoverContent>
+        </Popover>
+        {selCount > 0 && readyTemplates.length < selCount && (
+          <p className="text-xs text-yellow-400">{selCount - readyTemplates.length} mẫu chưa có vị trí camera sẽ bị bỏ qua.</p>
+        )}
+        {readyTemplates.length > 0 && (
+          <p className="text-xs text-zinc-500">{products.length} sản phẩm × {readyTemplates.length} mẫu = {totalJobs} video</p>
         )}
       </div>
 
       {/* Action bar */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         {!running ? (
           <Button
             size="sm"
-            disabled={!templateReady || done}
+            disabled={!canStart || done}
             onClick={handleStart}
             className="bg-purple-600 hover:bg-purple-700 text-white"
           >
             <Video className="w-4 h-4 mr-1.5" />
-            Bắt đầu ghi ({products.length} sản phẩm)
+            Bắt đầu ghi ({totalJobs || products.length} video)
           </Button>
         ) : (
           <Button size="sm" variant="destructive" onClick={handleCancel}>Hủy</Button>
@@ -193,14 +223,14 @@ export function BulkVideoTab({ products }: Props) {
             Tải tất cả (.zip)
           </Button>
         )}
-        {running && <span className="text-sm text-zinc-400">{doneCount}/{products.length} video hoàn thành</span>}
-        {done && <span className="text-sm text-green-400">Hoàn thành {doneCount}/{products.length}</span>}
+        {running && <span className="text-sm text-zinc-400">{doneCount}/{items.length} video hoàn thành</span>}
+        {done && <span className="text-sm text-green-400">Hoàn thành {doneCount}/{items.length}</span>}
       </div>
 
-      {/* Product list */}
+      {/* Queue list */}
       <div className="flex flex-col gap-2 max-h-72 overflow-y-auto pr-1">
         {items.map((item, idx) => (
-          <div key={item.product.id} className="flex items-start gap-3 rounded-lg bg-zinc-800/60 px-3 py-2.5">
+          <div key={`${item.product.id}-${item.template.id}`} className="flex items-start gap-3 rounded-lg bg-zinc-800/60 px-3 py-2.5">
             <div className="mt-0.5 shrink-0">
               {item.status === "pending" && <div className="w-4 h-4 rounded-full border border-zinc-600" />}
               {item.status === "in_progress" && <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />}
@@ -209,7 +239,10 @@ export function BulkVideoTab({ products }: Props) {
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-2">
-                <p className="text-sm text-zinc-200 truncate">{item.product.name}</p>
+                <div className="min-w-0">
+                  <p className="text-sm text-zinc-200 truncate">{item.product.name}</p>
+                  <p className="text-xs text-zinc-500 truncate">{item.template.name}</p>
+                </div>
                 {item.status === "done" && (
                   <button
                     onClick={() => downloadItem(item)}
@@ -219,7 +252,6 @@ export function BulkVideoTab({ products }: Props) {
                   </button>
                 )}
               </div>
-              {/* Progress bar */}
               {item.status === "in_progress" && typeof item.progress === "number" && (
                 <div className="mt-1.5 w-full bg-zinc-700 rounded-full h-1">
                   <div
@@ -231,7 +263,6 @@ export function BulkVideoTab({ products }: Props) {
               {item.status === "failed" && (
                 <p className="text-xs text-red-400 mt-0.5 truncate">{item.error}</p>
               )}
-              {/* Inline video preview */}
               {item.status === "done" && item.videoUrl && (
                 <video
                   key={`video-${idx}`}

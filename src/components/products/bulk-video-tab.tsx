@@ -97,6 +97,10 @@ export function BulkVideoTab({ products }: Props) {
       const { product, template } = queue[i];
       setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "in_progress", progress: 0 }; return n; });
 
+      // Brief pause between recordings to let the browser fully release the previous WebGL context
+      if (i > 0) await new Promise<void>((r) => setTimeout(r, 300));
+      if (cancelledRef.current) break;
+
       const esm = new ExtractorSceneManager(2048, 2048);
       try {
         await loadProductIntoEsm(product, esm);
@@ -110,7 +114,8 @@ export function BulkVideoTab({ products }: Props) {
         setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "done", blob, videoUrl, progress: 1 }; return n; });
       } catch (err) {
         console.error("BulkVideoTab: record error", err);
-        setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "failed", error: String(err) }; return n; });
+        const msg = err instanceof Error ? err.message : String(err);
+        setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "failed", error: msg }; return n; });
       } finally {
         esm.dispose();
       }
@@ -253,10 +258,10 @@ export function BulkVideoTab({ products }: Props) {
                 )}
               </div>
               {item.status === "in_progress" && typeof item.progress === "number" && (
-                <div className="mt-1.5 w-full bg-zinc-700 rounded-full h-1">
+                <div className="mt-1.5 w-full bg-zinc-700 rounded-full h-1 overflow-hidden">
                   <div
                     className="h-1 rounded-full bg-purple-500 transition-all duration-200"
-                    style={{ width: `${Math.round(item.progress * 100)}%` }}
+                    style={{ width: `${Math.min(100, Math.round(item.progress * 100))}%` }}
                   />
                 </div>
               )}

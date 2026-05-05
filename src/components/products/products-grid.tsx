@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { CreateProductDialog } from "@/components/products/create-product-dialog";
 import { ProductCard } from "@/components/products/product-card";
+import { BulkExportDialog } from "@/components/products/bulk-export-dialog";
 import type { Product, ProductType } from "@/types/product";
 
 type FilterType = "all" | ProductType;
@@ -25,6 +26,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
   const [isLoadingAll, setIsLoadingAll] = useState(false);
   const [isCloningBulk, setIsCloningBulk] = useState(false);
   const [cloneProgress, setCloneProgress] = useState({ done: 0, total: 0 });
+  const [bulkExportOpen, setBulkExportOpen] = useState(false);
   const [search, setSearchRaw] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<FilterType>("all");
@@ -229,6 +231,18 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
                 )}
               </Button>
             )}
+            {/* Bulk export action */}
+            {selectedIds.size > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setBulkExportOpen(true)}
+                className="gap-1.5 border-zinc-600 text-zinc-200 hover:bg-zinc-700"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Tải xuống nhiều
+              </Button>
+            )}
             <CreateProductDialog onCreated={handleProductCreated} />
           </div>
         </div>
@@ -344,6 +358,13 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
           )}
         </>
       )}
+
+      {/* Bulk export dialog */}
+      <BulkExportDialog
+        open={bulkExportOpen}
+        onClose={() => setBulkExportOpen(false)}
+        products={products.filter((p) => selectedIds.has(p.id))}
+      />
     </div>
   );
 }

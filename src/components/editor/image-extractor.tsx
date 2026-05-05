@@ -25,7 +25,7 @@ import { forceWhiteWalls } from "@/lib/three/studio-helpers";
  *  so that `setCueHdri()` can apply the HDRI environment map directly to cue
  *  materials.  Uses the first enabled non-studio-white layer, falling back to
  *  DEFAULT_CUE_HDRI. */
-function hdriLayersToCueHdri(layers: HdriLayer[]): CueHdriConfig {
+export function hdriLayersToCueHdri(layers: HdriLayer[]): CueHdriConfig {
   const primary = layers.find((l) => l.enabled && l.hdriType !== STUDIO_WHITE_HDRI);
   if (primary) {
     return {
@@ -44,7 +44,7 @@ function hdriLayersToCueHdri(layers: HdriLayer[]): CueHdriConfig {
  * Returns a data URL. Caller must provide a cloned model.
  * If `reuseEsm` is provided, reuses it instead of creating/disposing a new ESM per frame.
  */
-async function renderCueFrameViaStudio(
+export async function renderCueFrameViaStudio(
   model: ReturnType<SceneManager["getModelForClone"]>,
   snapshot: import("@/types/video-studio").VideoStudioConfig,
   width: number,
@@ -106,12 +106,131 @@ async function renderCueFrameViaStudio(
 }
 
 /**
+ * Renders one ExtractorReference for a given product model and returns a PNG Blob.
+ *
+ * Used by the bulk image export pipeline. Creates a canvas of the reference's
+ * declared canvas dimensions, composites all frames (cue + image), and returns
+ * the result as a PNG blob.
+ *
+ * @param model     - Three.js model group (from `SceneManager.getModelForClone()`)
+ * @param reference - Reference with frames to composite
+ */
+export async function renderReferenceToBlob(
+  model: ReturnType<SceneManager["getModelForClone"]>,
+  reference: ExtractorReference,
+): Promise<Blob> {
+  const canvasWidth  = reference.canvasWidth  ?? DEFAULT_CANVAS_WIDTH;
+  const canvasHeight = reference.canvasHeight ?? DEFAULT_CANVAS_HEIGHT;
+
+  const canvas = document.createElement("canvas");
+  canvas.width  = canvasWidth;
+  canvas.height = canvasHeight;
+  const ctx = canvas.getContext("2d")!;
+  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+  const studioEsm = new ExtractorSceneManager(2048, 2048);
+  let legacyEsm: ExtractorSceneManager | null = null;
+
+  try {
+    for (const frame of reference.frames) {
+      if (isCueFrame(frame)) {
+        const shadow = frame.cue.studioShadow ?? DEFAULT_CUE_SHADOW;
+        let frameDataUrl: string;
+
+        if (shadow.studioConfigSnapshot) {
+          frameDataUrl = await renderCueFrameViaStudio(
+            model,
+            shadow.studioConfigSnapshot,
+            Math.round(frame.transform.width),
+            Math.round(frame.transform.height),
+            studioEsm,
+            shadow.wallsTransparent,
+          );
+        } else {
+          if (!legacyEsm) {
+            legacyEsm = new ExtractorSceneManager(canvasWidth, canvasHeight);
+            const defaultHdriUrl = `/hdri/${encodeURIComponent("bloem_train_track_clear_2k.hdr")}`;
+            await legacyEsm.loadHDRI(defaultHdriUrl);
+            legacyEsm.setTransparentBackground(true);
+            if (model) legacyEsm.setModel(model);
+          }
+          legacyEsm.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
+          legacyEsm.setModelRotation(frame.cue.spinY);
+          legacyEsm.setCameraPhi(frame.cue.phi, 2);
+          legacyEsm.setCameraZoom(frame.cue.zoom);
+          legacyEsm.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
+          if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
+            await legacyEsm.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
+            await legacyEsm.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
+          } else if (frame.cue.lightAngle !== undefined) {
+            legacyEsm.setHdriRotation(frame.cue.lightAngle);
+          }
+          legacyEsm.setFrameShadow(shadow);
+          legacyEsm.setFrameShadowQuality(4096);
+          legacyEsm.render();
+          frameDataUrl = legacyEsm.captureFrame("png");
+        }
+
+        const img = new Image();
+        img.src = frameDataUrl;
+        await new Promise((r) => { img.onload = r; });
+        ctx.save();
+        const cx = frame.transform.x + frame.transform.width / 2;
+        const cy = frame.transform.y + frame.transform.height / 2;
+        ctx.translate(cx, cy);
+        ctx.rotate((frame.transform.rotation * Math.PI) / 180);
+        ctx.drawImage(img, -frame.transform.width / 2, -frame.transform.height / 2, frame.transform.width, frame.transform.height);
+        ctx.restore();
+      } else if (isImageFrame(frame)) {
+        ctx.save();
+        const cx = frame.transform.x + frame.transform.width / 2;
+        const cy = frame.transform.y + frame.transform.height / 2;
+        ctx.translate(cx, cy);
+        ctx.rotate((frame.transform.rotation * Math.PI) / 180);
+        const hw = frame.transform.width / 2;
+        const hh = frame.transform.height / 2;
+        if (frame.imageSettings.backgroundEnabled) {
+          ctx.globalAlpha = frame.imageSettings.backgroundOpacity ?? 1;
+          if (frame.imageSettings.backgroundType === "gradient" && frame.imageSettings.backgroundGradient) {
+            ctx.fillStyle = createCanvasGradient(ctx, frame.imageSettings.backgroundGradient, frame.transform.width, frame.transform.height);
+          } else {
+            ctx.fillStyle = frame.imageSettings.backgroundColor;
+          }
+          ctx.fillRect(-hw, -hh, frame.transform.width, frame.transform.height);
+          ctx.globalAlpha = 1;
+        }
+        if (frame.imageSettings.imageUrl) {
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          img.src = resolveStorageUrl(frame.imageSettings.imageUrl)!;
+          await new Promise((r) => { img.onload = r; img.onerror = r; });
+          ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
+          const blendMode = frame.imageSettings.blendMode === "normal" ? "source-over" : frame.imageSettings.blendMode;
+          ctx.globalCompositeOperation = blendMode as GlobalCompositeOperation;
+          drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? "cover");
+          ctx.globalAlpha = 1;
+          ctx.globalCompositeOperation = "source-over";
+        }
+        ctx.restore();
+      }
+    }
+  } finally {
+    studioEsm.dispose();
+    legacyEsm?.dispose();
+  }
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Failed to create blob")), "image/png");
+  });
+}
+
+/**
  * Draws an image onto a 2D canvas context respecting object-fit behaviour,
  * matching the CSS preview in StaticFrame.
 /**
  * Create a CanvasGradient from an ImageGradient within a rect centred on (0,0).
  */
-function createCanvasGradient(ctx: CanvasRenderingContext2D, g: ImageGradient, w: number, h: number): CanvasGradient {
+export function createCanvasGradient(ctx: CanvasRenderingContext2D, g: ImageGradient, w: number, h: number): CanvasGradient {
   const rad = (g.angle * Math.PI) / 180;
   const halfDiag = Math.sqrt(w * w + h * h) / 2;
   const dx = Math.cos(rad) * halfDiag;
@@ -124,7 +243,7 @@ function createCanvasGradient(ctx: CanvasRenderingContext2D, g: ImageGradient, w
 /**
  * The destination rect is centred on (0, 0) — caller must translate first.
  */
-function drawImageWithObjectFit(ctx: CanvasRenderingContext2D, img: HTMLImageElement, destW: number, destH: number, fit: string = "cover"): void {
+export function drawImageWithObjectFit(ctx: CanvasRenderingContext2D, img: HTMLImageElement, destW: number, destH: number, fit: string = "cover"): void {
   const iw = img.naturalWidth;
   const ih = img.naturalHeight;
   const x = -destW / 2;

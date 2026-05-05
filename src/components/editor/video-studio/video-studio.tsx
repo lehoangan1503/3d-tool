@@ -184,6 +184,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   const [isRebuilding, setIsRebuilding] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
   const [viewMode, setViewMode] = useState<"scene" | "camera">("camera");
+  const [cameraSnapshot, setCameraSnapshot] = useState<string | null>(null);
   const [mainTab, setMainTab] = useState<"editor" | "video">("editor");
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo>({ type: null });
@@ -877,7 +878,12 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                 variant={viewMode === "camera" ? "secondary" : "ghost"}
                 size="sm"
                 className={`h-7 text-xs ${mainTab === "video" ? "invisible pointer-events-none" : ""}`}
-                onClick={() => setViewMode("camera")}
+                onClick={() => {
+                  if (extractorRef.current) {
+                    setCameraSnapshot(extractorRef.current.captureFrame('jpeg'));
+                  }
+                  setViewMode("camera");
+                }}
               >
                 <Camera className="h-3 w-3 mr-1" /> Góc nhìn máy quay
               </Button>
@@ -885,7 +891,10 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                 variant={viewMode === "scene" ? "secondary" : "ghost"}
                 size="sm"
                 className={`h-7 text-xs ${mainTab === "video" ? "invisible pointer-events-none" : ""}`}
-                onClick={() => setViewMode("scene")}
+                onClick={() => {
+                  setCameraSnapshot(null);
+                  setViewMode("scene");
+                }}
               >
                 <Eye className="h-3 w-3 mr-1" /> Chỉnh sửa
               </Button>
@@ -938,7 +947,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               ref={previewContainerRef}
               className={`bg-black rounded-lg overflow-hidden relative transition-all duration-300 ${
                 isRecording ? "hidden" : "flex-1"
-              }`}
+              } ${viewMode === "camera" ? "pointer-events-none" : ""}`}
             >
               <div
                 className={`absolute inset-0 flex items-center justify-center bg-black/40 z-10 transition-opacity duration-500 pointer-events-none ${
@@ -953,6 +962,14 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               {/* Ratio guide overlay — only shown when a non-16:9 ratio is selected */}
               {viewMode !== "scene" && config.videoRatio && config.videoRatio !== "16:9" && (
                 <RatioGuideOverlay ratio={config.videoRatio} />
+              )}
+              {/* Camera snapshot — static screenshot shown in "Góc nhìn máy quay" mode */}
+              {viewMode === "camera" && cameraSnapshot && (
+                <img
+                  src={cameraSnapshot}
+                  className="absolute inset-0 w-full h-full object-contain z-20"
+                  alt="Góc nhìn máy quay"
+                />
               )}
             </div>
 

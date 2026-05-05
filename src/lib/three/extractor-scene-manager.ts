@@ -3768,25 +3768,12 @@ export class ExtractorSceneManager {
     }
     if (this.cameraGizmo) this.cameraGizmo.visible = this.isSceneView;
 
-    // Enable orbit controls on studio camera in camera view so user can freely position it.
-    // Disable in scene view to avoid interfering with cue dragging.
     if (mode === "camera") {
-      if (!this._cameraOrbit) {
-        const canvas = this.renderer.domElement;
-        const savedQuaternion = this.camera.quaternion.clone();
-        const savedPosition = this.camera.position.clone();
-        const dir = new THREE.Vector3();
-        this.camera.getWorldDirection(dir);
-        const orbitTarget = this.camera.position.clone().addScaledVector(dir, 5);
-        const orbit = new OrbitControls(this.camera, canvas);
-        this.camera.position.copy(savedPosition);
-        this.camera.quaternion.copy(savedQuaternion);
-        this.camera.updateMatrixWorld(true);
-        orbit.target.copy(orbitTarget);
-        orbit.screenSpacePanning = true;
-        orbit.enableDamping = false;
-        orbit.update();
-        this._cameraOrbit = orbit;
+      // Camera view is now a static snapshot in the UI; disable any active orbit so
+      // config-sync resets won't move the camera while the snapshot is displayed.
+      if (this._cameraOrbit) {
+        this._cameraOrbit.dispose();
+        this._cameraOrbit = null;
       }
       this._cameraPlacementMode = true;
     } else {

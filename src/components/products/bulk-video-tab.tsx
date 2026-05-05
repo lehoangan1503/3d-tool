@@ -73,6 +73,15 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
   autoDownloadRef.current = autoDownload;
 
   /**
+   * Directory handle obtained via showDirectoryPicker() — Chrome File System
+   * Access API. When set, each finished video is written directly to this folder
+   * without triggering Chrome's "Allow multiple downloads" prompt. Falls back
+   * to <a>.click() if the API is unavailable (Firefox) or user cancels picker.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const dirHandleRef = useRef<any>(null);
+
+  /**
    * The visible canvas host inside the recording overlay.
    * The ESM canvas is imperatively appended here — same pattern as VideoStudio —
    * so Chrome schedules rAF with full GPU priority (off-screen / visibility:hidden
@@ -182,16 +191,31 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
       blobUrlsRef.current.push(videoUrl);
 
       if (autoDownloadRef.current) {
-        // Trigger browser save-to-disk immediately.
-        const a = document.createElement("a");
-        a.href = videoUrl;
         const safeName = (item.product.name ?? item.product.id).replace(/[^a-zA-Z0-9-_]/g, "_");
         const safeTpl = item.template.name.replace(/[^a-zA-Z0-9-_]/g, "_");
-        a.download = `${safeName}_${safeTpl}.webm`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        // Mark as auto-downloaded but keep videoUrl for "open in new tab" viewing.
+        const fileName = `${safeName}_${safeTpl}.webm`;
+
+        if (dirHandleRef.current) {
+          // File System Access API — write directly to user-chosen folder.
+          // No Chrome "allow multiple downloads" dialog.
+          try {
+            const fileHandle = await dirHandleRef.current.getFileHandle(fileName, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+          } catch (writeErr) {
+            console.warn("BulkVideoTab: FSA write failed, falling back to <a>", writeErr);
+            const a = document.createElement("a");
+            a.href = videoUrl; a.download = fileName;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          }
+        } else {
+          // Fallback: trigger browser save (Firefox / no FSA support).
+          const a = document.createElement("a");
+          a.href = videoUrl; a.download = fileName;
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        }
+        // Keep videoUrl alive so the result card links to it for "open in new tab".
         updateById({ status: "done", progress: 1, videoUrl, autoDownloaded: true });
       } else {
         updateById({ status: "done", blob, progress: 1, videoUrl });
@@ -246,6 +270,21 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
     if (!canStart) return;
     const selected = templates.filter((t) => selectedTemplateIds.has(t.id) && hasCamera(t.config));
     if (selected.length === 0) return;
+
+    // If auto-download is on, ask user to pick a save folder via the File System
+    // Access API. This is the only user-gesture opportunity — must happen here,
+    // synchronously in the click handler, before any async operations.
+    dirHandleRef.current = null;
+    if (autoDownload && typeof window !== "undefined" && "showDirectoryPicker" in window) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        dirHandleRef.current = await (window as any).showDirectoryPicker({ mode: "readwrite" });
+      } catch {
+        // User cancelled the folder picker — abort recording.
+        return;
+      }
+    }
+
     const queue: QueueItem[] = [];
     for (const product of products) {
       for (const template of selected) {
@@ -253,14 +292,14 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
       }
     }
     await runQueue(queue);
-  }, [canStart, templates, selectedTemplateIds, products, runQueue]);
+  }, [canStart, templates, selectedTemplateIds, products, autoDownload, runQueue]);
 
   const handleCancel = useCallback(() => {
     cancelledRef.current = true;
     activeEsmRef.current?.stopRecording();
   }, []);
 
-  const handleRecordAgain = useCallback((item: QueueItem) => {
+  const handleRecordAgain = useCallback(async (item: QueueItem) => {
     const retry = makeItem(item.product, item.template);
     if (running) {
       liveQueueRef.current = [...liveQueueRef.current, retry];
@@ -268,6 +307,14 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
       setQueuedNotice(`Đã thêm vào hàng đợi: ${item.product.name} — ${item.template.name}`);
       setTimeout(() => setQueuedNotice(null), 3000);
     } else {
+      // If auto-download is on and we don't have a folder yet, pick one first.
+      if (autoDownloadRef.current && !dirHandleRef.current &&
+          typeof window !== "undefined" && "showDirectoryPicker" in window) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          dirHandleRef.current = await (window as any).showDirectoryPicker({ mode: "readwrite" });
+        } catch { return; }
+      }
       revokeAllUrls();
       setDone(false);
       runQueue([retry]);
@@ -399,7 +446,7 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => { revokeAllUrls(); setDone(false); setItems([]); }}
+              onClick={() => { revokeAllUrls(); dirHandleRef.current = null; setDone(false); setItems([]); }}
               className="border-zinc-600 text-zinc-400 hover:text-zinc-200"
             >
               Ghi thêm
@@ -544,7 +591,7 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
           </label>
           <p className="text-xs text-zinc-500">
             {autoDownload
-              ? "Mỗi video tải ngay khi xong. Kết quả vẫn có thể mở xem trong tab mới."
+              ? "Khi bắt đầu, trình duyệt sẽ hỏi chọn thư mục lưu. Mỗi video tự lưu vào thư mục đó khi xong."
               : `Video lưu trong RAM để xem trực tiếp. Tối đa ${MAX_STORED_VIDEOS} video — trên ${MAX_STORED_VIDEOS} có thể crash trình duyệt.`}
           </p>
         </div>

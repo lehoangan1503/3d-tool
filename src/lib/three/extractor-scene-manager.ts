@@ -317,10 +317,13 @@ export class ExtractorSceneManager {
       light.shadow.mapSize.set(2048, 2048);
       light.shadow.camera.near = 0.1;
       light.shadow.camera.far = 50;
-      light.shadow.camera.left = -20;
-      light.shadow.camera.right = 20;
-      light.shadow.camera.top = 20;
-      light.shadow.camera.bottom = -20;
+      // Tight frustum (±12) matches the shadow scene scale and gives ~85 texels/world-unit
+      // at 2048px. Wider frustum (e.g. ±20) reduces to ~51 texels/unit, which causes VSM's
+      // Gaussian blur to produce the scalloped/wavy artifact visible at grazing light angles.
+      light.shadow.camera.left = -12;
+      light.shadow.camera.right = 12;
+      light.shadow.camera.top = 12;
+      light.shadow.camera.bottom = -12;
       light.shadow.bias = -0.0005;
       light.shadow.radius = config.shadowBlur;
       this.scene.add(light);
@@ -454,10 +457,12 @@ export class ExtractorSceneManager {
       light.shadow.mapSize.set(2048, 2048);
       light.shadow.camera.near = 0.1;
       light.shadow.camera.far = 50;
-      light.shadow.camera.left = -20;
-      light.shadow.camera.right = 20;
-      light.shadow.camera.top = 20;
-      light.shadow.camera.bottom = -20;
+      // Tight frustum (±12) gives ~85 texels/world-unit at 2048px.
+      // ±20 reduces to ~51 texels/unit → VSM Gaussian blur creates scalloped artifact.
+      light.shadow.camera.left = -12;
+      light.shadow.camera.right = 12;
+      light.shadow.camera.top = 12;
+      light.shadow.camera.bottom = -12;
       light.shadow.bias = -0.0001;
       light.shadow.normalBias = 0.02;
       light.shadow.radius = Math.max(layer.shadowBlur ?? shadow.blur ?? 3, 4);

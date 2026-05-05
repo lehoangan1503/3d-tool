@@ -2887,21 +2887,31 @@ export class ExtractorSceneManager {
       for (const buf of allBufs) { combined.set(new Uint8Array(buf), writeOff); writeOff += buf.byteLength; }
       const combinedBuf = combined.buffer;
 
+      console.log('[VideoStudio] onstop: chunks=%d totalSize=%dKB duration=%.1fs',
+        this.recordedChunks.length, Math.round(totalSize / 1024), finalDurationMs / 1000);
+
       // Extract EBML structural header (everything before first cluster)
       const rawHeaderBuf = this._extractWebmHeader(combinedBuf);
 
       // Find where animation clusters start (first cluster at t >= PRE_ROLL_MS)
       const animClusterOffset = this._findClusterOffsetAtTime(combinedBuf, PRE_ROLL_MS);
 
+      console.log('[VideoStudio] header=%dB animClusterOffset=%d', rawHeaderBuf.byteLength, animClusterOffset);
+
       if (animClusterOffset > 0) {
         const animBuf = combinedBuf.slice(animClusterOffset);
         const firstTc = this._getFirstClusterTimecode(animBuf);
         const adjustBy = firstTc > 0 ? firstTc : PRE_ROLL_MS;
+        console.log('[VideoStudio] firstTc=%dms adjustBy=%dms animBuf=%dKB', firstTc, adjustBy, Math.round(animBuf.byteLength / 1024));
         const adjAnim = this._adjustWebmClusterTimecodes(animBuf, adjustBy);
         const headerBuf = this._patchEbmlDuration(rawHeaderBuf, finalDurationMs);
         outBlob = new Blob([headerBuf, adjAnim], { type: getSupportedMimeType() });
+        console.log('[VideoStudio] trimmed blob size=%dKB (header=%dB anim=%dKB)',
+          Math.round((headerBuf.byteLength + adjAnim.byteLength) / 1024),
+          headerBuf.byteLength, Math.round(adjAnim.byteLength / 1024));
       } else {
         // Fallback: no pre-roll boundary found — use full combined data
+        console.warn('[VideoStudio] animClusterOffset not found, using raw chunks as fallback');
         outBlob = new Blob(this.recordedChunks, { type: getSupportedMimeType() });
       }
 
@@ -2909,6 +2919,7 @@ export class ExtractorSceneManager {
       // Our _patchEbmlDuration already wrote finalDurationMs, so this is a safety
       // net for the rare case where the Duration element wasn't found.
       const fixedBlob = await fixWebmDuration(outBlob, finalDurationMs, { logger: false });
+      console.log('[VideoStudio] final blob size=%dKB mimeType=%s', Math.round(fixedBlob.size / 1024), getSupportedMimeType());
       resolve(fixedBlob);
     };
     this.mediaRecorder.onerror = () => {
@@ -3125,15 +3136,36 @@ export class ExtractorSceneManager {
    * Return only the WebM container header bytes
    * (EBML + Segment element open tag +
    * SeekHead + Info + Tracks) from the raw bytes of a MediaRecorder chunk, stopping
-   * just before the first Cluster element. The cluster data (video frames) is
-   * intentionally not included — only the structural metadata is kept.
+   * just before the first VERIFIED Cluster element.
+   *
+   * IMPORTANT: The naive scan for the 4-byte cluster ID (0x1F 0x43 0xB6 0x75) will
+   * produce false positives inside the VP9/VP8 codec private data stored in the Tracks
+   * element. A false match truncates the header before Tracks is written, leaving the
+   * decoder with no codec info → 20 MB file that cannot play.
+   *
+   * Fix: after finding the 4-byte cluster ID pattern, verify it is a real cluster by
+   * checking that the Timecode element (0xE7 + valid VINT size) appears within the
+   * first 25 bytes of the alleged cluster — exactly the same verification used by
+   * _findClusterOffsetAtTime. Codec private data will not contain this pattern at the
+   * right position, so false positives are eliminated.
    */
   private _extractWebmHeader(buffer: ArrayBuffer): ArrayBuffer {
     const data = new Uint8Array(buffer);
-    for (let i = 0; i < data.length - 4; i++) {
-      // Cluster element ID: 0x1F 0x43 0xB6 0x75
+    for (let i = 0; i < data.length - 20; i++) {
       if (data[i] === 0x1F && data[i + 1] === 0x43 && data[i + 2] === 0xB6 && data[i + 3] === 0x75) {
-        return buffer.slice(0, i);
+        // Verify this is a real cluster: Timecode element (0xE7) must appear within
+        // 25 bytes with a valid VINT size byte (0x81–0x84 = 1–4 data bytes).
+        for (let j = i + 4; j < Math.min(i + 25, data.length - 3); j++) {
+          if (data[j] === 0xE7) {
+            const szByte = data[j + 1];
+            if (szByte >= 0x81 && szByte <= 0x84) {
+              return buffer.slice(0, i); // Real cluster confirmed — header ends here
+            }
+            break; // 0xE7 found but invalid size — likely false positive, keep scanning
+          }
+        }
+        // No valid Timecode found within 25 bytes → false positive (e.g. codec private
+        // data). Continue scanning for the real first cluster.
       }
     }
     return buffer; // no cluster found — return full buffer as fallback

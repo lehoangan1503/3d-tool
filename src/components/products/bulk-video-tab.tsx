@@ -106,8 +106,8 @@ export function BulkVideoTab({ products }: Props) {
         await loadProductIntoEsm(product, esm);
         const config = ensureFullConfig(template.config);
 
-        const blob = await esm.startStudioRecording(config, (progress) => {
-          setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], progress }; return n; });
+        const blob = await esm.startStudioRecording(config, (progressPct) => {
+          setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], progress: progressPct / 100 }; return n; });
         });
 
         const videoUrl = URL.createObjectURL(blob);

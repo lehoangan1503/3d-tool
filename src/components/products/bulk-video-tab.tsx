@@ -97,30 +97,54 @@ export function BulkVideoTab({ products }: Props) {
       const { product, template } = queue[i];
       setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "in_progress", progress: 0 }; return n; });
 
-      // Brief pause between recordings to let the browser fully release the previous WebGL context
-      if (i > 0) await new Promise<void>((r) => setTimeout(r, 300));
+      // Let browser fully release the previous WebGL context before starting next recording
+      if (i > 0) await new Promise<void>((r) => setTimeout(r, 600));
       if (cancelledRef.current) break;
 
       const esm = new ExtractorSceneManager(2048, 2048);
+
+      // Mount canvas to DOM so Chrome uses hardware-accelerated frame capture for captureStream().
+      // Without this the canvas is off-screen and Chrome falls back to software capture → choppy video.
+      const hiddenContainer = document.createElement("div");
+      hiddenContainer.style.cssText = "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;pointer-events:none;visibility:hidden;";
+      hiddenContainer.appendChild(esm.getCanvas());
+      document.body.appendChild(hiddenContainer);
+
       try {
         await loadProductIntoEsm(product, esm);
         const config = ensureFullConfig(template.config);
 
+        // Throttle progress state updates to max 100ms intervals — same pattern as VideoStudio.
+        // Updating state at 60-120fps causes React to re-render every frame, stealing CPU from
+        // the recording rAF loop and producing choppy output.
+        let lastProgressMs = 0;
         const blob = await esm.startStudioRecording(config, (progressPct) => {
-          setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], progress: progressPct / 100 }; return n; });
+          const now = performance.now();
+          if (progressPct >= 100 || now - lastProgressMs >= 100) {
+            lastProgressMs = now;
+            setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], progress: progressPct / 100 }; return n; });
+          }
         });
 
-        const videoUrl = URL.createObjectURL(blob);
-        setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "done", blob, videoUrl, progress: 1 }; return n; });
+        // Store blob but don't create the video URL yet — video elements playing during recording
+        // compete for GPU resources. All URLs are created after the full queue finishes.
+        setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "done", blob, progress: 1 }; return n; });
       } catch (err) {
         console.error("BulkVideoTab: record error", err);
         const msg = err instanceof Error ? err.message : String(err);
         setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "failed", error: msg }; return n; });
       } finally {
         esm.dispose();
+        if (hiddenContainer.parentNode) hiddenContainer.parentNode.removeChild(hiddenContainer);
       }
     }
 
+    // All recordings done — now create object URLs and show videos all at once.
+    // This guarantees no video decode was competing with the recording GPU.
+    setItems((prev) => prev.map((item) => ({
+      ...item,
+      videoUrl: item.blob && !item.videoUrl ? URL.createObjectURL(item.blob) : item.videoUrl,
+    })));
     setRunning(false);
     setDone(true);
   }, [canStart, templates, selectedTemplateIds, products]);
@@ -268,7 +292,7 @@ export function BulkVideoTab({ products }: Props) {
               {item.status === "failed" && (
                 <p className="text-xs text-red-400 mt-0.5 truncate">{item.error}</p>
               )}
-              {item.status === "done" && item.videoUrl && (
+              {done && item.status === "done" && item.videoUrl && (
                 <video
                   key={`video-${idx}`}
                   src={item.videoUrl}

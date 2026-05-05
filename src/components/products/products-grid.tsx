@@ -27,6 +27,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
   const [isCloningBulk, setIsCloningBulk] = useState(false);
   const [cloneProgress, setCloneProgress] = useState({ done: 0, total: 0 });
   const [bulkExportOpen, setBulkExportOpen] = useState(false);
+  const [isBulkRecording, setIsBulkRecording] = useState(false);
   const [search, setSearchRaw] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<FilterType>("all");
@@ -304,7 +305,14 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
       </div>
 
       {/* Grid */}
-      {isLoading ? (
+      {isBulkRecording ? (
+        // Unmount all product cards (and their <img> GPU textures) during bulk recording
+        // to free GPU texture memory for the recording WebGL context.
+        <div className="flex flex-col items-center justify-center py-20 gap-3 text-muted-foreground">
+          <Loader2 className="h-8 w-8 animate-spin" />
+          <p className="text-sm">Đang ghi video, vui lòng chờ...</p>
+        </div>
+      ) : isLoading ? (
         <div className="flex justify-center py-20">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
@@ -364,6 +372,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
         open={bulkExportOpen}
         onClose={() => setBulkExportOpen(false)}
         products={products.filter((p) => selectedIds.has(p.id))}
+        onRecordingChange={setIsBulkRecording}
       />
     </div>
   );

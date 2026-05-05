@@ -11,11 +11,13 @@ interface Props {
   open: boolean;
   onClose: () => void;
   products: Product[];
+  /** Called when a bulk recording job starts/stops, so parent can free resources */
+  onRecordingChange?: (recording: boolean) => void;
 }
 
 type Tab = "image" | "video";
 
-export function BulkExportDialog({ open, onClose, products }: Props) {
+export function BulkExportDialog({ open, onClose, products, onRecordingChange }: Props) {
   const [tab, setTab] = useState<Tab>("image");
 
   return (
@@ -58,7 +60,7 @@ export function BulkExportDialog({ open, onClose, products }: Props) {
           {tab === "image" ? (
             <BulkImageTab products={products} />
           ) : (
-            <BulkVideoTab products={products} />
+            <BulkVideoTab products={products} onRecordingChange={onRecordingChange} />
           )}
         </div>
       </DialogContent>

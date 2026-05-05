@@ -2934,12 +2934,20 @@ export class ExtractorSceneManager {
     // Constant spin delta per rendered frame — guaranteed consistent speed in the video.
     const spinPerFrame = FRAME_INTERVAL_MS / SPIN_REF_MS;
 
-    // Phase tracking
+    // Frame-count-based phase tracking.
+    // Using frame counts (not wall-clock) eliminates animation jitter: when the GPU
+    // is briefly under load a time-based approach would advance `progress` by a larger
+    // delta, causing the camera to visibly skip forward. Frame-count guarantees that
+    // every video frame advances the camera by exactly 1/ANIM_FRAMES regardless of
+    // how long that frame took to render.
+    const PRE_ROLL_FRAMES = Math.round(PRE_ROLL_MS * RECORD_FPS / 1000); // e.g. 150 @ 60fps
+    const ANIM_FRAMES = Math.ceil(durationMs * RECORD_FPS / 1000);        // total animation frames
+
     let loopStart = -1;
-    let frameCount = -1;
-    let preRollStart = -1;       // wall-clock time when pre-roll began
-    let animationStarted = false; // true once pre-roll finishes
-    let recordingStartTime = -1;
+    let frameCount = -1;         // monotonically increasing throttled frame index
+    let preRollFrameCount = 0;   // frames rendered in pre-roll phase
+    let animFrameIdx = 0;        // frames rendered in animation phase
+    let animationStarted = false;
 
     const start = config.cameraStart;
     const end = effectiveEnd;
@@ -2980,8 +2988,6 @@ export class ExtractorSceneManager {
     };
 
     const animate = (timestamp: number) => {
-      const now = performance.now();
-
       // Throttle to exactly RECORD_FPS using integer frame counting.
       // This eliminates the captureStream sampling race: renders and captureStream
       // samples are in lock-step at the same rate, so every sampled frame is fresh
@@ -2995,27 +3001,26 @@ export class ExtractorSceneManager {
       frameCount = targetFrame;
 
       // ── Phase 1: Pre-roll (static frame, encoder warm-up) ──────────────────
-      // Render static start frame for PRE_ROLL_MS wall-clock time so the encoder
+      // Render static start frame for exactly PRE_ROLL_FRAMES frames so the encoder
       // completes its cold-start sequence (VPU init, I-frame, rate-control) before
       // camera motion begins. Pre-roll clusters are trimmed in onstop.
       if (!animationStarted) {
-        if (preRollStart < 0) preRollStart = now;
         renderFrame(easingFn(0));
         onProgress?.(0);
-        if (now - preRollStart < PRE_ROLL_MS) {
+        preRollFrameCount++;
+        if (preRollFrameCount < PRE_ROLL_FRAMES) {
           this.animationFrameId = requestAnimationFrame(animate);
           return;
         }
         // Pre-roll done — encoder is warm. Start animation.
         animationStarted = true;
-        recordingStartTime = now;
         // Fall through: render first animation frame in this same rAF tick.
       }
 
       // ── Phase 2: Animation recording ───────────────────────────────────────
-      const elapsedMs = now - recordingStartTime;
-
-      if (this.isDisposed || elapsedMs >= durationMs) {
+      // Frame-count-based progress: each frame advances exactly 1/ANIM_FRAMES
+      // regardless of wall-clock elapsed time, guaranteeing smooth camera motion.
+      if (this.isDisposed || animFrameIdx >= ANIM_FRAMES) {
         renderFrame(easingFn(1));
         onProgress?.(100);
         this.animationFrameId = null;
@@ -3023,7 +3028,7 @@ export class ExtractorSceneManager {
         return;
       }
 
-      const progress = Math.min(1, elapsedMs / durationMs);
+      const progress = animFrameIdx / ANIM_FRAMES;
       onProgress?.(Math.round(progress * 100));
 
       // Advance cue spin by exactly one frame's worth (constant angular velocity).
@@ -3037,6 +3042,7 @@ export class ExtractorSceneManager {
       }
 
       renderFrame(easingFn(progress));
+      animFrameIdx++;
       this.animationFrameId = requestAnimationFrame(animate);
     };
 

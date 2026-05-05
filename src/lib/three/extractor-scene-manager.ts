@@ -2812,14 +2812,24 @@ export class ExtractorSceneManager {
     // before camera motion begins. In onstop, all chunks are combined, and the first
     // cluster at t >= PRE_ROLL_MS is found via _findClusterOffsetAtTime; everything
     // before it is discarded, timestamps are re-zeroed, and Duration is patched.
-    const PRE_ROLL_MS = 2500; // wall-clock pre-roll for encoder warm-up
+    // Timeslice duration for encoder warmup.
+    // start(ENCODER_WARMUP_MS) causes MediaRecorder to flush a chunk every ENCODER_WARMUP_MS ms.
+    // The FIRST chunk (chunk 0) contains the EBML init segment + warmup clusters and is
+    // delivered via the first ondataavailable event. All subsequent chunks contain animation data.
+    //
+    // Using timeslice vs no-timeslice (start()):
+    //   start():         Encoder buffers ALL data in RAM until stop() — ~75 MB for 30s @ 20 Mbps.
+    //                    Causes GC pauses every few seconds → dropped rAF ticks → choppy video.
+    //   start(timeslice): Encoder flushes every ENCODER_WARMUP_MS → peak buffer ~5 MB.
+    //                    Regular flushes keep memory pressure low → smooth encoding throughout.
+    const ENCODER_WARMUP_MS = 2000;
 
-    // Cap captureStream at 60 fps regardless of quality preset.
-    // Chrome has a known bug (chromium #639939) where captureStream at >60 fps on high-refresh
-    // displays (e.g. 120 Hz macOS) writes WebM frame timestamps that are 5× too large, making
-    // the video appear 5× longer than the wall-clock recording time. 60 fps produces correct
-    // timestamps on all platforms. Preview can still run at 120 fps for smooth UX.
-    const RECORD_FPS = Math.min(dims.fps, 60);
+    // Use the full configured fps — do NOT cap at 60.
+    // Chrome bug #639939 (timestamps 5× too large at >60 fps on high-refresh displays) was
+    // fixed in Chrome 67 (2018). Current Chrome (v100+) handles captureStream(120) correctly
+    // on 120 Hz ProMotion displays. On 60 Hz displays captureStream(120) produces duplicate
+    // frames but still works correctly.
+    const RECORD_FPS = dims.fps;
 
     const stream = this.renderer.domElement.captureStream(RECORD_FPS);
     this.mediaRecorder = new MediaRecorder(stream, {
@@ -2828,8 +2838,19 @@ export class ExtractorSceneManager {
     });
     this.recordedChunks = [];
 
+    // First ondataavailable delivers the warmup chunk (EBML header + pre-roll clusters).
+    // All subsequent chunks are animation data chunks.
+    let warmupBlob: Blob | null = null;
+    let warmupFlushed = false;
+
     this.mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) this.recordedChunks.push(e.data);
+      if (e.data.size === 0) return;
+      if (!warmupFlushed) {
+        warmupFlushed = true;
+        warmupBlob = e.data; // warmup chunk: EBML header + pre-roll clusters
+      } else {
+        this.recordedChunks.push(e.data); // animation data chunks
+      }
     };
 
     type ShadowWithMap = THREE.LightShadow & { map: THREE.WebGLRenderTarget | null };
@@ -2877,47 +2898,66 @@ export class ExtractorSceneManager {
       restoreRecordingState();
 
       let outBlob: Blob;
-      const finalDurationMs = durationMs;
+      let finalDurationMs = durationMs;
 
-      // Combine all chunks into one buffer
-      const allBufs = await Promise.all(this.recordedChunks.map(c => c.arrayBuffer()));
-      const totalSize = allBufs.reduce((s, b) => s + b.byteLength, 0);
-      const combined = new Uint8Array(totalSize);
-      let writeOff = 0;
-      for (const buf of allBufs) { combined.set(new Uint8Array(buf), writeOff); writeOff += buf.byteLength; }
-      const combinedBuf = combined.buffer;
+      if (warmupBlob && this.recordedChunks.length > 0) {
+        // Combine all animation chunks into one buffer.
+        const animChunkBufs = await Promise.all(this.recordedChunks.map(c => c.arrayBuffer()));
+        const totalAnimSize = animChunkBufs.reduce((s, b) => s + b.byteLength, 0);
+        const animCombined = new Uint8Array(totalAnimSize);
+        let writeOffset = 0;
+        for (const buf of animChunkBufs) {
+          animCombined.set(new Uint8Array(buf), writeOffset);
+          writeOffset += buf.byteLength;
+        }
+        const animBuf = animCombined.buffer;
 
-      console.log('[VideoStudio] onstop: chunks=%d totalSize=%dKB duration=%.1fs',
-        this.recordedChunks.length, Math.round(totalSize / 1024), finalDurationMs / 1000);
+        // Extract EBML header (EBML + Segment + SeekHead + Info + Tracks) from the
+        // warmup chunk only — it's smaller and always has the full header before clusters.
+        const warmupBuf = await warmupBlob.arrayBuffer();
+        const rawHeaderBuf = this._extractWebmHeader(warmupBuf);
 
-      // Extract EBML structural header (everything before first cluster)
-      const rawHeaderBuf = this._extractWebmHeader(combinedBuf);
+        // With timeslice the very first bytes of animBuf may be cluster-continuation
+        // (blocks from a cluster whose header is in the warmup chunk). Skip forward to
+        // the first COMPLETE cluster using the same verified scan as _findClusterOffsetAtTime.
+        const firstClusterOff = this._findClusterOffsetAtTime(animBuf, 0);
+        const cleanAnimBuf = firstClusterOff > 0 ? animBuf.slice(firstClusterOff) : animBuf;
 
-      // Find where animation clusters start (first cluster at t >= PRE_ROLL_MS)
-      const animClusterOffset = this._findClusterOffsetAtTime(combinedBuf, PRE_ROLL_MS);
+        const firstTc = this._getFirstClusterTimecode(cleanAnimBuf);
+        const adjustBy = firstTc > 0 ? firstTc : ENCODER_WARMUP_MS;
+        const adjAnim = this._adjustWebmClusterTimecodes(cleanAnimBuf, adjustBy);
 
-      console.log('[VideoStudio] header=%dB animClusterOffset=%d', rawHeaderBuf.byteLength, animClusterOffset);
+        // Use actual last-cluster timecode for Duration — Chrome's keyframe interval may not
+        // align with ENCODER_WARMUP_MS, making adjusted content slightly shorter than durationMs.
+        // Setting Duration to the real content end prevents a freeze gap at the end.
+        const FRAME_MS = Math.round(1000 / RECORD_FPS);
+        const lastTcAfterAdj = this._getLastClusterTimecode(adjAnim);
+        if (lastTcAfterAdj > 0 && lastTcAfterAdj + FRAME_MS < durationMs * 0.95) {
+          finalDurationMs = lastTcAfterAdj + FRAME_MS;
+        }
 
-      if (animClusterOffset > 0) {
-        const animBuf = combinedBuf.slice(animClusterOffset);
-        const firstTc = this._getFirstClusterTimecode(animBuf);
-        const adjustBy = firstTc > 0 ? firstTc : PRE_ROLL_MS;
-        console.log('[VideoStudio] firstTc=%dms adjustBy=%dms animBuf=%dKB', firstTc, adjustBy, Math.round(animBuf.byteLength / 1024));
-        const adjAnim = this._adjustWebmClusterTimecodes(animBuf, adjustBy);
+        console.log('[VideoStudio] timeslice trim', {
+          warmupSize: warmupBuf.byteLength,
+          animSize: animBuf.byteLength,
+          firstClusterOff,
+          chunks: this.recordedChunks.length,
+          firstTc, adjustBy,
+          lastTcAfterAdj,
+          finalDurationMs,
+          expectedDurationMs: durationMs,
+        });
+
         const headerBuf = this._patchEbmlDuration(rawHeaderBuf, finalDurationMs);
         outBlob = new Blob([headerBuf, adjAnim], { type: getSupportedMimeType() });
-        console.log('[VideoStudio] trimmed blob size=%dKB (header=%dB anim=%dKB)',
-          Math.round((headerBuf.byteLength + adjAnim.byteLength) / 1024),
-          headerBuf.byteLength, Math.round(adjAnim.byteLength / 1024));
       } else {
-        // Fallback: no pre-roll boundary found — use full combined data
-        console.warn('[VideoStudio] animClusterOffset not found, using raw chunks as fallback');
-        outBlob = new Blob(this.recordedChunks, { type: getSupportedMimeType() });
+        // Fallback: warmup timeslice didn't fire cleanly — combine everything as-is.
+        console.warn('[VideoStudio] warmup split missing, using raw fallback');
+        const allBlobs = ([warmupBlob, ...this.recordedChunks]).filter((b): b is Blob => !!b);
+        outBlob = new Blob(allBlobs, { type: getSupportedMimeType() });
       }
 
-      // fixWebmDuration: only patches Duration if currently <= 0 in the blob.
-      // Our _patchEbmlDuration already wrote finalDurationMs, so this is a safety
-      // net for the rare case where the Duration element wasn't found.
+      // Safety net: fixWebmDuration won't overwrite a non-zero Duration, so this only
+      // activates if _patchEbmlDuration failed to find the Duration element.
       const fixedBlob = await fixWebmDuration(outBlob, finalDurationMs, { logger: false });
       console.log('[VideoStudio] final blob size=%dKB mimeType=%s', Math.round(fixedBlob.size / 1024), getSupportedMimeType());
       resolve(fixedBlob);
@@ -2934,20 +2974,16 @@ export class ExtractorSceneManager {
     // Constant spin delta per rendered frame — guaranteed consistent speed in the video.
     const spinPerFrame = FRAME_INTERVAL_MS / SPIN_REF_MS;
 
-    // Frame-count-based phase tracking.
-    // Using frame counts (not wall-clock) eliminates animation jitter: when the GPU
-    // is briefly under load a time-based approach would advance `progress` by a larger
-    // delta, causing the camera to visibly skip forward. Frame-count guarantees that
-    // every video frame advances the camera by exactly 1/ANIM_FRAMES regardless of
-    // how long that frame took to render.
-    const PRE_ROLL_FRAMES = Math.round(PRE_ROLL_MS * RECORD_FPS / 1000); // e.g. 150 @ 60fps
-    const ANIM_FRAMES = Math.ceil(durationMs * RECORD_FPS / 1000);        // total animation frames
+    // Animation frame count for deterministic camera motion.
+    // Frame-count-based progress (animFrameIdx / ANIM_FRAMES) guarantees every video frame
+    // advances the camera by exactly 1/ANIM_FRAMES regardless of how long that frame took
+    // to render — eliminates camera jumps from wall-clock performance.now() drift.
+    const ANIM_FRAMES = Math.ceil(durationMs * RECORD_FPS / 1000); // total animation frames
 
     let loopStart = -1;
     let frameCount = -1;         // monotonically increasing throttled frame index
-    let preRollFrameCount = 0;   // frames rendered in pre-roll phase
     let animFrameIdx = 0;        // frames rendered in animation phase
-    let animationStarted = false;
+    let encoderWarmupDone = false; // true once first ondataavailable (warmup timeslice) fires
 
     const start = config.cameraStart;
     const end = effectiveEnd;
@@ -3000,20 +3036,21 @@ export class ExtractorSceneManager {
       }
       frameCount = targetFrame;
 
-      // ── Phase 1: Pre-roll (static frame, encoder warm-up) ──────────────────
-      // Render static start frame for exactly PRE_ROLL_FRAMES frames so the encoder
-      // completes its cold-start sequence (VPU init, I-frame, rate-control) before
-      // camera motion begins. Pre-roll clusters are trimmed in onstop.
-      if (!animationStarted) {
+      // ── Phase 1: Encoder warmup ─────────────────────────────────────────────
+      // Render the static start frame while the encoder completes its cold-start
+      // sequence (VPU init, I-frame, rate-control calibration). Phase 1 ends when
+      // the timeslice fires (warmupFlushed = true), telling us the encoder is warm
+      // and the warmup EBML header has been cleanly committed to warmupBlob.
+      if (!encoderWarmupDone) {
         renderFrame(easingFn(0));
         onProgress?.(0);
-        preRollFrameCount++;
-        if (preRollFrameCount < PRE_ROLL_FRAMES) {
+        if (!warmupFlushed) {
+          // Timeslice hasn't fired yet — keep rendering warmup frames
           this.animationFrameId = requestAnimationFrame(animate);
           return;
         }
-        // Pre-roll done — encoder is warm. Start animation.
-        animationStarted = true;
+        // Timeslice fired → warmupBlob received → encoder is warm. Start animation.
+        encoderWarmupDone = true;
         // Fall through: render first animation frame in this same rAF tick.
       }
 
@@ -3046,8 +3083,10 @@ export class ExtractorSceneManager {
       this.animationFrameId = requestAnimationFrame(animate);
     };
 
-    // Start encoding with no timeslice — single/chunked output on stop(), cleanest for post-trim.
-    this.mediaRecorder.start();
+    // Timeslice = ENCODER_WARMUP_MS: first ondataavailable delivers EBML header +
+    // warmup clusters (saved as warmupBlob). All subsequent chunks are animation data.
+    // Regular flushes keep memory pressure low → fewer GC pauses → smooth encoding.
+    this.mediaRecorder.start(ENCODER_WARMUP_MS);
     this.animationFrameId = requestAnimationFrame(animate);
   }
 

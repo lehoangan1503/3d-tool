@@ -112,6 +112,9 @@ export class ExtractorSceneManager {
   // Stored shadow offsets re-applied whenever lights are rebuilt
   private _shadowOffsetX = 0;
   private _shadowOffsetZ = 0;
+  // Cue centroid in world X/Z — shadow lights track this so shadows follow the cue
+  private _cueCenterX = 0;
+  private _cueCenterZ = 0;
   private wallShadowPlane: THREE.Mesh | null = null;
   private tableSurface: THREE.Mesh | null = null;
   // Curved corner fill — backs the shadow mesh's curved section so shadows look natural
@@ -451,10 +454,10 @@ export class ExtractorSceneManager {
       light.shadow.mapSize.set(2048, 2048);
       light.shadow.camera.near = 0.1;
       light.shadow.camera.far = 50;
-      light.shadow.camera.left = -12;
-      light.shadow.camera.right = 12;
-      light.shadow.camera.top = 12;
-      light.shadow.camera.bottom = -12;
+      light.shadow.camera.left = -20;
+      light.shadow.camera.right = 20;
+      light.shadow.camera.top = 20;
+      light.shadow.camera.bottom = -20;
       light.shadow.bias = -0.0001;
       light.shadow.normalBias = 0.02;
       light.shadow.radius = Math.max(layer.shadowBlur ?? shadow.blur ?? 3, 4);
@@ -504,10 +507,20 @@ export class ExtractorSceneManager {
   /** Shift all HDRI shadow light targets to (offsetX, 0, offsetZ) so the shadow spot moves in X/Z. */
   private _applyShadowLightOffset(offsetX: number, offsetZ: number): void {
     for (const entry of this.hdriShadowLights) {
-      entry.light.target.position.set(offsetX, 0, offsetZ);
+      entry.light.target.position.set(this._cueCenterX + offsetX, 0, this._cueCenterZ + offsetZ);
       entry.light.target.updateMatrixWorld();
       entry.light.shadow.needsUpdate = true;
     }
+  }
+
+  /** Recompute cue centroid X/Z from instances and re-aim shadow lights. */
+  private _updateCueCenterForShadow(instances: { positionX: number; positionZ: number }[]): void {
+    if (instances.length === 0) return;
+    let sumX = 0, sumZ = 0;
+    for (const inst of instances) { sumX += inst.positionX; sumZ += inst.positionZ; }
+    this._cueCenterX = sumX / instances.length;
+    this._cueCenterZ = sumZ / instances.length;
+    this._applyShadowLightOffset(this._shadowOffsetX, this._shadowOffsetZ);
   }
 
   /** Show or hide backdrop wall, table surface and their frame planes (for transparent capture). */
@@ -4044,6 +4057,7 @@ export class ExtractorSceneManager {
         this.clonedModel.rotation.set(config.spinX || 0, config.spinY || 0, config.spinZ || 0);
       }
       this.clonedModel.userData = { type: 'cue' };
+      if (instances.length === 1) this._updateCueCenterForShadow(instances);
       return;
     }
 
@@ -4088,6 +4102,7 @@ export class ExtractorSceneManager {
     for (const mesh of this.instancedMeshes) {
       mesh.userData = { type: 'cue' };
     }
+    this._updateCueCenterForShadow(instances);
   }
 
   updateCueInstances(config: CueConfig): void {
@@ -4105,6 +4120,7 @@ export class ExtractorSceneManager {
         this.clonedModel.position.set(inst.positionX, inst.positionY, inst.positionZ);
         this.clonedModel.scale.setScalar(inst.scale);
         this.clonedModel.rotation.set(config.spinX || 0, config.spinY, config.spinZ || 0);
+        this._updateCueCenterForShadow(instances);
       }
       return;
     }
@@ -4139,6 +4155,7 @@ export class ExtractorSceneManager {
       }
       im.instanceMatrix.needsUpdate = true;
     }
+    this._updateCueCenterForShadow(instances);
   }
 
   spinCueInstances(spinDeltaY: number, spinDeltaX: number = 0): void {
@@ -4293,6 +4310,8 @@ export class ExtractorSceneManager {
     this.currentCueConfig = config;
     // Re-apply current envMap to all new groups
     this.reapplyCurrentCueEnvMap();
+    // Aim shadow lights at cue centroid
+    this._updateCueCenterForShadow(instances);
   }
 
   /** Re-apply the currently active HDRI envMap to all simulator cue groups after rebuild.
@@ -4327,6 +4346,9 @@ export class ExtractorSceneManager {
     group.position.set(posX, posY, posZ);
     group.rotation.set(rotX, rotY, rotZ);
     group.scale.setScalar(scale);
+    // Re-aim shadow lights at updated cue centroid
+    const instances = this.simulatorCueGroups.map(g => ({ positionX: g.position.x, positionZ: g.position.z }));
+    this._updateCueCenterForShadow(instances);
   }
 
   /**

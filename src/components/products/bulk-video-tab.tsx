@@ -4,7 +4,7 @@ import { useState, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, Download, CheckCircle2, XCircle, Video, ChevronDown } from "lucide-react";
+import { Loader2, Download, CheckCircle2, XCircle, Video, ChevronDown, RotateCcw } from "lucide-react";
 import JSZip from "jszip";
 import type { Product } from "@/types/product";
 import type { VideoStudioTemplate, VideoStudioConfig } from "@/types/video-studio";
@@ -15,6 +15,8 @@ import { loadProductIntoEsm } from "@/lib/three/load-product-for-esm";
 type ItemStatus = "pending" | "in_progress" | "done" | "failed";
 
 interface QueueItem {
+  /** Unique per-enqueue ID so retries are tracked separately */
+  id: string;
   product: Product;
   template: VideoStudioTemplate;
   status: ItemStatus;
@@ -22,12 +24,13 @@ interface QueueItem {
   progressLabel?: string;
   blob?: Blob;
   videoUrl?: string;
+  /** Set when auto-download fired; blob is already revoked */
+  autoDownloaded?: boolean;
   error?: string;
 }
 
 interface Props {
   products: Product[];
-  /** Called when recording starts/stops so parent can free DOM resources */
   onRecordingChange?: (recording: boolean) => void;
 }
 
@@ -40,17 +43,28 @@ function hasCamera(config: VideoStudioConfig): boolean {
   );
 }
 
+let _seq = 0;
+function makeItem(product: Product, template: VideoStudioTemplate): QueueItem {
+  return { id: `${product.id}-${template.id}-${++_seq}`, product, template, status: "pending" };
+}
+
 export function BulkVideoTab({ products, onRecordingChange }: Props) {
   const [templates, setTemplates] = useState<VideoStudioTemplate[]>([]);
   const [templatesLoaded, setTemplatesLoaded] = useState(false);
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<Set<string>>(new Set());
+  const [autoDownload, setAutoDownload] = useState(true);
 
   const [items, setItems] = useState<QueueItem[]>([]);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
-  // Tracks the current recording ESM so cancel can stop it immediately
+  const [queuedNotice, setQueuedNotice] = useState<string | null>(null);
+
   const activeEsmRef = useRef<ExtractorSceneManager | null>(null);
   const cancelledRef = useRef(false);
+  /** Live queue — can grow mid-recording when user queues a retry */
+  const liveQueueRef = useRef<QueueItem[]>([]);
+  const autoDownloadRef = useRef(true);
+  autoDownloadRef.current = autoDownload;
 
   const loadTemplates = useCallback(async () => {
     if (templatesLoaded) return;
@@ -78,116 +92,141 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
   const readyTemplates = templates.filter((t) => selectedTemplateIds.has(t.id) && hasCamera(t.config));
   const canStart = readyTemplates.length > 0 && !running;
 
-  const handleStart = useCallback(async () => {
-    if (!canStart) return;
+  /** Record a single item, updating its status in `items` state by id. */
+  const recordOne = useCallback(async (item: QueueItem) => {
+    const esm = new ExtractorSceneManager(2048, 2048);
+    activeEsmRef.current = esm;
 
-    const selectedTemplates = templates.filter((t) => selectedTemplateIds.has(t.id) && hasCamera(t.config));
-    if (selectedTemplates.length === 0) return;
+    const hiddenContainer = document.createElement("div");
+    hiddenContainer.style.cssText =
+      "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;pointer-events:none;visibility:hidden;";
+    hiddenContainer.appendChild(esm.getCanvas());
+    document.body.appendChild(hiddenContainer);
 
-    // Build flat queue: for each product × each template
-    const queue: QueueItem[] = [];
-    for (const product of products) {
-      for (const template of selectedTemplates) {
-        queue.push({ product, template, status: "pending" });
+    const updateById = (patch: Partial<QueueItem>) =>
+      setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, ...patch } : it)));
+
+    try {
+      await loadProductIntoEsm(item.product, esm);
+      if (cancelledRef.current) return;
+
+      const config = ensureFullConfig(item.template.config);
+      const totalDuration = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz");
+
+      let lastProgressMs = 0;
+      const blob = await esm.startStudioRecording(config, (progressPct) => {
+        if (cancelledRef.current) { esm.stopRecording(); return; }
+        const now = performance.now();
+        if (progressPct >= 100 || now - lastProgressMs >= 100) {
+          lastProgressMs = now;
+          const elapsed = (progressPct / 100) * totalDuration;
+          const fmt = (s: number) => s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+          updateById({ progress: progressPct / 100, progressLabel: `${fmt(elapsed)} / ${fmt(totalDuration)} (${Math.round(progressPct)}%)` });
+        }
+      });
+
+      if (autoDownloadRef.current) {
+        // Download immediately then revoke — frees blob memory before next recording.
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        const safeName = (item.product.name ?? item.product.id).replace(/[^a-zA-Z0-9-_]/g, "_");
+        const safeTpl = item.template.name.replace(/[^a-zA-Z0-9-_]/g, "_");
+        a.download = `${safeName}_${safeTpl}.webm`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        updateById({ status: "done", progress: 1, autoDownloaded: true });
+      } else {
+        updateById({ status: "done", blob, progress: 1 });
       }
+    } catch (err) {
+      if (!cancelledRef.current) {
+        console.error("BulkVideoTab: record error", err);
+        updateById({ status: "failed", error: err instanceof Error ? err.message : String(err) });
+      }
+    } finally {
+      activeEsmRef.current = null;
+      esm.dispose();
+      if (hiddenContainer.parentNode) hiddenContainer.parentNode.removeChild(hiddenContainer);
     }
+  }, []);
 
+  /** Run the live queue from the start index, processing items sequentially. */
+  const runQueue = useCallback(async (initialItems: QueueItem[]) => {
+    liveQueueRef.current = [...initialItems];
     cancelledRef.current = false;
     setRunning(true);
     setDone(false);
-    setItems(queue);
-    // Signal parent to unmount product cards (free GPU texture memory)
+    setItems([...initialItems]);
     onRecordingChange?.(true);
 
-    for (let i = 0; i < queue.length; i++) {
+    let i = 0;
+    while (i < liveQueueRef.current.length) {
       if (cancelledRef.current) break;
-      const { product, template } = queue[i];
-      setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "in_progress", progress: 0 }; return n; });
+      const current = liveQueueRef.current[i];
 
-      // Let browser fully release the previous WebGL context before starting next recording
-      if (i > 0) await new Promise<void>((r) => setTimeout(r, 600));
+      setItems((prev) => prev.map((it) => it.id === current.id ? { ...it, status: "in_progress", progress: 0 } : it));
+
+      // Give the browser time to fully release the previous WebGL context.
+      if (i > 0) await new Promise<void>((r) => setTimeout(r, 1000));
       if (cancelledRef.current) break;
 
-      const esm = new ExtractorSceneManager(2048, 2048);
-      activeEsmRef.current = esm;
-
-      // Mount canvas to DOM so Chrome uses hardware-accelerated frame capture for captureStream().
-      // Without this the canvas is off-screen and Chrome falls back to software capture → choppy video.
-      const hiddenContainer = document.createElement("div");
-      hiddenContainer.style.cssText = "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;pointer-events:none;visibility:hidden;";
-      hiddenContainer.appendChild(esm.getCanvas());
-      document.body.appendChild(hiddenContainer);
-
-      try {
-        await loadProductIntoEsm(product, esm);
-        if (cancelledRef.current) break;
-
-        const config = ensureFullConfig(template.config);
-
-        // Show estimated duration in the progress label using same formula as VideoStudio
-        const totalDuration = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz");
-
-        // Throttle progress state updates to max 100ms intervals — same pattern as VideoStudio.
-        // Updating state at 60-120fps causes React to re-render every frame, stealing CPU from
-        // the recording rAF loop and producing choppy output.
-        let lastProgressMs = 0;
-        const blob = await esm.startStudioRecording(config, (progressPct) => {
-          if (cancelledRef.current) {
-            esm.stopRecording();
-            return;
-          }
-          const now = performance.now();
-          if (progressPct >= 100 || now - lastProgressMs >= 100) {
-            lastProgressMs = now;
-            const elapsed = (progressPct / 100) * totalDuration;
-            const fmt = (s: number) => s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
-            setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], progress: progressPct / 100, progressLabel: `${fmt(elapsed)} / ${fmt(totalDuration)} (${Math.round(progressPct)}%)` }; return n; });
-          }
-        });
-
-        // Store blob but don't create the video URL yet — video elements playing during recording
-        // compete for GPU resources. All URLs are created after the full queue finishes.
-        setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "done", blob, progress: 1 }; return n; });
-      } catch (err) {
-        if (!cancelledRef.current) {
-          console.error("BulkVideoTab: record error", err);
-          const msg = err instanceof Error ? err.message : String(err);
-          setItems((prev) => { const n = [...prev]; n[i] = { ...n[i], status: "failed", error: msg }; return n; });
-        }
-      } finally {
-        activeEsmRef.current = null;
-        esm.dispose();
-        if (hiddenContainer.parentNode) hiddenContainer.parentNode.removeChild(hiddenContainer);
-      }
+      await recordOne(current);
+      i++;
     }
 
-    // All recordings done — now create object URLs and show videos all at once.
-    // This guarantees no video decode was competing with the recording GPU.
-    setItems((prev) => prev.map((item) => ({
-      ...item,
-      videoUrl: item.blob && !item.videoUrl ? URL.createObjectURL(item.blob) : item.videoUrl,
+    // Create video preview URLs for non-auto-downloaded items all at once (after recording ends).
+    setItems((prev) => prev.map((it) => ({
+      ...it,
+      videoUrl: it.blob && !it.videoUrl ? URL.createObjectURL(it.blob) : it.videoUrl,
     })));
     setRunning(false);
     setDone(true);
-    // Signal parent to re-render product cards
     onRecordingChange?.(false);
-  }, [canStart, templates, selectedTemplateIds, products, onRecordingChange]);
+  }, [recordOne, onRecordingChange]);
+
+  const handleStart = useCallback(async () => {
+    if (!canStart) return;
+    const selected = templates.filter((t) => selectedTemplateIds.has(t.id) && hasCamera(t.config));
+    if (selected.length === 0) return;
+    const queue: QueueItem[] = [];
+    for (const product of products) {
+      for (const template of selected) {
+        queue.push(makeItem(product, template));
+      }
+    }
+    await runQueue(queue);
+  }, [canStart, templates, selectedTemplateIds, products, runQueue]);
 
   const handleCancel = useCallback(() => {
     cancelledRef.current = true;
-    // Immediately stop and dispose the current in-flight recording
-    if (activeEsmRef.current) {
-      activeEsmRef.current.stopRecording();
-    }
+    activeEsmRef.current?.stopRecording();
   }, []);
+
+  /** Queue a single item for re-recording. Adds to live queue if running, else starts fresh. */
+  const handleRecordAgain = useCallback((item: QueueItem) => {
+    const retry = makeItem(item.product, item.template);
+    if (running) {
+      liveQueueRef.current = [...liveQueueRef.current, retry];
+      setItems((prev) => [...prev, retry]);
+      const label = `${item.product.name} — ${item.template.name}`;
+      setQueuedNotice(`Đã thêm vào hàng đợi: ${label}`);
+      setTimeout(() => setQueuedNotice(null), 3000);
+    } else {
+      setDone(false);
+      runQueue([retry]);
+    }
+  }, [running, runQueue]);
 
   const handleDownloadAll = useCallback(async () => {
     const zip = new JSZip();
     for (const item of items) {
       if (item.blob) {
         const safeName = (item.product.name ?? item.product.id).replace(/[^a-zA-Z0-9-_]/g, "_");
-        const safeTemplate = (item.template.name).replace(/[^a-zA-Z0-9-_]/g, "_");
-        zip.file(`${safeName}_${safeTemplate}.webm`, item.blob);
+        const safeTpl = item.template.name.replace(/[^a-zA-Z0-9-_]/g, "_");
+        zip.file(`${safeName}_${safeTpl}.webm`, item.blob);
       }
     }
     const zipBlob = await zip.generateAsync({ type: "blob" });
@@ -205,9 +244,11 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
     const a = document.createElement("a");
     a.href = url;
     const safeName = (item.product.name ?? item.product.id).replace(/[^a-zA-Z0-9-_]/g, "_");
-    const safeTemplate = item.template.name.replace(/[^a-zA-Z0-9-_]/g, "_");
-    a.download = `${safeName}_${safeTemplate}.webm`;
+    const safeTpl = item.template.name.replace(/[^a-zA-Z0-9-_]/g, "_");
+    a.download = `${safeName}_${safeTpl}.webm`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
@@ -215,18 +256,17 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
   const selCount = selectedTemplateIds.size;
   const totalJobs = products.length * readyTemplates.length;
   const currentItem = items.find((i) => i.status === "in_progress");
-  const currentIdx = items.findIndex((i) => i.status === "in_progress");
+  const currentIdx = items.findLastIndex((i) => i.status === "in_progress");
+  const hasStoredBlobs = items.some((i) => i.status === "done" && !i.autoDownloaded && i.blob);
 
   // ── Recording overlay ─────────────────────────────────────────────────────
-  // When recording is active, show ONLY the progress overlay.
-  // This avoids re-rendering product card images which consume GPU texture memory.
   if (running) {
     return (
       <div className="flex flex-col gap-5 p-2">
         <div className="flex flex-col items-center gap-3 py-4">
           <Loader2 className="h-10 w-10 animate-spin text-purple-400" />
           <p className="text-sm font-medium text-zinc-200">
-            Đang ghi video {currentIdx + 1}/{items.length}
+            Đang ghi video {currentIdx + 1}/{liveQueueRef.current.length}
           </p>
           {currentItem && (
             <div className="w-full max-w-sm space-y-1.5">
@@ -244,20 +284,34 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
               )}
             </div>
           )}
-          <p className="text-xs text-zinc-500">{doneCount} / {items.length} video hoàn thành</p>
+          <p className="text-xs text-zinc-500">{doneCount} / {liveQueueRef.current.length} video hoàn thành</p>
         </div>
 
-        {/* Compact queue status list */}
+        {queuedNotice && (
+          <div className="text-xs text-purple-300 bg-purple-900/30 rounded px-2 py-1.5 text-center">
+            {queuedNotice}
+          </div>
+        )}
+
         <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
           {items.map((item) => (
-            <div key={`${item.product.id}-${item.template.id}`} className="flex items-center gap-2 px-2 py-1 rounded bg-zinc-800/50 text-xs">
+            <div key={item.id} className="flex items-center gap-2 px-2 py-1 rounded bg-zinc-800/50 text-xs">
               {item.status === "pending" && <div className="w-3 h-3 rounded-full border border-zinc-600 shrink-0" />}
               {item.status === "in_progress" && <Loader2 className="w-3 h-3 text-purple-400 animate-spin shrink-0" />}
               {item.status === "done" && <CheckCircle2 className="w-3 h-3 text-green-400 shrink-0" />}
               {item.status === "failed" && <XCircle className="w-3 h-3 text-red-400 shrink-0" />}
-              <span className="text-zinc-300 truncate">{item.product.name}</span>
+              <span className="text-zinc-300 truncate flex-1">{item.product.name}</span>
               <span className="text-zinc-600 shrink-0">·</span>
               <span className="text-zinc-500 truncate">{item.template.name}</span>
+              {item.status === "failed" && (
+                <button
+                  onClick={() => handleRecordAgain(item)}
+                  className="ml-1 text-xs text-purple-400 hover:text-purple-300 shrink-0"
+                  title="Thêm vào hàng đợi"
+                >
+                  +lại
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -273,18 +327,28 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
   if (done) {
     return (
       <div className="flex flex-col gap-4 p-1">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
           <span className="text-sm text-green-400 font-medium">✓ Hoàn thành {doneCount}/{items.length} video</span>
-          {doneCount > 0 && (
-            <Button size="sm" variant="outline" onClick={handleDownloadAll} className="border-zinc-600 text-zinc-200">
-              <Download className="w-4 h-4 mr-1.5" />
-              Tải tất cả (.zip)
+          <div className="flex gap-2">
+            {hasStoredBlobs && (
+              <Button size="sm" variant="outline" onClick={handleDownloadAll} className="border-zinc-600 text-zinc-200">
+                <Download className="w-4 h-4 mr-1.5" />
+                Tải tất cả (.zip)
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => { setDone(false); setItems([]); }}
+              className="border-zinc-600 text-zinc-400 hover:text-zinc-200"
+            >
+              Ghi thêm
             </Button>
-          )}
+          </div>
         </div>
         <div className="flex flex-col gap-2 max-h-[60vh] overflow-y-auto pr-1">
-          {items.map((item, idx) => (
-            <div key={`${item.product.id}-${item.template.id}`} className="flex flex-col gap-1.5 rounded-lg bg-zinc-800/60 px-3 py-2.5">
+          {items.map((item) => (
+            <div key={item.id} className="flex flex-col gap-1.5 rounded-lg bg-zinc-800/60 px-3 py-2.5">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   {item.status === "done" && <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0" />}
@@ -294,21 +358,32 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
                     <p className="text-xs text-zinc-500 truncate">{item.template.name}</p>
                   </div>
                 </div>
-                {item.status === "done" && (
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {item.status === "done" && item.autoDownloaded && (
+                    <span className="text-xs text-green-500/70 px-1">✓ đã tải</span>
+                  )}
+                  {item.status === "done" && !item.autoDownloaded && item.blob && (
+                    <button
+                      onClick={() => downloadItem(item)}
+                      className="text-xs px-2 py-0.5 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 hover:text-white"
+                    >
+                      ↓ .webm
+                    </button>
+                  )}
                   <button
-                    onClick={() => downloadItem(item)}
-                    className="text-xs px-2 py-0.5 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 hover:text-white shrink-0"
+                    onClick={() => handleRecordAgain(item)}
+                    className="text-xs px-2 py-0.5 rounded bg-zinc-700 hover:bg-purple-700 text-zinc-400 hover:text-white flex items-center gap-1"
+                    title="Ghi lại video này"
                   >
-                    ↓ .webm
+                    <RotateCcw className="w-3 h-3" /> ghi lại
                   </button>
-                )}
+                </div>
               </div>
               {item.status === "failed" && (
                 <p className="text-xs text-red-400 truncate">{item.error}</p>
               )}
               {item.status === "done" && item.videoUrl && (
                 <video
-                  key={`video-${idx}`}
                   src={item.videoUrl}
                   className="w-full rounded-md border border-zinc-700"
                   controls
@@ -324,9 +399,9 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
     );
   }
 
+  // ── Setup view ────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-4 p-1">
-      {/* Template multi-select */}
       <div className="flex flex-col gap-1.5">
         <label className="text-sm font-medium text-zinc-300">Chọn mẫu video</label>
         <Popover onOpenChange={(open) => { if (open) loadTemplates(); }}>
@@ -370,7 +445,28 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
         )}
       </div>
 
-      {/* Action bar */}
+      {/* Auto-download toggle — keeps memory free between recordings */}
+      <div className="flex items-start gap-2.5 rounded-lg bg-zinc-800/50 px-3 py-2.5">
+        <Checkbox
+          id="auto-dl"
+          checked={autoDownload}
+          onCheckedChange={(v) => setAutoDownload(!!v)}
+          className="border-zinc-500 mt-0.5"
+        />
+        <div className="flex flex-col gap-0.5">
+          <label htmlFor="auto-dl" className="text-sm text-zinc-200 cursor-pointer font-medium">
+            Tự động tải xuống
+          </label>
+          <p className="text-xs text-zinc-500">
+            {autoDownload
+              ? "Mỗi video tải ngay khi xong và giải phóng bộ nhớ cho video tiếp theo."
+              : totalJobs > 5
+                ? `⚠ ${totalJobs} video sẽ lưu trong RAM trình duyệt — có thể gây crash.`
+                : "Video sẽ hiện trong kết quả để xem trước trước khi tải."}
+          </p>
+        </div>
+      </div>
+
       <Button
         size="sm"
         disabled={!canStart}

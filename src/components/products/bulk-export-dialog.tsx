@@ -56,12 +56,14 @@ export function BulkExportDialog({ open, onClose, products, onRecordingChange }:
           </button>
         </div>
 
+        {/* Both tabs stay mounted so state (results, queue) isn't lost on tab switch */}
         <div className="mt-3">
-          {tab === "image" ? (
+          <div className={tab === "image" ? "" : "hidden"}>
             <BulkImageTab products={products} />
-          ) : (
+          </div>
+          <div className={tab === "video" ? "" : "hidden"}>
             <BulkVideoTab products={products} onRecordingChange={onRecordingChange} />
-          )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>

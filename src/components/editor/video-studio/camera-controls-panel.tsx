@@ -4,241 +4,101 @@ import { useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Video, Gauge, Crosshair } from "lucide-react";
-import type {
-  CameraKeyframe,
-  CameraDirection,
-  EasingConfig,
-} from "@/types/video-studio";
-import {
-  CAMERA_DIRECTION_PRESETS,
-  EASING_PRESETS,
-  computeVideoDuration,
-} from "@/types/video-studio";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Gauge, Crosshair } from "lucide-react";
+import type { CameraKeyframe, EasingConfig } from "@/types/video-studio";
+import { EASING_PRESETS, computeVideoDuration } from "@/types/video-studio";
 
 interface CameraControlsPanelProps {
-  cameraDirection: CameraDirection;
   cameraStart: CameraKeyframe;
   cameraEnd: CameraKeyframe;
   cameraSpeed: number;
   easing: EasingConfig;
-  onDirectionChange: (d: CameraDirection) => void;
   onStartChange: (k: CameraKeyframe) => void;
   onEndChange: (k: CameraKeyframe) => void;
   onSpeedChange: (s: number) => void;
   onEasingChange: (e: EasingConfig) => void;
   onSetStart: () => void;
   onSetEnd: () => void;
+  startPositionSet?: boolean;
+  endPositionSet?: boolean;
 }
 
-function PositionSlider({
-  label,
-  value,
-  onChange,
-  min,
-  max,
-  step,
-  decimals = 1,
-}: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-  min: number;
-  max: number;
-  step: number;
-  decimals?: number;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between">
-        <Label className="text-xs text-muted-foreground">{label}</Label>
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {value.toFixed(decimals)}
-        </span>
-      </div>
-      <Slider
-        value={[value]}
-        onValueChange={([v]) => onChange(v)}
-        min={min}
-        max={max}
-        step={step}
-      />
-    </div>
-  );
-}
-
-function KeyframeSection({
-  title,
-  keyframe,
-  onChange,
-  onSet,
-}: {
-  title: string;
-  keyframe: CameraKeyframe;
-  onChange: (k: CameraKeyframe) => void;
-  onSet: () => void;
-}) {
-  const update = (key: keyof CameraKeyframe, value: number) => {
-    const updated = { ...keyframe, [key]: value };
-    onChange(updated);
-  };
-
+function KeyframeDisplay({ title, keyframe, onSet, positionSet = false }: { title: string; keyframe: CameraKeyframe; onSet: () => void; positionSet?: boolean }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <Label className="text-xs font-medium">{title}</Label>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-6 text-xs px-2"
-          onClick={onSet}
-        >
-          <Crosshair className="h-3 w-3 mr-1" /> Đặt
+        <Button variant="outline" size="sm" className="h-6 text-xs px-2" onClick={onSet}>
+          <Crosshair className="h-3 w-3 mr-1" />
+          Đặt
         </Button>
       </div>
-      <PositionSlider
-        label="X"
-        value={keyframe.x}
-        onChange={(v) => update("x", v)}
-        min={-15}
-        max={15}
-        step={0.1}
-      />
-      <PositionSlider
-        label="Y"
-        value={keyframe.y}
-        onChange={(v) => update("y", v)}
-        min={-5}
-        max={15}
-        step={0.1}
-      />
-      <PositionSlider
-        label="Z"
-        value={keyframe.z}
-        onChange={(v) => update("z", v)}
-        min={-5}
-        max={15}
-        step={0.1}
-      />
-      <PositionSlider
-        label="Rot X"
-        value={keyframe.rotationX ?? 0}
-        onChange={(v) => update("rotationX", v)}
-        min={-3.14}
-        max={3.14}
-        step={0.01}
-        decimals={2}
-      />
-      <PositionSlider
-        label="Rot Y"
-        value={keyframe.rotationY ?? 0}
-        onChange={(v) => update("rotationY", v)}
-        min={-3.14}
-        max={3.14}
-        step={0.01}
-        decimals={2}
-      />
-      <PositionSlider
-        label="Rot Z"
-        value={keyframe.rotationZ ?? 0}
-        onChange={(v) => update("rotationZ", v)}
-        min={-3.14}
-        max={3.14}
-        step={0.01}
-        decimals={2}
-      />
+      {positionSet && (
+        <div className="flex gap-3 text-[11px] tabular-nums text-muted-foreground bg-muted/60 rounded px-2 py-1">
+          <span>
+            X <span className="text-foreground">{keyframe.x.toFixed(2)}</span>
+          </span>
+          <span>
+            Y <span className="text-foreground">{keyframe.y.toFixed(2)}</span>
+          </span>
+          <span>
+            Z <span className="text-foreground">{keyframe.z.toFixed(2)}</span>
+          </span>
+        </div>
+      )}
     </div>
   );
 }
 
 export function CameraControlsPanel({
-  cameraDirection,
   cameraStart,
   cameraEnd,
   cameraSpeed,
   easing,
-  onDirectionChange,
-  onStartChange,
-  onEndChange,
   onSpeedChange,
   onEasingChange,
   onSetStart,
   onSetEnd,
+  startPositionSet,
+  endPositionSet,
 }: CameraControlsPanelProps) {
   const handleEasingChange = useCallback(
     (presetId: string) => {
       onEasingChange({ type: "preset", preset: presetId });
     },
-    [onEasingChange],
+    [onEasingChange]
   );
 
   return (
     <div className="space-y-4">
-      {/* Direction Preset */}
-      <div className="space-y-1.5">
-        <Label className="text-xs text-muted-foreground flex items-center gap-1">
-          <Video className="h-3 w-3" /> Hướng
-        </Label>
-        <Select
-          value={cameraDirection}
-          onValueChange={(v) => onDirectionChange(v as CameraDirection)}
-        >
-          <SelectTrigger className="h-8">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {CAMERA_DIRECTION_PRESETS.map((p) => (
-              <SelectItem key={p.id} value={p.id}>
-                {p.name} — {p.description}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      {/* Camera placement hint */}
+      <p className="text-[10px] text-muted-foreground bg-muted rounded px-2 py-1.5 leading-relaxed">
+        Chuyển sang <span className="font-semibold text-foreground">Chỉnh sửa</span>, di chuyển camera đến vị trí bạn muốn và nhấn{" "}
+        <span className="font-semibold text-foreground">&ldquo;Đặt&rdquo;</span> để lưu vị trí điểm đầu và điểm cuối.
+      </p>
 
       {/* Start Position */}
-      <KeyframeSection
-        title="Vị trí bắt đầu"
-        keyframe={cameraStart}
-        onChange={onStartChange}
-        onSet={onSetStart}
-      />
+      <KeyframeDisplay title="Vị trí bắt đầu" keyframe={cameraStart} onSet={onSetStart} positionSet={startPositionSet} />
 
       {/* End Position */}
-      <KeyframeSection
-        title="Vị trí kết thúc"
-        keyframe={cameraEnd}
-        onChange={onEndChange}
-        onSet={onSetEnd}
-      />
+      <KeyframeDisplay title="Vị trí kết thúc" keyframe={cameraEnd} onSet={onSetEnd} positionSet={endPositionSet} />
 
       {/* Camera Speed */}
-      <PositionSlider
-        label="Tốc độ máy ảnh"
-        value={cameraSpeed}
-        onChange={onSpeedChange}
-        min={0.1}
-        max={2}
-        step={0.05}
-        decimals={2}
-      />
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs text-muted-foreground">Tốc độ camera</Label>
+          <span className="text-xs text-muted-foreground tabular-nums">{cameraSpeed.toFixed(2)}</span>
+        </div>
+        <Slider value={[cameraSpeed]} onValueChange={([v]) => onSpeedChange(v)} min={0.1} max={2} step={0.05} />
+      </div>
 
       {/* Easing */}
       <div className="space-y-1.5">
         <Label className="text-xs text-muted-foreground flex items-center gap-1">
           <Gauge className="h-3 w-3" /> Chuyển động
         </Label>
-        <Select
-          value={easing.type === "preset" ? easing.preset : undefined}
-          onValueChange={handleEasingChange}
-        >
+        <Select value={easing.type === "preset" ? easing.preset : undefined} onValueChange={handleEasingChange}>
           <SelectTrigger className="h-8">
             <SelectValue placeholder="Chọn chuyển động…" />
           </SelectTrigger>
@@ -257,7 +117,7 @@ export function CameraControlsPanel({
         <Label className="text-xs text-muted-foreground">Thời lượng</Label>
         <span className="text-sm font-medium tabular-nums">
           {(() => {
-            const sec = computeVideoDuration(cameraStart, cameraEnd, cameraSpeed, cameraDirection);
+            const sec = computeVideoDuration(cameraStart, cameraEnd, cameraSpeed, "xyz");
             const m = Math.floor(sec / 60);
             const s = Math.round(sec % 60);
             return m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `${sec.toFixed(1)}s`;

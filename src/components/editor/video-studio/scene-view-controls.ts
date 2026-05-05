@@ -32,12 +32,14 @@ const HIGHLIGHT_COLOR = 0x22cc66;
 const TRANSFORMABLE_TYPES = new Set([
   "camera",
   "cue",
-  "wall",
-  "table",
+  // "wall" and "table" are click-to-select only; no transform gizmo
   "wallFrame",
   "tableFrame",
   "hdriLight",
 ]);
+
+/** Types that cannot be transformed at all (no gizmo, no G/R/S hotkeys) */
+const NON_TRANSFORMABLE_TYPES = new Set(["wall", "table"]);
 
 export class SceneViewControls {
   private orbitControls: OrbitControls | null = null;
@@ -387,6 +389,8 @@ export class SceneViewControls {
     // G/R/S hotkey — activate immediate drag mode
     if ((key === "g" || key === "r" || key === "s") && this.currentSelection.object) {
       if (key === "s" && this.currentSelection.type === "camera") return;
+      // Wall and table are click-to-select only — no transforms
+      if (this.currentSelection.type && NON_TRANSFORMABLE_TYPES.has(this.currentSelection.type)) return;
       const mode = key === "g" ? "translate" : key === "r" ? "rotate" : "scale";
       this.activeHotkey = key;
       this.hotkeyAxisLock = null;

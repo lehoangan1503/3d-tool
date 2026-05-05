@@ -31,6 +31,7 @@ const NEW_TEMPLATE_VALUE = "__new__";
 
 export interface StudioTemplateSelectorHandle {
   triggerSave: () => void;
+  resetSelection: () => void;
 }
 
 interface StudioTemplateSelectorProps {
@@ -100,7 +101,14 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
     }
   }, [selectedId, templates]);
 
-  useImperativeHandle(ref, () => ({ triggerSave: handleSaveClick }), [handleSaveClick]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      triggerSave: handleSaveClick,
+      resetSelection: () => setSelectedId(null),
+    }),
+    [handleSaveClick]
+  );
 
   const handleUpdateCurrent = useCallback(async () => {
     if (!selectedId) return;

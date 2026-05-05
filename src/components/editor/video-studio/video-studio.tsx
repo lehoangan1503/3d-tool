@@ -38,7 +38,16 @@ import {
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager, HDRI_OPTIONS_FALLBACK } from "@/lib/three/extractor-scene-manager";
 import type { VideoStudioConfig, CameraKeyframe, CueHdriConfig, VideoRatio } from "@/types/video-studio";
-import { DEFAULT_STUDIO_CONFIG, DEFAULT_CUE_HDRI, VIDEO_QUALITY_PRESETS, VIDEO_RATIO_PRESETS, getRecordingDimensions, ensureFullConfig, migrateVideoStudioConfig, computeVideoDuration } from "@/types/video-studio";
+import {
+  DEFAULT_STUDIO_CONFIG,
+  DEFAULT_CUE_HDRI,
+  VIDEO_QUALITY_PRESETS,
+  VIDEO_RATIO_PRESETS,
+  getRecordingDimensions,
+  ensureFullConfig,
+  migrateVideoStudioConfig,
+  computeVideoDuration,
+} from "@/types/video-studio";
 import { createDefaultHdriLayer, STUDIO_WHITE_HDRI } from "@/types/extractor";
 import { CameraControlsPanel } from "./camera-controls-panel";
 import { CueSetupPanel } from "./cue-setup-panel";
@@ -372,7 +381,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         previewContainerRef.current.appendChild(canvas);
         const rect = previewContainerRef.current.getBoundingClientRect();
         const initW = Math.max(rect.width || 800, 1);
-        const initH = Math.max(rect.height || Math.round(initW * 9 / 16), 1);
+        const initH = Math.max(rect.height || Math.round((initW * 9) / 16), 1);
         extractor.resize(initW, initH);
         const ratioId = configRef.current.videoRatio ?? "16:9";
         const ratioPreset = VIDEO_RATIO_PRESETS.find((r) => r.id === ratioId) ?? VIDEO_RATIO_PRESETS[0];
@@ -601,7 +610,9 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   }, [mainTab, open, resizePreviewCanvas]);
 
   // Keep viewModeRef in sync so setup() can access the current value
-  useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
+  useEffect(() => {
+    viewModeRef.current = viewMode;
+  }, [viewMode]);
 
   // Sync view mode to extractor + enable/disable scene view controls
   useEffect(() => {
@@ -706,8 +717,14 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
 
     // Cancel any pending debounced preview/rebuild updates so they don't
     // interfere with the recording pipeline's own setup.
-    if (updateTimerRef.current) { clearTimeout(updateTimerRef.current); updateTimerRef.current = null; }
-    if (rebuildTimerRef.current) { clearTimeout(rebuildTimerRef.current); rebuildTimerRef.current = null; }
+    if (updateTimerRef.current) {
+      clearTimeout(updateTimerRef.current);
+      updateTimerRef.current = null;
+    }
+    if (rebuildTimerRef.current) {
+      clearTimeout(rebuildTimerRef.current);
+      rebuildTimerRef.current = null;
+    }
 
     // Force camera view during recording so user sees the camera path animation
     const prevViewMode = viewMode;
@@ -823,24 +840,12 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
             {/* Center: main tabs */}
             <div className="flex-1 flex items-center justify-center">
               <div className="flex items-center gap-1 bg-muted/50 rounded-lg p-0.5">
-                <Button
-                  variant={mainTab === "editor" ? "secondary" : "ghost"}
-                  size="sm"
-                  className="h-7 text-xs px-3"
-                  onClick={() => setMainTab("editor")}
-                >
+                <Button variant={mainTab === "editor" ? "secondary" : "ghost"} size="sm" className="h-7 text-xs px-3" onClick={() => setMainTab("editor")}>
                   <Clapperboard className="h-3 w-3 mr-1.5" /> Quay phim
                 </Button>
-                <Button
-                  variant={mainTab === "video" ? "secondary" : "ghost"}
-                  size="sm"
-                  className="h-7 text-xs px-3"
-                  onClick={() => setMainTab("video")}
-                >
+                <Button variant={mainTab === "video" ? "secondary" : "ghost"} size="sm" className="h-7 text-xs px-3" onClick={() => setMainTab("video")}>
                   <Film className="h-3 w-3 mr-1.5" /> Video kết quả
-                  {videoUrl && (
-                    <span className="ml-1.5 h-1.5 w-1.5 rounded-full bg-primary inline-block" />
-                  )}
+                  {videoUrl && <span className="ml-1.5 h-1.5 w-1.5 rounded-full bg-primary inline-block" />}
                 </Button>
               </div>
             </div>
@@ -849,7 +854,11 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
             <div className="flex items-center gap-1 shrink-0">
               {viewMode === "scene" && selectionInfo.type && (
                 <>
-                  <span className={`ml-1 text-[11px] font-normal px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-400/40 ${mainTab === "video" ? "invisible pointer-events-none" : ""}`}>
+                  <span
+                    className={`ml-1 text-[11px] font-normal px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-400/40 ${
+                      mainTab === "video" ? "invisible pointer-events-none" : ""
+                    }`}
+                  >
                     {SELECTION_LABELS_VN[selectionInfo.type] ?? selectionInfo.type}
                   </span>
                   <span
@@ -880,7 +889,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                 className={`h-7 text-xs ${mainTab === "video" ? "invisible pointer-events-none" : ""}`}
                 onClick={() => {
                   if (extractorRef.current) {
-                    setCameraSnapshot(extractorRef.current.captureFrame('jpeg'));
+                    setCameraSnapshot(extractorRef.current.captureFrame("jpeg"));
                   }
                   setViewMode("camera");
                 }}
@@ -909,13 +918,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
             <div className="absolute inset-0 flex flex-col items-center justify-center p-8 gap-6 z-10">
               {videoUrl ? (
                 <>
-                  <video
-                    src={videoUrl}
-                    controls
-                    autoPlay
-                    loop
-                    className="rounded-xl max-w-2xl w-full max-h-[70vh] object-contain shadow-2xl"
-                  />
+                  <video src={videoUrl} controls autoPlay loop className="rounded-xl max-w-2xl w-full max-h-[70vh] object-contain shadow-2xl" />
                   <div className="flex gap-3">
                     <Button variant="outline" onClick={() => setMainTab("editor")}>
                       Tiếp tục chỉnh sửa
@@ -940,676 +943,673 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
 
           {/* ====== EDITOR TAB (always mounted for WebGL continuity) ====== */}
           <div className={`flex flex-1 overflow-hidden ${mainTab === "video" ? "hidden" : ""}`}>
-          {/* Left: Preview */}
-          <div className="flex-1 flex flex-col p-4 min-w-0">
-            {/* 3D preview canvas — hidden during recording to free GPU/memory for encoding */}
-            <div
-              ref={previewContainerRef}
-              className={`bg-black rounded-lg overflow-hidden relative transition-all duration-300 ${
-                isRecording ? "hidden" : "flex-1"
-              } ${viewMode === "camera" ? "pointer-events-none" : ""}`}
-            >
+            {/* Left: Preview */}
+            <div className="flex-1 flex flex-col p-4 min-w-0">
+              {/* 3D preview canvas — always kept in the DOM so captureStream works during recording */}
               <div
-                className={`absolute inset-0 flex items-center justify-center bg-black/40 z-10 transition-opacity duration-500 pointer-events-none ${
-                  !sceneReady || isRebuilding ? "opacity-100" : "opacity-0"
+                ref={previewContainerRef}
+                className={`bg-black rounded-lg overflow-hidden relative flex-1 ${
+                  viewMode === "camera" ? "pointer-events-none" : ""
                 }`}
               >
-                <div className="flex flex-col items-center gap-2">
-                  <Loader2 className="h-8 w-8 animate-spin text-white/70" />
-                  <span className="text-xs text-white/50">{!sceneReady ? "Đang thiết lập cảnh…" : "Đang cập nhật…"}</span>
+                <div
+                  className={`absolute inset-0 flex items-center justify-center bg-black/40 z-10 transition-opacity duration-500 pointer-events-none ${
+                    !sceneReady || isRebuilding ? "opacity-100" : "opacity-0"
+                  }`}
+                >
+                  <div className="flex flex-col items-center gap-2">
+                    <Loader2 className="h-8 w-8 animate-spin text-white/70" />
+                    <span className="text-xs text-white/50">{!sceneReady ? "Đang thiết lập cảnh…" : "Đang cập nhật…"}</span>
+                  </div>
                 </div>
+                {/* Ratio guide overlay — only shown when a non-16:9 ratio is selected */}
+                {viewMode !== "scene" && config.videoRatio && config.videoRatio !== "16:9" && <RatioGuideOverlay ratio={config.videoRatio} />}
+                {/* Camera snapshot — static screenshot shown in "Góc nhìn máy quay" mode */}
+                {viewMode === "camera" && cameraSnapshot && <img src={cameraSnapshot} className="absolute inset-0 w-full h-full object-contain z-20" alt="Góc nhìn máy quay" />}
+                {/* Recording progress overlay — shown on top of canvas so captureStream still captures frames */}
+                {isRecording && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/90 z-30 p-8">
+                    <Loader2 className="h-12 w-12 animate-spin text-primary/70" />
+                    <div className="w-full max-w-md space-y-2">
+                      <div className="h-3 bg-muted rounded-full overflow-hidden">
+                        <div className="h-full bg-primary transition-all duration-300" style={{ width: `${progress}%` }} />
+                      </div>
+                      <p className="text-sm text-muted-foreground text-center">
+                        {(() => {
+                          const total = computeVideoDuration(capturedStart ?? config.cameraStart, capturedEnd ?? config.cameraEnd, config.cameraSpeed, "xyz");
+                          const elapsed = (progress / 100) * total;
+                          const fmt = (s: number) => {
+                            const m = Math.floor(s / 60);
+                            const sec = Math.round(s % 60);
+                            return m > 0 ? `${m}:${String(sec).padStart(2, "0")}` : `${s.toFixed(0)}s`;
+                          };
+                          return `Đang ghi… ${fmt(elapsed)} / ${fmt(total)} (${Math.round(progress)}%)`;
+                        })()}
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
-              {/* Ratio guide overlay — only shown when a non-16:9 ratio is selected */}
-              {viewMode !== "scene" && config.videoRatio && config.videoRatio !== "16:9" && (
-                <RatioGuideOverlay ratio={config.videoRatio} />
+
+              {/* Key hints for scene view */}
+              {viewMode === "scene" && !isRecording && (
+                <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground px-1 flex-wrap">
+                  <span className="font-mono bg-muted px-1.5 py-0.5 rounded">G</span>
+                  <span>Di chuyển</span>
+                  <span className="font-mono bg-muted px-1.5 py-0.5 rounded">R</span>
+                  <span>Xoay</span>
+                  <span className="font-mono bg-muted px-1.5 py-0.5 rounded">S</span>
+                  <span>Tỷ lệ</span>
+                  <span className="font-mono bg-muted px-1.5 py-0.5 rounded">Esc</span>
+                  <span>Bỏ chọn</span>
+                  <span className="text-muted-foreground/60">— nhấp để chọn, kéo để xoay quanh</span>
+                </div>
               )}
-              {/* Camera snapshot — static screenshot shown in "Góc nhìn máy quay" mode */}
-              {viewMode === "camera" && cameraSnapshot && (
-                <img
-                  src={cameraSnapshot}
-                  className="absolute inset-0 w-full h-full object-contain z-20"
-                  alt="Góc nhìn máy quay"
-                />
+
+              {/* Error */}
+              {error && (
+                <div className="mt-2 flex items-center gap-2 text-destructive text-sm">
+                  <AlertCircle className="h-4 w-4" />
+                  {error}
+                </div>
               )}
             </div>
 
-            {/* Recording progress — shown instead of canvas during recording */}
-            {isRecording && (
-              <div className="flex-1 flex flex-col items-center justify-center gap-4 bg-black rounded-lg p-8">
-                <Loader2 className="h-12 w-12 animate-spin text-primary/70" />
-                <div className="w-full max-w-md space-y-2">
-                  <div className="h-3 bg-muted rounded-full overflow-hidden">
-                    <div className="h-full bg-primary transition-all duration-300" style={{ width: `${progress}%` }} />
+            {/* Right: Controls */}
+            <div className="w-80 shrink-0 border-l border-border flex flex-col">
+              {/* Camera minimap — fixed at top (doesn't scroll with controls) */}
+              {viewMode === "scene" && (
+                <div className="shrink-0 p-4 pb-2 border-b border-border/30">
+                  <div className="relative rounded-lg overflow-hidden border border-border/50 bg-black">
+                    <canvas ref={minimapCanvasRef} width={576} height={324} className="w-full h-auto block" />
+                    <span className="absolute top-1.5 left-2 text-[9px] text-white/70 font-medium bg-black/40 px-1.5 py-0.5 rounded">Góc nhìn máy quay</span>
                   </div>
-                  <p className="text-sm text-muted-foreground text-center">
-                    {(() => {
-                      const total = computeVideoDuration(capturedStart ?? config.cameraStart, capturedEnd ?? config.cameraEnd, config.cameraSpeed, "xyz");
-                      const elapsed = (progress / 100) * total;
-                      const fmt = (s: number) => {
-                        const m = Math.floor(s / 60);
-                        const sec = Math.round(s % 60);
-                        return m > 0 ? `${m}:${String(sec).padStart(2, "0")}` : `${s.toFixed(0)}s`;
-                      };
-                      return `Đang ghi… ${fmt(elapsed)} / ${fmt(total)} (${Math.round(progress)}%)`;
-                    })()}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Key hints for scene view */}
-            {viewMode === "scene" && !isRecording && (
-              <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground px-1 flex-wrap">
-                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">G</span>
-                <span>Di chuyển</span>
-                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">R</span>
-                <span>Xoay</span>
-                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">S</span>
-                <span>Tỷ lệ</span>
-                <span className="font-mono bg-muted px-1.5 py-0.5 rounded">Esc</span>
-                <span>Bỏ chọn</span>
-                <span className="text-muted-foreground/60">— nhấp để chọn, kéo để xoay quanh</span>
-              </div>
-            )}
-
-            {/* Error */}
-            {error && (
-              <div className="mt-2 flex items-center gap-2 text-destructive text-sm">
-                <AlertCircle className="h-4 w-4" />
-                {error}
-              </div>
-            )}
-          </div>
-
-          {/* Right: Controls */}
-          <div className="w-80 shrink-0 border-l border-border flex flex-col">
-            {/* Camera minimap — fixed at top (doesn't scroll with controls) */}
-            {viewMode === "scene" && (
-              <div className="shrink-0 p-4 pb-2 border-b border-border/30">
-                <div className="relative rounded-lg overflow-hidden border border-border/50 bg-black">
-                  <canvas ref={minimapCanvasRef} width={576} height={324} className="w-full h-auto block" />
-                  <span className="absolute top-1.5 left-2 text-[9px] text-white/70 font-medium bg-black/40 px-1.5 py-0.5 rounded">Góc nhìn máy quay</span>
-                </div>
-              </div>
-            )}
-
-            {/* Scrollable controls area */}
-            <div className="overflow-y-auto p-4 space-y-3 flex-1">
-              {/* Template selector — always visible at top */}
-              <StudioTemplateSelector
-                ref={templateSelectorRef}
-                productId={productId}
-                currentConfig={config}
-                onLoadConfig={(c) => {
-                  const migrated = migrateVideoStudioConfig(ensureFullConfig(c));
-                  setConfig(migrated);
-                  // Template already has camera positions — treat them as captured so record is ready
-                  setCapturedStart(migrated.cameraStart ?? null);
-                  setCapturedEnd(migrated.cameraEnd ?? null);
-                }}
-                onNewTemplate={() => {
-                  setConfig(structuredClone(DEFAULT_STUDIO_CONFIG));
-                  // Fresh template — clear captured so user must set positions manually
-                  setCapturedStart(null);
-                  setCapturedEnd(null);
-                }}
-              />
-
-              {/* Quality — always visible */}
-              <div className="flex items-center gap-2 text-xs">
-                <Select value={config.quality} onValueChange={(v) => updateConfig("quality", v as VideoStudioConfig["quality"])}>
-                  <SelectTrigger className="h-7 w-32 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="2k">2K 60fps</SelectItem>
-                    <SelectItem value="2k120">2K 120fps</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select value={config.videoRatio ?? "16:9"} onValueChange={(v) => updateConfig("videoRatio", v as VideoRatio)}>
-                  <SelectTrigger className="h-7 w-24 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {VIDEO_RATIO_PRESETS.map((r) => (
-                      <SelectItem key={r.id} value={r.id}>{r.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Transform controls — shown when object selected in scene view */}
-              {viewMode === "scene" && selectionInfo.type && (
-                <div className="rounded-lg border-2 border-blue-600/60 bg-card/30 overflow-hidden">
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
-                    onClick={() => toggleSection("transform")}
-                  >
-                    <Move className="h-3.5 w-3.5 text-blue-400" />
-                    <span className="text-blue-300">{selectionInfo.type}</span>
-                    <span className="flex-1" />
-                    {expandedSections.has("transform") ? (
-                      <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
-                    ) : (
-                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                    )}
-                  </button>
-                  {expandedSections.has("transform") && (
-                    <div className="px-3 pb-3 pt-2 border-t border-blue-600/30 space-y-3">
-                      {/* Mode buttons */}
-                      <div className="flex gap-1">
-                        <Button
-                          variant={transformMode === "translate" ? "secondary" : "ghost"}
-                          size="sm"
-                          className="flex-1 h-7 text-xs"
-                          onClick={() => {
-                            sceneViewControlsRef.current?.setTransformMode("translate");
-                            setTransformMode("translate");
-                          }}
-                        >
-                          <Move className="h-3 w-3 mr-1" /> Di chuyển
-                        </Button>
-                        <Button
-                          variant={transformMode === "rotate" ? "secondary" : "ghost"}
-                          size="sm"
-                          className="flex-1 h-7 text-xs"
-                          onClick={() => {
-                            sceneViewControlsRef.current?.setTransformMode("rotate");
-                            setTransformMode("rotate");
-                          }}
-                        >
-                          <RotateCcw className="h-3 w-3 mr-1" /> Xoay
-                        </Button>
-                        <Button
-                          variant={transformMode === "scale" ? "secondary" : "ghost"}
-                          size="sm"
-                          className="flex-1 h-7 text-xs"
-                          onClick={() => {
-                            sceneViewControlsRef.current?.setTransformMode("scale");
-                            setTransformMode("scale");
-                          }}
-                        >
-                          <Maximize2 className="h-3 w-3 mr-1" /> Tỷ lệ
-                        </Button>
-                      </div>
-                      {/* Editable value inputs */}
-                      {transformValues && (
-                        <div className="space-y-2">
-                          <div className="space-y-1">
-                            <Label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Vị trí</Label>
-                            <div className="grid grid-cols-3 gap-1.5">
-                              <TransformInput label="X" value={transformValues.position.x} onChange={(v) => applyTransformValue("x", "position", v)} />
-                              <TransformInput label="Y" value={transformValues.position.y} onChange={(v) => applyTransformValue("y", "position", v)} />
-                              <TransformInput label="Z" value={transformValues.position.z} onChange={(v) => applyTransformValue("z", "position", v)} />
-                            </div>
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Xoay</Label>
-                            <div className="grid grid-cols-3 gap-1.5">
-                              <TransformInput label="X" value={transformValues.rotation.x} onChange={(v) => applyTransformValue("x", "rotation", v)} suffix="°" />
-                              <TransformInput label="Y" value={transformValues.rotation.y} onChange={(v) => applyTransformValue("y", "rotation", v)} suffix="°" />
-                              <TransformInput label="Z" value={transformValues.rotation.z} onChange={(v) => applyTransformValue("z", "rotation", v)} suffix="°" />
-                            </div>
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Tỷ lệ</Label>
-                            <div className="grid grid-cols-3 gap-1.5">
-                              <TransformInput label="X" value={transformValues.scale.x} onChange={(v) => applyTransformValue("x", "scale", v)} />
-                              <TransformInput label="Y" value={transformValues.scale.y} onChange={(v) => applyTransformValue("y", "scale", v)} />
-                              <TransformInput label="Z" value={transformValues.scale.z} onChange={(v) => applyTransformValue("z", "scale", v)} />
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
               )}
 
-              {/* ---- Dynamic section cards ---- */}
-              {(() => {
-                // The active (auto-expanded by selection) section renders first, rest in default order
-                const defaultOrder = ["cue", "camera", "cue-hdri", "lights", "background", "shadow"] as const;
-                const active = autoExpandedSectionRef.current;
-                const ordered = active ? [active, ...defaultOrder.filter((s) => s !== active)] : [...defaultOrder];
+              {/* Scrollable controls area */}
+              <div className="overflow-y-auto p-4 space-y-3 flex-1">
+                {/* Template selector — always visible at top */}
+                <StudioTemplateSelector
+                  ref={templateSelectorRef}
+                  productId={productId}
+                  currentConfig={config}
+                  onLoadConfig={(c) => {
+                    const migrated = migrateVideoStudioConfig(ensureFullConfig(c));
+                    setConfig(migrated);
+                    // Template already has camera positions — treat them as captured so record is ready
+                    setCapturedStart(migrated.cameraStart ?? null);
+                    setCapturedEnd(migrated.cameraEnd ?? null);
+                  }}
+                  onNewTemplate={() => {
+                    setConfig(structuredClone(DEFAULT_STUDIO_CONFIG));
+                    // Fresh template — clear captured so user must set positions manually
+                    setCapturedStart(null);
+                    setCapturedEnd(null);
+                  }}
+                />
 
-                return ordered.map((sectionId) => {
-                  switch (sectionId) {
-                    case "cue":
-                      return (
-                        <div key="cue" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
-                          <button
-                            type="button"
-                            className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
-                            onClick={() => toggleSection("cue")}
+                {/* Quality — always visible */}
+                <div className="flex items-center gap-2 text-xs">
+                  <Select value={config.quality} onValueChange={(v) => updateConfig("quality", v as VideoStudioConfig["quality"])}>
+                    <SelectTrigger className="h-7 w-32 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="2k">2K 60fps</SelectItem>
+                      <SelectItem value="2k120">2K 120fps</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select value={config.videoRatio ?? "16:9"} onValueChange={(v) => updateConfig("videoRatio", v as VideoRatio)}>
+                    <SelectTrigger className="h-7 w-24 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {VIDEO_RATIO_PRESETS.map((r) => (
+                        <SelectItem key={r.id} value={r.id}>
+                          {r.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Transform controls — shown when object selected in scene view */}
+                {viewMode === "scene" && selectionInfo.type && (
+                  <div className="rounded-lg border-2 border-blue-600/60 bg-card/30 overflow-hidden">
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
+                      onClick={() => toggleSection("transform")}
+                    >
+                      <Move className="h-3.5 w-3.5 text-blue-400" />
+                      <span className="text-blue-300">{selectionInfo.type}</span>
+                      <span className="flex-1" />
+                      {expandedSections.has("transform") ? (
+                        <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                      )}
+                    </button>
+                    {expandedSections.has("transform") && (
+                      <div className="px-3 pb-3 pt-2 border-t border-blue-600/30 space-y-3">
+                        {/* Mode buttons */}
+                        <div className="flex gap-1">
+                          <Button
+                            variant={transformMode === "translate" ? "secondary" : "ghost"}
+                            size="sm"
+                            className="flex-1 h-7 text-xs"
+                            onClick={() => {
+                              sceneViewControlsRef.current?.setTransformMode("translate");
+                              setTransformMode("translate");
+                            }}
                           >
-                            <Box className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span>Thiết lập Cơ</span>
-                            <span className="flex-1" />
-                            {expandedSections.has("cue") ? (
-                              <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
-                            ) : (
-                              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                            )}
-                          </button>
-                          {expandedSections.has("cue") && (
-                            <div className="px-3 pb-3 pt-2 border-t border-border/30">
-                              <CueSetupPanel cueConfig={config.cueConfig} onChange={(cueConfig) => updateConfig("cueConfig", cueConfig)} />
-                            </div>
-                          )}
+                            <Move className="h-3 w-3 mr-1" /> Di chuyển
+                          </Button>
+                          <Button
+                            variant={transformMode === "rotate" ? "secondary" : "ghost"}
+                            size="sm"
+                            className="flex-1 h-7 text-xs"
+                            onClick={() => {
+                              sceneViewControlsRef.current?.setTransformMode("rotate");
+                              setTransformMode("rotate");
+                            }}
+                          >
+                            <RotateCcw className="h-3 w-3 mr-1" /> Xoay
+                          </Button>
+                          <Button
+                            variant={transformMode === "scale" ? "secondary" : "ghost"}
+                            size="sm"
+                            className="flex-1 h-7 text-xs"
+                            onClick={() => {
+                              sceneViewControlsRef.current?.setTransformMode("scale");
+                              setTransformMode("scale");
+                            }}
+                          >
+                            <Maximize2 className="h-3 w-3 mr-1" /> Tỷ lệ
+                          </Button>
                         </div>
-                      );
-                    case "camera":
-                      return (
-                        <div key="camera" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
-                          <button
-                            type="button"
-                            className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
-                            onClick={() => toggleSection("camera")}
-                          >
-                            <Camera className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span>Máy ảnh</span>
-                            <span className="flex-1" />
-                            {expandedSections.has("camera") ? (
-                              <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
-                            ) : (
-                              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                            )}
-                          </button>
-                          {expandedSections.has("camera") && (
-                            <div className="px-3 pb-3 pt-2 border-t border-border/30">
-                              <CameraControlsPanel
-                                cameraStart={capturedStart ?? config.cameraStart}
-                                cameraEnd={capturedEnd ?? config.cameraEnd}
-                                cameraSpeed={config.cameraSpeed}
-                                easing={config.easing}
-                                onStartChange={(s) => updateConfig("cameraStart", s)}
-                                onEndChange={(e) => updateConfig("cameraEnd", e)}
-                                onSpeedChange={(s) => updateConfig("cameraSpeed", s)}
-                                onEasingChange={(e) => updateConfig("easing", e)}
-                                onSetStart={handleSetStart}
-                                onSetEnd={handleSetEnd}
-                                startPositionSet={capturedStart !== null}
-                                endPositionSet={capturedEnd !== null}
-                              />
-                            </div>
-                          )}
-                        </div>
-                      );
-                    case "background":
-                      return (
-                        <div key="background" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
-                          <button
-                            type="button"
-                            className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
-                            onClick={() => toggleSection("background")}
-                          >
-                            <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span>Nền</span>
-                            <span className="flex-1" />
-                            {expandedSections.has("background") ? (
-                              <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
-                            ) : (
-                              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                            )}
-                          </button>
-                          {expandedSections.has("background") && (
-                            <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
-                              <BackgroundPanel
-                                wallSurface={config.wallSurface}
-                                tableSurface={config.tableSurface}
-                                onWallSurfaceChange={(s) => updateConfig("wallSurface", s)}
-                                onTableSurfaceChange={(s) => updateConfig("tableSurface", s)}
-                              />
-                            </div>
-                          )}
-                        </div>
-                      );
-                    case "cue-hdri":
-                      return (
-                        <div key="cue-hdri" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
-                          <button
-                            type="button"
-                            className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
-                            onClick={() => toggleSection("cue-hdri")}
-                          >
-                            <Sun className="h-3.5 w-3.5 text-yellow-400" />
-                            <span>HDRI Cơ</span>
-                            <span className="flex-1" />
-                            {expandedSections.has("cue-hdri") ? (
-                              <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
-                            ) : (
-                              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                            )}
-                          </button>
-                          {expandedSections.has("cue-hdri") && (
-                            <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
-                              <p className="text-[10px] text-muted-foreground">Môi trường HDRI chỉ áp dụng cho cơ (không áp dụng cho bề mặt studio).</p>
-                              {/* HDRI Type */}
-                              <div className="space-y-0.5">
-                                <Label className="text-[10px] text-muted-foreground">Môi trường</Label>
-                                <Select
-                                  value={config.cueHdri?.hdriType ?? DEFAULT_CUE_HDRI.hdriType}
-                                  onValueChange={(v) => {
-                                    setConfig((prev) => ({
-                                      ...prev,
-                                      cueHdri: { ...(prev.cueHdri ?? DEFAULT_CUE_HDRI), hdriType: v },
-                                    }));
-                                  }}
-                                >
-                                  <SelectTrigger className="h-6 text-[10px]">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {HDRI_OPTIONS_FALLBACK.filter((h) => h.id !== STUDIO_WHITE_HDRI).map((h) => (
-                                      <SelectItem key={h.id} value={h.id}>
-                                        {h.label}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                              {/* Rotation Y (Horizontal) */}
-                              <div className="space-y-0.5">
-                                <Label className="text-[10px] text-muted-foreground">Ngang — {(config.cueHdri?.rotationY ?? DEFAULT_CUE_HDRI.rotationY).toFixed(0)}°</Label>
-                                <Slider
-                                  value={[config.cueHdri?.rotationY ?? DEFAULT_CUE_HDRI.rotationY]}
-                                  onValueChange={([v]) => {
-                                    setConfig((prev) => ({
-                                      ...prev,
-                                      cueHdri: { ...(prev.cueHdri ?? DEFAULT_CUE_HDRI), rotationY: v },
-                                    }));
-                                  }}
-                                  min={0}
-                                  max={360}
-                                  step={1}
-                                />
-                              </div>
-                              {/* Rotation X (Vertical) */}
-                              <div className="space-y-0.5">
-                                <Label className="text-[10px] text-muted-foreground">Dọc — {(config.cueHdri?.rotationX ?? DEFAULT_CUE_HDRI.rotationX).toFixed(0)}°</Label>
-                                <Slider
-                                  value={[config.cueHdri?.rotationX ?? DEFAULT_CUE_HDRI.rotationX]}
-                                  onValueChange={([v]) => {
-                                    setConfig((prev) => ({
-                                      ...prev,
-                                      cueHdri: { ...(prev.cueHdri ?? DEFAULT_CUE_HDRI), rotationX: v },
-                                    }));
-                                  }}
-                                  min={0}
-                                  max={360}
-                                  step={1}
-                                />
-                              </div>
-                              {/* Intensity */}
-                              <div className="space-y-0.5">
-                                <Label className="text-[10px] text-muted-foreground">
-                                  Cường độ — {((config.cueHdri?.intensity ?? DEFAULT_CUE_HDRI.intensity) * 100).toFixed(0)}%
-                                </Label>
-                                <Slider
-                                  value={[config.cueHdri?.intensity ?? DEFAULT_CUE_HDRI.intensity]}
-                                  onValueChange={([v]) => {
-                                    setConfig((prev) => ({
-                                      ...prev,
-                                      cueHdri: { ...(prev.cueHdri ?? DEFAULT_CUE_HDRI), intensity: v },
-                                    }));
-                                  }}
-                                  min={0}
-                                  max={3}
-                                  step={0.05}
-                                />
+                        {/* Editable value inputs */}
+                        {transformValues && (
+                          <div className="space-y-2">
+                            <div className="space-y-1">
+                              <Label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Vị trí</Label>
+                              <div className="grid grid-cols-3 gap-1.5">
+                                <TransformInput label="X" value={transformValues.position.x} onChange={(v) => applyTransformValue("x", "position", v)} />
+                                <TransformInput label="Y" value={transformValues.position.y} onChange={(v) => applyTransformValue("y", "position", v)} />
+                                <TransformInput label="Z" value={transformValues.position.z} onChange={(v) => applyTransformValue("z", "position", v)} />
                               </div>
                             </div>
-                          )}
-                        </div>
-                      );
-                    case "lights":
-                      return (
-                        <div key="lights" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
-                          <div className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors">
-                            <div
-                              role="button"
-                              tabIndex={0}
-                              className="flex items-center gap-2 flex-1 cursor-pointer"
-                              onClick={() => toggleSection("lights")}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" || e.key === " ") {
-                                  e.preventDefault();
-                                  toggleSection("lights");
-                                }
-                              }}
+                            <div className="space-y-1">
+                              <Label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Xoay</Label>
+                              <div className="grid grid-cols-3 gap-1.5">
+                                <TransformInput label="X" value={transformValues.rotation.x} onChange={(v) => applyTransformValue("x", "rotation", v)} suffix="°" />
+                                <TransformInput label="Y" value={transformValues.rotation.y} onChange={(v) => applyTransformValue("y", "rotation", v)} suffix="°" />
+                                <TransformInput label="Z" value={transformValues.rotation.z} onChange={(v) => applyTransformValue("z", "rotation", v)} suffix="°" />
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Tỷ lệ</Label>
+                              <div className="grid grid-cols-3 gap-1.5">
+                                <TransformInput label="X" value={transformValues.scale.x} onChange={(v) => applyTransformValue("x", "scale", v)} />
+                                <TransformInput label="Y" value={transformValues.scale.y} onChange={(v) => applyTransformValue("y", "scale", v)} />
+                                <TransformInput label="Z" value={transformValues.scale.z} onChange={(v) => applyTransformValue("z", "scale", v)} />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ---- Dynamic section cards ---- */}
+                {(() => {
+                  // The active (auto-expanded by selection) section renders first, rest in default order
+                  const defaultOrder = ["cue", "camera", "cue-hdri", "lights", "background", "shadow"] as const;
+                  const active = autoExpandedSectionRef.current;
+                  const ordered = active ? [active, ...defaultOrder.filter((s) => s !== active)] : [...defaultOrder];
+
+                  return ordered.map((sectionId) => {
+                    switch (sectionId) {
+                      case "cue":
+                        return (
+                          <div key="cue" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
+                              onClick={() => toggleSection("cue")}
                             >
-                              <Lightbulb className="h-3.5 w-3.5 text-muted-foreground" />
-                              <span>Đèn Studio</span>
-                              <span className="ml-1 text-muted-foreground/60">
-                                ({config.hdriConfig.layers.filter((l) => l.enabled !== false).length}/{config.hdriConfig.layers.length})
-                              </span>
-                            </div>
-                            {config.hdriConfig.layers.length < 3 && (
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-5 w-5 p-0"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const layers = [...config.hdriConfig.layers];
-                                  const newLayer = createDefaultHdriLayer();
-                                  // Offset rotation for each new layer
-                                  newLayer.rotationY = (layers.length * 120) % 360;
-                                  newLayer.intensity = 0.5;
-                                  layers.push(newLayer);
-                                  setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                              <Box className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span>Thiết lập Cơ</span>
+                              <span className="flex-1" />
+                              {expandedSections.has("cue") ? (
+                                <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
+                              ) : (
+                                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                              )}
+                            </button>
+                            {expandedSections.has("cue") && (
+                              <div className="px-3 pb-3 pt-2 border-t border-border/30">
+                                <CueSetupPanel cueConfig={config.cueConfig} onChange={(cueConfig) => updateConfig("cueConfig", cueConfig)} />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      case "camera":
+                        return (
+                          <div key="camera" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
+                              onClick={() => toggleSection("camera")}
+                            >
+                              <Camera className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span>Máy quay</span>
+                              <span className="flex-1" />
+                              {expandedSections.has("camera") ? (
+                                <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
+                              ) : (
+                                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                              )}
+                            </button>
+                            {expandedSections.has("camera") && (
+                              <div className="px-3 pb-3 pt-2 border-t border-border/30">
+                                <CameraControlsPanel
+                                  cameraStart={capturedStart ?? config.cameraStart}
+                                  cameraEnd={capturedEnd ?? config.cameraEnd}
+                                  cameraSpeed={config.cameraSpeed}
+                                  easing={config.easing}
+                                  onStartChange={(s) => updateConfig("cameraStart", s)}
+                                  onEndChange={(e) => updateConfig("cameraEnd", e)}
+                                  onSpeedChange={(s) => updateConfig("cameraSpeed", s)}
+                                  onEasingChange={(e) => updateConfig("easing", e)}
+                                  onSetStart={handleSetStart}
+                                  onSetEnd={handleSetEnd}
+                                  startPositionSet={capturedStart !== null}
+                                  endPositionSet={capturedEnd !== null}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      case "background":
+                        return (
+                          <div key="background" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
+                              onClick={() => toggleSection("background")}
+                            >
+                              <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span>Nền</span>
+                              <span className="flex-1" />
+                              {expandedSections.has("background") ? (
+                                <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
+                              ) : (
+                                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                              )}
+                            </button>
+                            {expandedSections.has("background") && (
+                              <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
+                                <BackgroundPanel
+                                  wallSurface={config.wallSurface}
+                                  tableSurface={config.tableSurface}
+                                  onWallSurfaceChange={(s) => updateConfig("wallSurface", s)}
+                                  onTableSurfaceChange={(s) => updateConfig("tableSurface", s)}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      case "cue-hdri":
+                        return (
+                          <div key="cue-hdri" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
+                              onClick={() => toggleSection("cue-hdri")}
+                            >
+                              <Sun className="h-3.5 w-3.5 text-yellow-400" />
+                              <span>HDRI Cơ</span>
+                              <span className="flex-1" />
+                              {expandedSections.has("cue-hdri") ? (
+                                <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
+                              ) : (
+                                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                              )}
+                            </button>
+                            {expandedSections.has("cue-hdri") && (
+                              <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
+                                <p className="text-[10px] text-muted-foreground">Môi trường HDRI chỉ áp dụng cho cơ (không áp dụng cho bề mặt studio).</p>
+                                {/* HDRI Type */}
+                                <div className="space-y-0.5">
+                                  <Label className="text-[10px] text-muted-foreground">Môi trường</Label>
+                                  <Select
+                                    value={config.cueHdri?.hdriType ?? DEFAULT_CUE_HDRI.hdriType}
+                                    onValueChange={(v) => {
+                                      setConfig((prev) => ({
+                                        ...prev,
+                                        cueHdri: { ...(prev.cueHdri ?? DEFAULT_CUE_HDRI), hdriType: v },
+                                      }));
+                                    }}
+                                  >
+                                    <SelectTrigger className="h-6 text-[10px]">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {HDRI_OPTIONS_FALLBACK.filter((h) => h.id !== STUDIO_WHITE_HDRI).map((h) => (
+                                        <SelectItem key={h.id} value={h.id}>
+                                          {h.label}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                {/* Rotation Y (Horizontal) */}
+                                <div className="space-y-0.5">
+                                  <Label className="text-[10px] text-muted-foreground">Ngang — {(config.cueHdri?.rotationY ?? DEFAULT_CUE_HDRI.rotationY).toFixed(0)}°</Label>
+                                  <Slider
+                                    value={[config.cueHdri?.rotationY ?? DEFAULT_CUE_HDRI.rotationY]}
+                                    onValueChange={([v]) => {
+                                      setConfig((prev) => ({
+                                        ...prev,
+                                        cueHdri: { ...(prev.cueHdri ?? DEFAULT_CUE_HDRI), rotationY: v },
+                                      }));
+                                    }}
+                                    min={0}
+                                    max={360}
+                                    step={1}
+                                  />
+                                </div>
+                                {/* Rotation X (Vertical) */}
+                                <div className="space-y-0.5">
+                                  <Label className="text-[10px] text-muted-foreground">Dọc — {(config.cueHdri?.rotationX ?? DEFAULT_CUE_HDRI.rotationX).toFixed(0)}°</Label>
+                                  <Slider
+                                    value={[config.cueHdri?.rotationX ?? DEFAULT_CUE_HDRI.rotationX]}
+                                    onValueChange={([v]) => {
+                                      setConfig((prev) => ({
+                                        ...prev,
+                                        cueHdri: { ...(prev.cueHdri ?? DEFAULT_CUE_HDRI), rotationX: v },
+                                      }));
+                                    }}
+                                    min={0}
+                                    max={360}
+                                    step={1}
+                                  />
+                                </div>
+                                {/* Intensity */}
+                                <div className="space-y-0.5">
+                                  <Label className="text-[10px] text-muted-foreground">
+                                    Cường độ — {((config.cueHdri?.intensity ?? DEFAULT_CUE_HDRI.intensity) * 100).toFixed(0)}%
+                                  </Label>
+                                  <Slider
+                                    value={[config.cueHdri?.intensity ?? DEFAULT_CUE_HDRI.intensity]}
+                                    onValueChange={([v]) => {
+                                      setConfig((prev) => ({
+                                        ...prev,
+                                        cueHdri: { ...(prev.cueHdri ?? DEFAULT_CUE_HDRI), intensity: v },
+                                      }));
+                                    }}
+                                    min={0}
+                                    max={3}
+                                    step={0.05}
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      case "lights":
+                        return (
+                          <div key="lights" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
+                            <div className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors">
+                              <div
+                                role="button"
+                                tabIndex={0}
+                                className="flex items-center gap-2 flex-1 cursor-pointer"
+                                onClick={() => toggleSection("lights")}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    toggleSection("lights");
+                                  }
                                 }}
                               >
-                                <Plus className="h-3 w-3" />
-                              </Button>
+                                <Lightbulb className="h-3.5 w-3.5 text-muted-foreground" />
+                                <span>Đèn Studio</span>
+                                <span className="ml-1 text-muted-foreground/60">
+                                  ({config.hdriConfig.layers.filter((l) => l.enabled !== false).length}/{config.hdriConfig.layers.length})
+                                </span>
+                              </div>
+                              {config.hdriConfig.layers.length < 3 && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-5 w-5 p-0"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const layers = [...config.hdriConfig.layers];
+                                    const newLayer = createDefaultHdriLayer();
+                                    // Offset rotation for each new layer
+                                    newLayer.rotationY = (layers.length * 120) % 360;
+                                    newLayer.intensity = 0.5;
+                                    layers.push(newLayer);
+                                    setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                  }}
+                                >
+                                  <Plus className="h-3 w-3" />
+                                </Button>
+                              )}
+                              <div
+                                role="button"
+                                tabIndex={0}
+                                className="cursor-pointer"
+                                onClick={() => toggleSection("lights")}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    toggleSection("lights");
+                                  }
+                                }}
+                              >
+                                {expandedSections.has("lights") ? (
+                                  <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
+                                ) : (
+                                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                                )}
+                              </div>
+                            </div>
+                            {expandedSections.has("lights") && (
+                              <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
+                                <p className="text-[10px] text-muted-foreground">Đèn studio kiểm soát hướng bóng và ánh sáng bề mặt. Nhấn G để di chuyển, S để thu phóng.</p>
+                                {/* Surface light disable toggle */}
+                                <label className="flex items-center gap-2 cursor-pointer select-none">
+                                  <Checkbox
+                                    checked={config.surfaceLightDisabled === true}
+                                    onCheckedChange={(checked) => updateConfig("surfaceLightDisabled", checked === true)}
+                                    className="h-3 w-3"
+                                  />
+                                  <span className="text-[10px] text-muted-foreground leading-tight">
+                                    Tắt ảnh hưởng đèn lên bề mặt <span className="text-muted-foreground/50">(tường & bàn trắng thuần)</span>
+                                  </span>
+                                </label>
+                                {config.hdriConfig.layers.map((layer, idx) => (
+                                  <div key={layer.id} className="rounded-md border border-border/40 bg-background/30 p-2 space-y-2">
+                                    {/* Header */}
+                                    <div className="flex items-center gap-1.5">
+                                      <Checkbox
+                                        checked={layer.enabled !== false}
+                                        onCheckedChange={(checked) => {
+                                          const layers = [...config.hdriConfig.layers];
+                                          layers[idx] = { ...layers[idx], enabled: checked === true };
+                                          setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                        }}
+                                        className="h-3 w-3"
+                                      />
+                                      <Sun className="h-3 w-3 text-green-400" />
+                                      <span className="text-[10px] font-medium flex-1">Đèn Studio {idx + 1}</span>
+                                      {config.hdriConfig.layers.length > 1 && (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-5 w-5 p-0 text-muted-foreground hover:text-destructive"
+                                          onClick={() => {
+                                            const layers = config.hdriConfig.layers.filter((_, i) => i !== idx);
+                                            setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                          }}
+                                        >
+                                          <Trash2 className="h-3 w-3" />
+                                        </Button>
+                                      )}
+                                    </div>
+                                    {/* Studio lights are always Studio White — no HDRI dropdown */}
+                                    <div className="space-y-0.5">
+                                      <Label className="text-[10px] text-muted-foreground">Môi trường</Label>
+                                      <div className="h-6 px-2 flex items-center rounded-md border border-border/40 bg-muted/30 text-[10px] text-muted-foreground">
+                                        Studio White
+                                      </div>
+                                    </div>
+                                    {/* Light Color */}
+                                    <div className="space-y-0.5">
+                                      <Label className="text-[10px] text-muted-foreground">Màu đèn</Label>
+                                      <div className="flex items-center gap-1.5">
+                                        <input
+                                          type="color"
+                                          value={layer.lightColor ?? "#ffffff"}
+                                          onChange={(e) => {
+                                            const layers = [...config.hdriConfig.layers];
+                                            layers[idx] = { ...layers[idx], lightColor: e.target.value };
+                                            setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                          }}
+                                          className="w-6 h-6 rounded cursor-pointer border border-border/50 p-0"
+                                        />
+                                        <span className="text-[10px] text-muted-foreground font-mono">{(layer.lightColor ?? "#ffffff").toUpperCase()}</span>
+                                      </div>
+                                    </div>
+                                    {/* Intensity */}
+                                    <div className="space-y-0.5">
+                                      <Label className="text-[10px] text-muted-foreground">Cường độ — {((layer.intensity ?? 1) * 100).toFixed(0)}%</Label>
+                                      <Slider
+                                        value={[layer.intensity ?? 1]}
+                                        onValueChange={([v]) => {
+                                          const layers = [...config.hdriConfig.layers];
+                                          layers[idx] = { ...layers[idx], intensity: v };
+                                          setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
+                                        }}
+                                        min={0}
+                                        max={3}
+                                        step={0.05}
+                                      />
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
                             )}
+                          </div>
+                        );
+                      case "shadow":
+                        return (
+                          <div key="shadow" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
                             <div
                               role="button"
                               tabIndex={0}
-                              className="cursor-pointer"
-                              onClick={() => toggleSection("lights")}
+                              className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors cursor-pointer"
+                              onClick={() => toggleSection("shadow")}
                               onKeyDown={(e) => {
                                 if (e.key === "Enter" || e.key === " ") {
                                   e.preventDefault();
-                                  toggleSection("lights");
+                                  toggleSection("shadow");
                                 }
                               }}
                             >
-                              {expandedSections.has("lights") ? (
+                              <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span>Bóng</span>
+                              <span className="flex-1" />
+                              <Checkbox
+                                checked={config.shadow.enabled}
+                                onCheckedChange={(checked) => {
+                                  updateConfig("shadow", {
+                                    ...config.shadow,
+                                    enabled: checked === true,
+                                  });
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                className="h-3.5 w-3.5"
+                              />
+                              {expandedSections.has("shadow") ? (
                                 <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
                               ) : (
                                 <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                               )}
                             </div>
-                          </div>
-                          {expandedSections.has("lights") && (
-                            <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
-                              <p className="text-[10px] text-muted-foreground">Đèn studio kiểm soát hướng bóng và ánh sáng bề mặt. Nhấn G để di chuyển, S để thu phóng.</p>
-                              {/* Surface light disable toggle */}
-                              <label className="flex items-center gap-2 cursor-pointer select-none">
-                                <Checkbox
-                                  checked={config.surfaceLightDisabled === true}
-                                  onCheckedChange={(checked) => updateConfig("surfaceLightDisabled", checked === true)}
-                                  className="h-3 w-3"
-                                />
-                                <span className="text-[10px] text-muted-foreground leading-tight">
-                                  Tắt ảnh hưởng đèn lên bề mặt <span className="text-muted-foreground/50">(tường & bàn trắng thuần)</span>
-                                </span>
-                              </label>
-                              {config.hdriConfig.layers.map((layer, idx) => (
-                                <div key={layer.id} className="rounded-md border border-border/40 bg-background/30 p-2 space-y-2">
-                                  {/* Header */}
-                                  <div className="flex items-center gap-1.5">
-                                    <Checkbox
-                                      checked={layer.enabled !== false}
-                                      onCheckedChange={(checked) => {
-                                        const layers = [...config.hdriConfig.layers];
-                                        layers[idx] = { ...layers[idx], enabled: checked === true };
-                                        setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
-                                      }}
-                                      className="h-3 w-3"
-                                    />
-                                    <Sun className="h-3 w-3 text-green-400" />
-                                    <span className="text-[10px] font-medium flex-1">Đèn Studio {idx + 1}</span>
-                                    {config.hdriConfig.layers.length > 1 && (
-                                      <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-5 w-5 p-0 text-muted-foreground hover:text-destructive"
-                                        onClick={() => {
-                                          const layers = config.hdriConfig.layers.filter((_, i) => i !== idx);
-                                          setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
-                                        }}
-                                      >
-                                        <Trash2 className="h-3 w-3" />
-                                      </Button>
-                                    )}
-                                  </div>
-                                  {/* Studio lights are always Studio White — no HDRI dropdown */}
-                                  <div className="space-y-0.5">
-                                    <Label className="text-[10px] text-muted-foreground">Môi trường</Label>
-                                    <div className="h-6 px-2 flex items-center rounded-md border border-border/40 bg-muted/30 text-[10px] text-muted-foreground">Studio White</div>
-                                  </div>
-                                  {/* Light Color */}
-                                  <div className="space-y-0.5">
-                                    <Label className="text-[10px] text-muted-foreground">Màu đèn</Label>
-                                    <div className="flex items-center gap-1.5">
-                                      <input
-                                        type="color"
-                                        value={layer.lightColor ?? "#ffffff"}
-                                        onChange={(e) => {
-                                          const layers = [...config.hdriConfig.layers];
-                                          layers[idx] = { ...layers[idx], lightColor: e.target.value };
-                                          setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
-                                        }}
-                                        className="w-6 h-6 rounded cursor-pointer border border-border/50 p-0"
-                                      />
-                                      <span className="text-[10px] text-muted-foreground font-mono">{(layer.lightColor ?? "#ffffff").toUpperCase()}</span>
-                                    </div>
-                                  </div>
-                                  {/* Intensity */}
-                                  <div className="space-y-0.5">
-                                    <Label className="text-[10px] text-muted-foreground">Cường độ — {((layer.intensity ?? 1) * 100).toFixed(0)}%</Label>
-                                    <Slider
-                                      value={[layer.intensity ?? 1]}
-                                      onValueChange={([v]) => {
-                                        const layers = [...config.hdriConfig.layers];
-                                        layers[idx] = { ...layers[idx], intensity: v };
-                                        setConfig((prev) => ({ ...prev, hdriConfig: { layers } }));
-                                      }}
-                                      min={0}
-                                      max={3}
-                                      step={0.05}
-                                    />
-                                  </div>
+                            {expandedSections.has("shadow") && config.shadow.enabled && (
+                              <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
+                                <div className="space-y-1.5">
+                                  <Label className="text-xs text-muted-foreground">Cường độ — {Math.round(config.shadow.intensity * 100)}%</Label>
+                                  <Slider
+                                    value={[config.shadow.intensity]}
+                                    onValueChange={([v]) => updateConfig("shadow", { ...config.shadow, intensity: v })}
+                                    min={0}
+                                    max={1}
+                                    step={0.05}
+                                  />
                                 </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    case "shadow":
-                      return (
-                        <div key="shadow" className="rounded-lg border border-border/50 bg-card/30 overflow-hidden">
-                          <div
-                            role="button"
-                            tabIndex={0}
-                            className="flex w-full items-center gap-2 px-3 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors cursor-pointer"
-                            onClick={() => toggleSection("shadow")}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
-                                e.preventDefault();
-                                toggleSection("shadow");
-                              }
-                            }}
-                          >
-                            <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span>Bóng</span>
-                            <span className="flex-1" />
-                            <Checkbox
-                              checked={config.shadow.enabled}
-                              onCheckedChange={(checked) => {
-                                updateConfig("shadow", {
-                                  ...config.shadow,
-                                  enabled: checked === true,
-                                });
-                              }}
-                              onClick={(e) => e.stopPropagation()}
-                              className="h-3.5 w-3.5"
-                            />
-                            {expandedSections.has("shadow") ? (
-                              <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
-                            ) : (
-                              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                                <div className="space-y-1.5">
+                                  <Label className="text-xs text-muted-foreground">Làm mờ — {config.shadow.blur ?? 3}</Label>
+                                  <Slider
+                                    value={[config.shadow.blur ?? 3]}
+                                    onValueChange={([v]) => updateConfig("shadow", { ...config.shadow, blur: v })}
+                                    min={0}
+                                    max={10}
+                                    step={0.5}
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label className="text-xs text-muted-foreground">Độ mềm — {((config.shadow.softness ?? 0.45) * 100).toFixed(0)}%</Label>
+                                  <Slider
+                                    value={[config.shadow.softness ?? 0.45]}
+                                    onValueChange={([v]) => updateConfig("shadow", { ...config.shadow, softness: v })}
+                                    min={0}
+                                    max={1}
+                                    step={0.05}
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label className="text-xs text-muted-foreground">Bù X — {(config.shadow.offsetX ?? 0).toFixed(1)}</Label>
+                                  <Slider
+                                    value={[config.shadow.offsetX ?? 0]}
+                                    onValueChange={([v]) => updateConfig("shadow", { ...config.shadow, offsetX: v })}
+                                    min={-5}
+                                    max={5}
+                                    step={0.2}
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label className="text-xs text-muted-foreground">Bù Y — {(config.shadow.offsetY ?? 0).toFixed(1)}</Label>
+                                  <Slider
+                                    value={[config.shadow.offsetY ?? 0]}
+                                    onValueChange={([v]) => updateConfig("shadow", { ...config.shadow, offsetY: v })}
+                                    min={-5}
+                                    max={5}
+                                    step={0.2}
+                                  />
+                                </div>
+                              </div>
                             )}
                           </div>
-                          {expandedSections.has("shadow") && config.shadow.enabled && (
-                            <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
-                              <div className="space-y-1.5">
-                                <Label className="text-xs text-muted-foreground">Cường độ — {Math.round(config.shadow.intensity * 100)}%</Label>
-                                <Slider
-                                  value={[config.shadow.intensity]}
-                                  onValueChange={([v]) => updateConfig("shadow", { ...config.shadow, intensity: v })}
-                                  min={0}
-                                  max={1}
-                                  step={0.05}
-                                />
-                              </div>
-                              <div className="space-y-1.5">
-                                <Label className="text-xs text-muted-foreground">Làm mờ — {config.shadow.blur ?? 3}</Label>
-                                <Slider
-                                  value={[config.shadow.blur ?? 3]}
-                                  onValueChange={([v]) => updateConfig("shadow", { ...config.shadow, blur: v })}
-                                  min={0}
-                                  max={10}
-                                  step={0.5}
-                                />
-                              </div>
-                              <div className="space-y-1.5">
-                                <Label className="text-xs text-muted-foreground">Độ mềm — {((config.shadow.softness ?? 0.45) * 100).toFixed(0)}%</Label>
-                                <Slider
-                                  value={[config.shadow.softness ?? 0.45]}
-                                  onValueChange={([v]) => updateConfig("shadow", { ...config.shadow, softness: v })}
-                                  min={0}
-                                  max={1}
-                                  step={0.05}
-                                />
-                              </div>
-                              <div className="space-y-1.5">
-                                <Label className="text-xs text-muted-foreground">Bù X — {(config.shadow.offsetX ?? 0).toFixed(1)}</Label>
-                                <Slider
-                                  value={[config.shadow.offsetX ?? 0]}
-                                  onValueChange={([v]) => updateConfig("shadow", { ...config.shadow, offsetX: v })}
-                                  min={-5}
-                                  max={5}
-                                  step={0.2}
-                                />
-                              </div>
-                              <div className="space-y-1.5">
-                                <Label className="text-xs text-muted-foreground">Bù Y — {(config.shadow.offsetY ?? 0).toFixed(1)}</Label>
-                                <Slider
-                                  value={[config.shadow.offsetY ?? 0]}
-                                  onValueChange={([v]) => updateConfig("shadow", { ...config.shadow, offsetY: v })}
-                                  min={-5}
-                                  max={5}
-                                  step={0.2}
-                                />
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    default:
-                      return null;
-                  }
-                });
-              })()}
+                        );
+                      default:
+                        return null;
+                    }
+                  });
+                })()}
+              </div>
             </div>
           </div>
-          </div>{/* end editor tab inner flex */}
-        </div>{/* end outer relative container */}
+          {/* end editor tab inner flex */}
+        </div>
+        {/* end outer relative container */}
 
         {/* Footer */}
         <DialogFooter className="px-6 py-4 border-t border-border">

@@ -14,13 +14,13 @@ export interface CameraKeyframe {
 
 export const DEFAULT_CAMERA_START: CameraKeyframe = {
   x: 0,
-  y: 0,
+  y: 5.5,
   z: 3,
 };
 
 export const DEFAULT_CAMERA_END: CameraKeyframe = {
   x: 0,
-  y: 7,
+  y: 12.5,
   z: 2,
 };
 
@@ -59,7 +59,7 @@ export const MAX_CUE_INSTANCES = 5;
 export const CUE_BOUNDS = {
   xMin: -17,
   xMax: 17,
-  yMin: -7.5,   // table surface
+  yMin: -2,     // table surface (raised from -7.5)
   yMax: 16,     // wall top
   zMin: -5.5,   // back wall plane
   zMax: 6.5,    // front edge of table (FRAME_WALL_Z + FRAME_TABLE_DEPTH)
@@ -96,7 +96,7 @@ export const DEFAULT_CUE_CONFIG: CueConfig = {
   instances: [{
     id: "main",
     positionX: 0,
-    positionY: 0,
+    positionY: 5.5,
     positionZ: 0,
     scale: 7,
     isMain: true,
@@ -463,7 +463,7 @@ export function createCueInstance(offsetX = 2): CueInstance {
   return {
     id: crypto.randomUUID(),
     positionX: offsetX,
-    positionY: 0,
+    positionY: 5.5,
     positionZ: 0,
     scale: 7,
     isMain: false,

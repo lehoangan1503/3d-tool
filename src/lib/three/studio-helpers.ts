@@ -22,7 +22,7 @@ export function forceWhiteWalls(esm: ExtractorSceneManager): void {
   scene.traverse((obj) => {
     if (!(obj instanceof THREE.Mesh)) return;
     const t = obj.userData?.type;
-    if (t === "wall" || t === "table") {
+    if (t === "wall" || t === "table" || t === "corner-fill") {
       const oldMat = obj.material as THREE.Material;
       obj.material = createWhiteImmuneMaterial();
       oldMat.dispose();

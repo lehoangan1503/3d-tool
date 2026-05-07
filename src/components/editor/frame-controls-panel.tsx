@@ -80,7 +80,8 @@ interface FrameControlsPanelProps {
   // Reference management
   references: ExtractorReference[];
   selectedReferenceId: string | null;
-  onSelectReference: (id: string | null) => void;
+  selectedRefMeta: { id: string; name: string; isOwned: boolean } | null;
+  onSelectReference: (id: string | null, meta: { id: string; name: string; isOwned: boolean } | null) => void;
 
   // Frame management
   frames: ExtractorFrame[];
@@ -153,9 +154,7 @@ function FramesListSection({
   return (
     <div className="shrink-0 border-t bg-muted/20">
       <div className="flex items-center justify-between px-3 pt-2 pb-1">
-        <Label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-          {frames.length} khung trong canvas
-        </Label>
+        <Label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">{frames.length} khung trong canvas</Label>
         <span className="text-[10px] text-muted-foreground/50">kéo để sắp xếp</span>
       </div>
       <div className="overflow-y-auto max-h-[168px] px-2 pb-2">
@@ -177,6 +176,7 @@ function FramesListSection({
 export function FrameControlsPanel({
   references,
   selectedReferenceId,
+  selectedRefMeta,
   onSelectReference,
   frames,
   selectedFrame,
@@ -227,7 +227,14 @@ export function FrameControlsPanel({
     search: popoverSearch,
     setSearch: setPopoverSearch,
     loadMore: popoverLoadMore,
+    reload: reloadPopoverRefs,
   } = useReferenceList({ enabled: refPopoverOpen });
+
+  // Accumulate all refs ever seen so name lookups work after popover closes / resets.
+  // Updated synchronously during render (ref, not state) — no stale-closure lag.
+  const seenRefsMap = useRef<Map<string, ExtractorReference>>(new Map());
+  for (const ref of references) seenRefsMap.current.set(ref.id, ref);
+  for (const ref of popoverRefs) seenRefsMap.current.set(ref.id, ref);
 
   // Allow native scroll on the popover list — react-remove-scroll (used by Radix Dialog)
   // blocks wheel events at the document level (bubble phase). A native listener on the list
@@ -326,17 +333,22 @@ export function FrameControlsPanel({
   const submitRename = async () => {
     if (!selectedReferenceId || !renameValue.trim() || !onRenameReference) return;
     await onRenameReference(selectedReferenceId, renameValue.trim());
+    reloadPopoverRefs();
     setIsRenamingRef(false);
   };
 
   const submitDelete = async () => {
     if (!selectedReferenceId || !onDeleteReference) return;
     await onDeleteReference(selectedReferenceId);
+    reloadPopoverRefs();
     setConfirmDeleteRef(false);
   };
-
-  const selectedRefName = selectedReferenceId ? references.find((r) => r.id === selectedReferenceId)?.name ?? "Chưa đặt tên" : null;
-  const selectedRefIsOwned = selectedReferenceId ? (references.find((r) => r.id === selectedReferenceId)?.isOwned ?? false) : false;
+  const selectedRefName = selectedReferenceId
+    ? (seenRefsMap.current.get(selectedReferenceId)?.name ?? selectedRefMeta?.name ?? "Chưa đặt tên")
+    : null;
+  const selectedRefIsOwned = selectedReferenceId
+    ? (seenRefsMap.current.get(selectedReferenceId)?.isOwned ?? selectedRefMeta?.isOwned ?? false)
+    : false;
 
   // No frame selected - show reference/template controls
   if (!selectedFrame) {
@@ -372,7 +384,7 @@ export function FrameControlsPanel({
                     onClick={() => {
                       setIsRenamingRef(false);
                       setConfirmDeleteRef(false);
-                      onSelectReference(null);
+                      onSelectReference(null, null);
                       setRefPopoverOpen(false);
                     }}
                   >
@@ -405,7 +417,7 @@ export function FrameControlsPanel({
                             onClick={() => {
                               setIsRenamingRef(false);
                               setConfirmDeleteRef(false);
-                              onSelectReference(ref.id);
+                              onSelectReference(ref.id, { id: ref.id, name: ref.name, isOwned: ref.isOwned ?? false });
                               setRefPopoverOpen(false);
                             }}
                           >
@@ -416,9 +428,7 @@ export function FrameControlsPanel({
                               <div className="text-sm font-medium truncate">{ref.name}</div>
                               <div className="text-xs text-muted-foreground">
                                 {ref.frames.length} khung
-                                {ref.createdByName && (
-                                  <span className="ml-1.5 opacity-70">· {ref.createdByName}</span>
-                                )}
+                                {ref.createdByName && <span className="ml-1.5 opacity-70">· {ref.createdByName}</span>}
                               </div>
                             </div>
                           </button>
@@ -552,9 +562,7 @@ export function FrameControlsPanel({
             <Button variant="ghost" size="icon" onClick={onDeselectFrame} className="h-8 w-8">
               <ArrowLeft className="w-4 h-4" />
             </Button>
-            <h3 className="font-medium text-sm">
-              {selectedFrame.name || `Frame ${selectedFrame.order + 1}`}
-            </h3>
+            <h3 className="font-medium text-sm">{selectedFrame.name || `Frame ${selectedFrame.order + 1}`}</h3>
           </div>
           <Button variant="ghost" size="icon" onClick={() => onDeleteFrame(selectedFrame.id)} className="h-8 w-8 text-destructive hover:text-destructive">
             <Trash2 className="w-4 h-4" />
@@ -854,7 +862,10 @@ export function FrameControlsPanel({
                     if (enabled) {
                       updates.transform = {
                         ...(selectedFrame.transform ?? {}),
-                        x: 0, y: 0, width: canvasWidth, height: canvasHeight,
+                        x: 0,
+                        y: 0,
+                        width: canvasWidth,
+                        height: canvasHeight,
                       };
                     }
                     onFrameChange({ ...selectedFrame, ...updates });
@@ -868,12 +879,7 @@ export function FrameControlsPanel({
             </div>
 
             {shadowCfg.enabled && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full gap-2"
-                onClick={() => setShadowSimulateOpen(true)}
-              >
+              <Button variant="outline" size="sm" className="w-full gap-2" onClick={() => setShadowSimulateOpen(true)}>
                 <Box className="w-3.5 h-3.5" />
                 Mở Studio 3D Simulator
               </Button>

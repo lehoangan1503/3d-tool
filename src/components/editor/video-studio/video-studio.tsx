@@ -457,6 +457,8 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               scale: { x: scale.x, y: scale.y, z: scale.z },
             });
             if (info.type === "cue") {
+              // Immediately move shadow lights without waiting for the debounced config update
+              extractorRef.current?.directUpdateCueShadowPosition(position.x, position.z);
               setConfig((prev) => {
                 const instances = [...prev.cueConfig.instances];
                 if (instances[0]) {

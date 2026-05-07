@@ -124,6 +124,9 @@ export class ExtractorSceneManager {
   private hdriShadowLights: Array<{
     layerId: string;
     light: THREE.DirectionalLight;
+    /** Base light position (on HDRI dome, no cue offset applied). Used to translate the
+     *  shadow camera with the cue so the frustum always covers the cue's shadow area. */
+    basePosition: THREE.Vector3;
   }> = [];
 
   // Per-frame directional light for image extractor
@@ -328,7 +331,7 @@ export class ExtractorSceneManager {
       light.shadow.radius = config.shadowBlur;
       this.scene.add(light);
       this.scene.add(light.target);
-      this.hdriShadowLights.push({ layerId: 'legacy', light });
+      this.hdriShadowLights.push({ layerId: 'legacy', light, basePosition: pos.clone() });
     }
 
     // ── Load wall texture (real file or procedural fallback) ──
@@ -471,7 +474,7 @@ export class ExtractorSceneManager {
 
       this.scene.add(light);
       this.scene.add(light.target);
-      this.hdriShadowLights.push({ layerId: layer.id, light });
+      this.hdriShadowLights.push({ layerId: layer.id, light, basePosition: pos.clone() });
     }
     // Re-apply stored offset so lights point at the correct shadow target after rebuild
     this._applyShadowLightOffset(this._shadowOffsetX, this._shadowOffsetZ);
@@ -493,7 +496,11 @@ export class ExtractorSceneManager {
       if (!entry) continue;
 
       const pos = this.hdriRotationToPosition(layer.rotationX, layer.rotationY);
-      entry.light.position.copy(pos);
+      entry.basePosition.copy(pos);
+      // Re-apply cue offset so the shadow camera stays centred on the cue
+      const cx = this._cueCenterX + this._shadowOffsetX;
+      const cz = this._cueCenterZ + this._shadowOffsetZ;
+      entry.light.position.set(pos.x + cx, pos.y, pos.z + cz);
       const baseIntensity = (layer.intensity ?? 1) * 1.2;
       entry.light.intensity = baseIntensity;
       entry.light.color.set(layer.lightColor ?? '#ffffff');
@@ -509,10 +516,20 @@ export class ExtractorSceneManager {
     }
   }
 
-  /** Shift all HDRI shadow light targets to (offsetX, 0, offsetZ) so the shadow spot moves in X/Z. */
+  /** Shift all HDRI shadow light positions and targets by the cue offset so the shadow
+   *  camera frustum always covers the cue and its shadow area on the backdrop. */
   private _applyShadowLightOffset(offsetX: number, offsetZ: number): void {
     for (const entry of this.hdriShadowLights) {
-      entry.light.target.position.set(this._cueCenterX + offsetX, 0, this._cueCenterZ + offsetZ);
+      const cx = this._cueCenterX + offsetX;
+      const cz = this._cueCenterZ + offsetZ;
+      // Translate the shadow camera (light.position) alongside the target so the
+      // ±12 frustum stays centred on the cue regardless of where it is in the scene.
+      entry.light.position.set(
+        entry.basePosition.x + cx,
+        entry.basePosition.y,
+        entry.basePosition.z + cz
+      );
+      entry.light.target.position.set(cx, 0, cz);
       entry.light.target.updateMatrixWorld();
       entry.light.shadow.needsUpdate = true;
     }
@@ -615,7 +632,11 @@ export class ExtractorSceneManager {
     const entry = this.hdriShadowLights[layerIndex];
     if (!entry) return;
     const pos = this.hdriRotationToPosition(rotationX, rotationY);
-    entry.light.position.copy(pos);
+    entry.basePosition.copy(pos);
+    // Re-apply current cue offset so the frustum stays over the cue
+    const cx = this._cueCenterX + this._shadowOffsetX;
+    const cz = this._cueCenterZ + this._shadowOffsetZ;
+    entry.light.position.set(pos.x + cx, pos.y, pos.z + cz);
     if (intensity !== undefined) {
       // Same multiplier used in setupHdriShadowLights / updateHdriShadowLights
       entry.light.intensity = intensity * 1.2;
@@ -623,6 +644,17 @@ export class ExtractorSceneManager {
     // Ensure the shadow camera matrix is refreshed before the next render
     entry.light.target.updateMatrixWorld();
     entry.light.shadow.needsUpdate = true;
+  }
+
+  /**
+   * Immediately update the shadow camera position to follow the cue at (x, z).
+   * Call on every cue drag event to avoid the 100ms debounce lag that would
+   * otherwise leave the shadow frustum anchored at the old cue position.
+   */
+  directUpdateCueShadowPosition(x: number, z: number): void {
+    this._cueCenterX = x;
+    this._cueCenterZ = z;
+    this._applyShadowLightOffset(this._shadowOffsetX, this._shadowOffsetZ);
   }
 
   /** Create a visible HDRI light helper for a layer */

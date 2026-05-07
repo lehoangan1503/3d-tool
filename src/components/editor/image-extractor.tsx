@@ -20,6 +20,7 @@ import { DEFAULT_CUE_HDRI } from "@/types/video-studio";
 import { resolveStorageUrl } from "@/lib/resolve-storage-url";
 import { useUndoable } from "@/hooks/use-undoable";
 import { forceWhiteWalls } from "@/lib/three/studio-helpers";
+import { invalidateReferenceListCache } from "@/hooks/use-reference-list";
 
 /** Convert an HdriLayer[] (used by Image Extractor frames) into a CueHdriConfig
  *  so that `setCueHdri()` can apply the HDRI environment map directly to cue
@@ -44,6 +45,23 @@ export function hdriLayersToCueHdri(layers: HdriLayer[]): CueHdriConfig {
  * Returns a data URL. Caller must provide a cloned model.
  * If `reuseEsm` is provided, reuses it instead of creating/disposing a new ESM per frame.
  */
+/** Migrate a snapshot saved against the old studio layout (wall y=4.5, table y=-7.5)
+ *  to the current layout (wall y=10, table y=-2) by shifting all Y positions +5.5. */
+function migrateSnapshotLayout(snapshot: import("@/types/video-studio").VideoStudioConfig): import("@/types/video-studio").VideoStudioConfig {
+  const Y_SHIFT = 5.5;
+  const OLD_TABLE_Y = -7.5;
+  // Only apply to old-layout snapshots: camera below old table + shift threshold
+  if (snapshot.cameraStart.y >= OLD_TABLE_Y + Y_SHIFT) return snapshot;
+  return {
+    ...snapshot,
+    cameraStart: { ...snapshot.cameraStart, y: snapshot.cameraStart.y + Y_SHIFT },
+    cueConfig: {
+      ...snapshot.cueConfig,
+      instances: snapshot.cueConfig.instances.map(i => ({ ...i, positionY: i.positionY + Y_SHIFT })),
+    },
+  };
+}
+
 export async function renderCueFrameViaStudio(
   model: ReturnType<SceneManager["getModelForClone"]>,
   snapshot: import("@/types/video-studio").VideoStudioConfig,
@@ -54,21 +72,23 @@ export async function renderCueFrameViaStudio(
 ): Promise<string> {
   const size = Math.max(2048, width, height);
   const studioEsm = reuseEsm ?? new ExtractorSceneManager(size, size);
+  // Apply layout migration so old snapshots render correctly in the current studio
+  const migratedSnapshot = migrateSnapshotLayout(snapshot);
   try {
     if (reuseEsm) studioEsm.resize(size, size);
     if (model) studioEsm.setModel(model);
 
     // Setup the full studio scene (walls, lights, shadow floor, camera)
-    await studioEsm.setupStudioFromStudioConfig(snapshot);
+    await studioEsm.setupStudioFromStudioConfig(migratedSnapshot);
     forceWhiteWalls(studioEsm);
 
     // Switch to simulator mode so individual per-instance cue groups are used,
     // matching the preview pipeline from the Simulator dialog exactly.
     studioEsm.enableSimulatorMode();
-    studioEsm.setupSimulatorCueGroups(snapshot.cueConfig);
+    studioEsm.setupSimulatorCueGroups(migratedSnapshot.cueConfig);
     // Re-apply per-cue surface textures stored in the snapshot (await so surfaces
     // are loaded before the final render call below).
-    const surfacePromises = snapshot.cueConfig.instances.map((inst, i) =>
+    const surfacePromises = migratedSnapshot.cueConfig.instances.map((inst, i) =>
       inst.sourceSurfaceUrl
         ? studioEsm.applySurfaceToSimulatorCueGroup(i, inst.sourceSurfaceUrl)
         : Promise.resolve()
@@ -76,22 +96,22 @@ export async function renderCueFrameViaStudio(
     await Promise.all(surfacePromises);
 
     // Apply all config properties (cue transforms, shadow, HDRI, camera)
-    studioEsm.updateStudioPreviewConfig(snapshot);
+    studioEsm.updateStudioPreviewConfig(migratedSnapshot);
     // forceWhiteWalls again in case updateSurfaceHdri replaced materials
     forceWhiteWalls(studioEsm);
 
     // Explicitly await async HDRI operations that updateStudioPreviewConfig fires without awaiting.
     // Wall/surface lights:
-    const layers = snapshot.hdriConfig?.layers ?? [];
+    const layers = migratedSnapshot.hdriConfig?.layers ?? [];
     if (layers.length > 0) {
       await studioEsm.setHdriLayers(layers);
     }
     // Cue HDRI — use multi-layer blend when available (matches simulator preview),
     // fall back to legacy single-HDRI for old snapshots that don't have cueHdriLayers.
-    if (snapshot.cueHdriLayers && snapshot.cueHdriLayers.length > 0) {
-      await studioEsm.setCueHdriLayers(snapshot.cueHdriLayers);
+    if (migratedSnapshot.cueHdriLayers && migratedSnapshot.cueHdriLayers.length > 0) {
+      await studioEsm.setCueHdriLayers(migratedSnapshot.cueHdriLayers);
     } else {
-      const cueHdri = snapshot.cueHdri ?? DEFAULT_CUE_HDRI;
+      const cueHdri = migratedSnapshot.cueHdri ?? DEFAULT_CUE_HDRI;
       await studioEsm.setCueHdri(cueHdri);
     }
     forceWhiteWalls(studioEsm);
@@ -297,6 +317,8 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
   const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
   const [references, setReferences] = useState<ExtractorReference[]>([]);
   const [selectedReferenceId, setSelectedReferenceId] = useState<string | null>(null);
+  // Snapshot of selected reference metadata — survives FrameControlsPanel unmount during loading.
+  const [selectedRefMeta, setSelectedRefMeta] = useState<{ id: string; name: string; isOwned: boolean } | null>(null);
   const [gap, setGap] = useState(20);
 
   // Screenshot cache for static frames
@@ -562,7 +584,8 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
     }
   };
 
-  const handleSelectReference = (id: string | null) => {
+  const handleSelectReference = (id: string | null, meta: { id: string; name: string; isOwned: boolean } | null) => {
+    setSelectedRefMeta(meta);
     if (id) {
       loadReference(id);
     } else {
@@ -802,6 +825,7 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
       setShowSaveDialog(false);
       setSaveName("");
       setSaveMode("new");
+      invalidateReferenceListCache();
       loadReferences();
     } catch (err) {
       setError(mode === "update" ? "Không thể cập nhật tham chiếu" : "Không thể lưu tham chiếu");
@@ -829,6 +853,7 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
         body: JSON.stringify({ name: newName }),
       });
       if (res.ok) {
+        invalidateReferenceListCache();
         loadReferences();
       }
     } catch (err) {
@@ -844,9 +869,11 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
       if (res.ok) {
         if (selectedReferenceId === id) {
           setSelectedReferenceId(null);
+          setSelectedRefMeta(null);
           resetFrames([]); // load → clear history
           setFrameScreenshots({});
         }
+        invalidateReferenceListCache();
         loadReferences();
       }
     } catch (err) {
@@ -1010,14 +1037,18 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
         throw new Error("Scene manager not available");
       }
 
+      // Use the canvas dimensions saved with the reference, not the current editor state.
+      const refCanvasWidth  = reference.canvasWidth  ?? DEFAULT_CANVAS_WIDTH;
+      const refCanvasHeight = reference.canvasHeight ?? DEFAULT_CANVAS_HEIGHT;
+
       // Create composite canvas
       const canvas = document.createElement("canvas");
-      canvas.width = canvasWidth;
-      canvas.height = canvasHeight;
+      canvas.width = refCanvasWidth;
+      canvas.height = refCanvasHeight;
       const ctx = canvas.getContext("2d")!;
 
       // Clear with transparency
-      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+      ctx.clearRect(0, 0, refCanvasWidth, refCanvasHeight);
 
       // Reuse shared bulk extractor if one was prepared (avoids re-creating WebGL context per render)
       const ownExtractor = !bulkExportExtractorRef.current;
@@ -1025,11 +1056,13 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
 
       if (bulkExportExtractorRef.current) {
         exportExtractor = bulkExportExtractorRef.current;
+        // Resize to this reference's canvas dimensions (each reference may differ)
+        exportExtractor.resize(refCanvasWidth, refCanvasHeight);
       } else {
         // Single render path — stop live preview so export has the GPU to itself
         extractorRef.current?.stopLivePreview();
         const model = sceneManager.getModelForClone();
-        exportExtractor = new ExtractorSceneManager(canvasWidth, canvasHeight);
+        exportExtractor = new ExtractorSceneManager(refCanvasWidth, refCanvasHeight);
         if (model) exportExtractor.setModel(model);
         const defaultHdriUrl = `/hdri/${encodeURIComponent("bloem_train_track_clear_2k.hdr")}`;
         await exportExtractor.loadHDRI(defaultHdriUrl);
@@ -1167,7 +1200,8 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
     extractorRef.current?.stopLivePreview();
 
     const model = sceneManager.getModelForClone();
-    const ext = new ExtractorSceneManager(canvasWidth, canvasHeight);
+    // Initial size is arbitrary — handleRenderReference resizes per-reference before each render.
+    const ext = new ExtractorSceneManager(DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT);
     if (model) ext.setModel(model);
     const hdriUrl = sceneManager.getCurrentHdriUrl();
     await ext.loadHDRI(hdriUrl);
@@ -1450,6 +1484,7 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
                 <FrameControlsPanel
                   references={references}
                   selectedReferenceId={selectedReferenceId}
+                  selectedRefMeta={selectedRefMeta}
                   onSelectReference={handleSelectReference}
                   frames={frames}
                   selectedFrame={selectedFrame}

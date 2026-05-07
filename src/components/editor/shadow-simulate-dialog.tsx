@@ -101,6 +101,19 @@ function buildWhiteStudioConfig(shadowCfg: CueShadowConfig): VideoStudioConfig {
         enabled: true,
       }];
     }
+    // Migrate old layout: wall was at y=4.5, table at y=-7.5.
+    // New layout: wall at y=10, table at y=-2 — everything shifted up by +5.5.
+    // Old records have cameraStart.y below the new table floor (-2), so we detect
+    // and shift all Y positions by +5.5 to keep relative scene positions intact.
+    const Y_SHIFT = 5.5;
+    const OLD_TABLE_Y = -7.5;
+    if (snap.cameraStart.y < OLD_TABLE_Y + Y_SHIFT) {
+      snap.cameraStart = { ...snap.cameraStart, y: snap.cameraStart.y + Y_SHIFT };
+      snap.cueConfig.instances = snap.cueConfig.instances.map(inst => ({
+        ...inst,
+        positionY: inst.positionY + Y_SHIFT,
+      }));
+    }
     return snap;
   }
   const defaultLayer = createDefaultHdriLayer();
@@ -592,6 +605,8 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
                   inst.scale,
                 );
               }
+              // Immediately move shadow lights without waiting for the debounced update
+              esmRef.current?.directUpdateCueShadowPosition(position.x, position.z);
               scheduleConfigUpdate();
             } else if (info.type === "hdriLight") {
               const ext = esmRef.current;
@@ -648,9 +663,6 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
           void esm.applySurfaceToSimulatorCueGroup(i, inst.sourceSurfaceUrl);
         }
       });
-      // Focus godCamera on the loaded cue group so saved positions are immediately visible
-      const grpCenter = esm.getSimulatorGroupsCenter();
-      if (grpCenter) sceneViewRef.current?.focusOnPosition(grpCenter);
       esm.updateStudioPreviewConfig(cfg);
       esm.setViewMode("scene");
 
@@ -1127,8 +1139,6 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
         setCueInstancesState(snap.cueConfig.instances);
         // Rebuild cue groups so the 3D scene matches the applied snapshot
         esmRef.current?.setupSimulatorCueGroups(snap.cueConfig);
-        const snapCenter = esmRef.current?.getSimulatorGroupsCenter();
-        if (snapCenter) sceneViewRef.current?.focusOnPosition(snapCenter);
         // Re-apply any per-cue surface overrides stored in the template
         const esm = esmRef.current;
         if (esm) {

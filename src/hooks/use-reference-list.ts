@@ -6,6 +6,15 @@ import type { ExtractorReference } from "@/types/extractor";
 const PAGE_SIZE = 40;
 const SEARCH_DEBOUNCE_MS = 300;
 
+// Session-level cache — cleared on page reload, persists across popover open/close.
+// Keyed by `${search}:${offset}` so each page of each search is cached separately.
+const pageCache = new Map<string, { items: ExtractorReference[]; total: number }>();
+
+/** Call after any mutation (save / rename / delete) to ensure the next popover open shows fresh data. */
+export function invalidateReferenceListCache() {
+  pageCache.clear();
+}
+
 export interface UseReferenceListOptions {
   enabled: boolean;
   pageSize?: number;
@@ -45,6 +54,16 @@ export function useReferenceList({
 
   const fetchPage = useCallback(
     async (offset: number, currentSearch: string, append: boolean) => {
+      const cacheKey = `${currentSearch}:${offset}:${pageSize}`;
+      const cached = pageCache.get(cacheKey);
+
+      if (cached) {
+        setReferences((prev) => (append ? [...prev, ...cached.items] : cached.items));
+        setTotal(cached.total);
+        offsetRef.current = offset + cached.items.length;
+        return;
+      }
+
       if (offset === 0) setIsLoading(true);
       else setIsFetchingMore(true);
 
@@ -61,6 +80,7 @@ export function useReferenceList({
         const { items, total: t }: { items: ExtractorReference[]; total: number } =
           await res.json();
 
+        pageCache.set(cacheKey, { items, total: t });
         setReferences((prev) => (append ? [...prev, ...items] : items));
         setTotal(t);
         offsetRef.current = offset + items.length;
@@ -74,7 +94,7 @@ export function useReferenceList({
     [pageSize]
   );
 
-  // Initial load + search reset
+  // Initial load + search reset — uses cache so reopening popover is instant.
   useEffect(() => {
     if (!enabled) return;
     offsetRef.current = 0;
@@ -88,6 +108,7 @@ export function useReferenceList({
   }, [isLoading, isFetchingMore, fetchPage, debouncedSearch]);
 
   const reload = useCallback(() => {
+    pageCache.clear();
     offsetRef.current = 0;
     setReferences([]);
     fetchPage(0, debouncedSearch, false);

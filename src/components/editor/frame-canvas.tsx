@@ -222,11 +222,12 @@ export function FrameCanvas({
       // Only capture from the 3D extractor when the PREVIOUS frame was a CUE frame
       const prevFrame = frames.find(f => f.id === prevId);
       if (prevFrame && isCueFrame(prevFrame)) {
-        const studioCapture = prevFrame.cue.studioShadow?.enabled
-          ? prevFrame.cue.studioShadow?.studioCapture
-          : null;
-        if (studioCapture) {
-          onScreenshotCapture(prevId, studioCapture);
+        if (prevFrame.cue.studioShadow?.enabled) {
+          // Shadow frames are rendered dynamically; never overwrite with the stale studioCapture.
+          // If no dynamic render exists yet, fall back to studioCapture as a placeholder.
+          if (!frameScreenshots[prevId] && prevFrame.cue.studioShadow.studioCapture) {
+            onScreenshotCapture(prevId, prevFrame.cue.studioShadow.studioCapture);
+          }
         } else if (extractorRef.current) {
           const screenshot = extractorRef.current.captureFrame('png');
           onScreenshotCapture(prevId, screenshot);

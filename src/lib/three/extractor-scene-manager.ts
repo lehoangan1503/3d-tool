@@ -1167,6 +1167,14 @@ export class ExtractorSceneManager {
     }
   }
 
+  /** Invalidate cue HDRI dedup caches so the next setCueHdri / setCueHdriLayers call
+   *  re-applies the envMap even if the config hasn't changed.  Call this after
+   *  simulator groups are rebuilt so the groups receive their envMap. */
+  invalidateCueHdriCache(): void {
+    this.lastCueHdriKey = '';
+    this.lastCueHdriLayersKey = '';
+  }
+
   private async loadAndCacheHdri(hdriType: string): Promise<THREE.DataTexture> {
     const url = `/hdri/${encodeURIComponent(hdriType)}`;
     
@@ -4417,7 +4425,7 @@ export class ExtractorSceneManager {
 
   /** Re-apply the currently active HDRI envMap to all simulator cue groups after rebuild.
    *  Uses scene.environment (set by HDRI load) as the envMap source. */
-  private reapplyCurrentCueEnvMap(): void {
+  reapplyCurrentCueEnvMap(): void {
     const envMap = this.cueEnvRT?.texture ?? this.scene.environment;
     if (!envMap) return;
     const intensity = this.cueEnvIntensity;

@@ -69,6 +69,7 @@ export async function renderCueFrameViaStudio(
   height: number,
   reuseEsm?: ExtractorSceneManager,
   wallsTransparent?: boolean,
+  overrideSurfaceUrl?: string,
 ): Promise<string> {
   const size = Math.max(2048, width, height);
   const studioEsm = reuseEsm ?? new ExtractorSceneManager(size, size);
@@ -86,14 +87,18 @@ export async function renderCueFrameViaStudio(
     // matching the preview pipeline from the Simulator dialog exactly.
     studioEsm.enableSimulatorMode();
     studioEsm.setupSimulatorCueGroups(migratedSnapshot.cueConfig);
-    // Re-apply per-cue surface textures stored in the snapshot (await so surfaces
-    // are loaded before the final render call below).
-    const surfacePromises = migratedSnapshot.cueConfig.instances.map((inst, i) =>
-      inst.sourceSurfaceUrl
-        ? studioEsm.applySurfaceToSimulatorCueGroup(i, inst.sourceSurfaceUrl)
-        : Promise.resolve()
-    );
+    // Apply surface to each simulator group. overrideSurfaceUrl replaces the snapshot's
+    // sourceSurfaceUrl for every instance (used by bulk dashboard export to apply the
+    // current product's surface). Falls back to the snapshot's own URL for the normal path.
+    const surfacePromises = migratedSnapshot.cueConfig.instances.map((inst, i) => {
+      const url = overrideSurfaceUrl ?? inst.sourceSurfaceUrl;
+      return url ? studioEsm.applySurfaceToSimulatorCueGroup(i, url) : Promise.resolve();
+    });
     await Promise.all(surfacePromises);
+
+    // Invalidate cue HDRI dedup caches so the explicit setCueHdri / setCueHdriLayers calls
+    // below bypass dedup and re-apply envMap to the newly-built simulator groups.
+    studioEsm.invalidateCueHdriCache();
 
     // Apply all config properties (cue transforms, shadow, HDRI, camera)
     studioEsm.updateStudioPreviewConfig(migratedSnapshot);
@@ -114,6 +119,9 @@ export async function renderCueFrameViaStudio(
       const cueHdri = migratedSnapshot.cueHdri ?? DEFAULT_CUE_HDRI;
       await studioEsm.setCueHdri(cueHdri);
     }
+    // Final safety: directly push current envMap to all simulator groups in case
+    // any dedup path still prevented the calls above from running.
+    studioEsm.reapplyCurrentCueEnvMap();
     forceWhiteWalls(studioEsm);
 
     studioEsm.render();
@@ -132,12 +140,16 @@ export async function renderCueFrameViaStudio(
  * declared canvas dimensions, composites all frames (cue + image), and returns
  * the result as a PNG blob.
  *
- * @param model     - Three.js model group (from `SceneManager.getModelForClone()`)
- * @param reference - Reference with frames to composite
+ * @param model              - Three.js model group (from `SceneManager.getModelForClone()`)
+ * @param reference          - Reference with frames to composite
+ * @param overrideSurfaceUrl - When provided, applied to every cue instance instead of
+ *                             the snapshot's original sourceSurfaceUrl. Use this in bulk
+ *                             dashboard export to apply the current product's surface.
  */
 export async function renderReferenceToBlob(
   model: ReturnType<SceneManager["getModelForClone"]>,
   reference: ExtractorReference,
+  overrideSurfaceUrl?: string,
 ): Promise<Blob> {
   const canvasWidth  = reference.canvasWidth  ?? DEFAULT_CANVAS_WIDTH;
   const canvasHeight = reference.canvasHeight ?? DEFAULT_CANVAS_HEIGHT;
@@ -165,6 +177,7 @@ export async function renderReferenceToBlob(
             Math.round(frame.transform.height),
             studioEsm,
             shadow.wallsTransparent,
+            overrideSurfaceUrl,
           );
         } else {
           if (!legacyEsm) {

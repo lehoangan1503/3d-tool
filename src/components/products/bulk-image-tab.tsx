@@ -6,8 +6,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, Download, CheckCircle2, XCircle, ImageIcon, ChevronDown } from "lucide-react";
 import JSZip from "jszip";
-import type { Product, LeatherColor, LeatherTextureType } from "@/types/product";
-import { MODEL_PATHS } from "@/types/product";
+import type { Product, LeatherColor, LeatherTextureType, ProductConfig, ThreeJSSettingsJson } from "@/types/product";
+import { MODEL_PATHS, settingsJsonToConfig } from "@/types/product";
 import type { ExtractorReference, ExtractorReferenceGroup } from "@/types/extractor";
 import { isCueFrame, isImageFrame, DEFAULT_CUE_SHADOW, DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT } from "@/types/extractor";
 import { SceneManager } from "@/lib/three/scene-manager";
@@ -136,6 +136,17 @@ async function renderRefForProduct(
   });
 }
 
+async function fetchProductConfig(productId: string): Promise<ProductConfig | null> {
+  try {
+    const res = await fetch(`/api/products/${productId}/settings`);
+    if (!res.ok) return null;
+    const json = await res.json() as ThreeJSSettingsJson;
+    return settingsJsonToConfig(json);
+  } catch {
+    return null;
+  }
+}
+
 export function BulkImageTab({ products }: Props) {
   const [groups, setGroups] = useState<ExtractorReferenceGroup[]>([]);
   const [groupsLoaded, setGroupsLoaded] = useState(false);
@@ -221,6 +232,18 @@ export function BulkImageTab({ products }: Props) {
           leatherTexture: product.texture_type as LeatherTextureType | null,
           textureScale: 1,
         });
+
+        // Apply product-specific material settings so joint roughness/metalness
+        // matches the editor render (otherwise joint defaults to roughness=1.0 → flat black).
+        const productConfig = await fetchProductConfig(product.id);
+        if (productConfig) {
+          sm.updateBodyRoughness(productConfig.bodyRoughness);
+          sm.updateJointConfig({
+            roughness: productConfig.jointRoughness,
+            clearcoat: productConfig.jointClearcoat,
+            metalness: productConfig.jointMetalness,
+          });
+        }
 
         const model = sm.getModelForClone();
         const blobs: { name: string; blob: Blob }[] = [];

@@ -383,15 +383,28 @@ export function DownloadMultipleDialog({ open, onOpenChange, productName, onRend
       setExportProgress({ current: refsToExport.length, total: refsToExport.length, status: "Đang tạo ZIP..." });
       const zipBlob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
 
-      const timestamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-");
-      const safeName =
-        productName
-          .replace(/[^a-zA-Z0-9-_]/g, "-")
-          .replace(/-+/g, "-")
-          .replace(/^-|-$/g, "") || "export";
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const datePart = `${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${now.getFullYear()}`;
+
+      const safe = (s: string) => s.replace(/[^a-zA-Z0-9-_]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "export";
+      const safeProduct = safe(productName);
+
+      let groupPart: string;
+      if (activeTab === "groups") {
+        const selectedGroups = groups.filter((g) => selectedGroupIds.has(g.id));
+        groupPart =
+          selectedGroups.length === 1
+            ? safe(selectedGroups[0].name)
+            : selectedGroups.length > 1
+              ? `${safe(selectedGroups[0].name)}+${selectedGroups.length - 1}`
+              : safeProduct;
+      } else {
+        groupPart = safeProduct;
+      }
       const link = document.createElement("a");
       link.href = URL.createObjectURL(zipBlob);
-      link.download = `${safeName}-${timestamp}.zip`;
+      link.download = `${safeProduct}_${groupPart}_${datePart}.zip`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);

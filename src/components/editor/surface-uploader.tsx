@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 import { Label } from "@/components/ui/label";
 import {
   Dialog,
@@ -8,7 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { X, Loader2, ImageIcon, Maximize2 } from "lucide-react";
+import { X, Loader2, ImageIcon, Maximize2, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 
 interface SurfaceUploaderProps {
   productId: string;
@@ -29,7 +29,75 @@ export function SurfaceUploader({
 }: SurfaceUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const isPanning = useRef(false);
+  const panStart = useRef({ x: 0, y: 0 });
+  const zoomRef = useRef(zoom);
+  const panRef = useRef(pan);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Keep refs in sync so the native wheel handler always reads latest values
+  zoomRef.current = zoom;
+  panRef.current = pan;
+
+  // Reset zoom/pan when dialog closes
+  useEffect(() => {
+    if (!fullscreenOpen) { setZoom(1); setPan({ x: 0, y: 0 }); }
+  }, [fullscreenOpen]);
+
+  // Callback ref — attaches a non-passive wheel listener the instant the
+  // dialog viewport mounts (portals render async, so useEffect + ref misses it)
+  const viewportCallbackRef = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return;
+    const el = node; // capture non-null for closure
+
+    function onWheel(e: WheelEvent) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const rect = el.getBoundingClientRect();
+      // Cursor position relative to the container centre
+      const mx = e.clientX - rect.left - rect.width / 2;
+      const my = e.clientY - rect.top - rect.height / 2;
+
+      const oldZoom = zoomRef.current;
+      const factor = e.deltaY < 0 ? 1.1 : 0.9;
+      const newZoom = Math.min(10, Math.max(0.5, oldZoom * factor));
+
+      // Pin the image point under the cursor
+      const ratio = newZoom / oldZoom;
+      const oldPan = panRef.current;
+      setZoom(newZoom);
+      setPan({ x: mx - (mx - oldPan.x) * ratio, y: my - (my - oldPan.y) * ratio });
+    }
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+  }, []);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    isPanning.current = true;
+    panStart.current = { x: e.clientX - panRef.current.x, y: e.clientY - panRef.current.y };
+  }, []);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!isPanning.current) return;
+    setPan({ x: e.clientX - panStart.current.x, y: e.clientY - panStart.current.y });
+  }, []);
+
+  const handleMouseUp = useCallback(() => { isPanning.current = false; }, []);
+
+  const applyZoom = useCallback((factor: number) => {
+    setZoom((z) => {
+      const nz = Math.min(10, Math.max(0.5, z * factor));
+      setPan((p) => ({ x: p.x * (nz / z), y: p.y * (nz / z) }));
+      return nz;
+    });
+  }, []);
+
+  const zoomIn = () => applyZoom(1.25);
+  const zoomOut = () => applyZoom(1 / 1.25);
+  const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
 
   // Use pending preview if available, otherwise current URL
   const preview = pendingPreview || currentUrl || null;
@@ -157,15 +225,61 @@ export function SurfaceUploader({
       {/* Fullscreen Dialog */}
       <Dialog open={fullscreenOpen} onOpenChange={setFullscreenOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] p-0 overflow-hidden">
-          <DialogHeader className="p-4 pb-2">
+          <DialogHeader className="p-4 pb-2 flex flex-row items-center justify-between">
             <DialogTitle>Ảnh Bề Mặt</DialogTitle>
+            <div className="flex items-center gap-1 mr-8">
+              <button
+                onClick={zoomOut}
+                className="p-1.5 rounded hover:bg-muted transition-colors"
+                title="Thu nhỏ"
+              >
+                <ZoomOut className="h-4 w-4" />
+              </button>
+              <span className="text-xs text-muted-foreground w-12 text-center">
+                {Math.round(zoom * 100)}%
+              </span>
+              <button
+                onClick={zoomIn}
+                className="p-1.5 rounded hover:bg-muted transition-colors"
+                title="Phóng to"
+              >
+                <ZoomIn className="h-4 w-4" />
+              </button>
+              <button
+                onClick={resetZoom}
+                className="p-1.5 rounded hover:bg-muted transition-colors"
+                title="Đặt lại"
+              >
+                <RotateCcw className="h-4 w-4" />
+              </button>
+            </div>
           </DialogHeader>
-          <div className="p-4 pt-0 flex items-center justify-center bg-black/5">
+          <div
+            ref={viewportCallbackRef}
+            className="relative overflow-hidden bg-black/5"
+            style={{ height: "70vh", cursor: "grab" }}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+          >
             {preview && (
               <img
                 src={preview}
                 alt="Bề mặt toàn màn hình"
-                className="max-w-full max-h-[70vh] object-contain"
+                draggable={false}
+                style={{
+                  position: "absolute",
+                  top: "50%",
+                  left: "50%",
+                  transform: `translate(calc(-50% + ${pan.x}px), calc(-50% + ${pan.y}px)) scale(${zoom})`,
+                  transformOrigin: "center",
+                  maxWidth: "100%",
+                  maxHeight: "100%",
+                  objectFit: "contain",
+                  userSelect: "none",
+                  transition: isPanning.current ? "none" : "transform 0.1s ease",
+                }}
               />
             )}
           </div>

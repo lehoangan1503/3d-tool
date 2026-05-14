@@ -32,6 +32,7 @@ export async function GET() {
       createdAt: g.created_at,
       updatedAt: g.updated_at,
       createdByName: (g as any).user_id ? (creatorMap[(g as any).user_id] ?? "Unknown") : undefined,
+      isOwner: (g as any).user_id === user.id,
     }));
 
     return NextResponse.json({ items: result });

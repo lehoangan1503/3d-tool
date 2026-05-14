@@ -475,6 +475,7 @@ export interface ExtractorReferenceGroup {
   createdAt?: string;
   updatedAt?: string;
   createdByName?: string; // nickname or email of the creator
+  isOwner?: boolean;      // true if the current user created this group
 }
 
 /** Default frame transform */

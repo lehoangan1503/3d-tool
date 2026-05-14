@@ -41,13 +41,15 @@ export async function uploadToStorage(
     throw new Error(uploadError.message);
   }
 
-  // Get public URL
+  // Get public URL — append cache-buster so the browser/CDN doesn't serve
+  // the stale file when the same path is upserted with new content.
   const { data: urlData } = supabase.storage
     .from("product-assets")
     .getPublicUrl(filePath);
 
+  const bustUrl = `${urlData.publicUrl}?t=${Date.now()}`;
   console.log("[Upload] File uploaded successfully:", filePath);
-  return urlData.publicUrl;
+  return bustUrl;
 }
 
 /**

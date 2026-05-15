@@ -63,7 +63,7 @@ export function SurfaceUploader({
 
       const oldZoom = zoomRef.current;
       const factor = e.deltaY < 0 ? 1.1 : 0.9;
-      const newZoom = Math.min(10, Math.max(0.5, oldZoom * factor));
+      const newZoom = Math.min(40, Math.max(0.5, oldZoom * factor));
 
       // Pin the image point under the cursor
       const ratio = newZoom / oldZoom;
@@ -89,7 +89,7 @@ export function SurfaceUploader({
 
   const applyZoom = useCallback((factor: number) => {
     setZoom((z) => {
-      const nz = Math.min(10, Math.max(0.5, z * factor));
+      const nz = Math.min(40, Math.max(0.5, z * factor));
       setPan((p) => ({ x: p.x * (nz / z), y: p.y * (nz / z) }));
       return nz;
     });
@@ -224,7 +224,7 @@ export function SurfaceUploader({
 
       {/* Fullscreen Dialog */}
       <Dialog open={fullscreenOpen} onOpenChange={setFullscreenOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh] p-0 overflow-hidden">
+        <DialogContent className="w-screen h-screen max-w-none max-h-none rounded-none p-0 overflow-hidden">
           <DialogHeader className="p-4 pb-2 flex flex-row items-center justify-between">
             <DialogTitle>Ảnh Bề Mặt</DialogTitle>
             <div className="flex items-center gap-1 mr-8">
@@ -257,7 +257,7 @@ export function SurfaceUploader({
           <div
             ref={viewportCallbackRef}
             className="relative overflow-hidden bg-black/5"
-            style={{ height: "70vh", cursor: "grab" }}
+            style={{ height: "calc(100vh - 72px)", cursor: "grab" }}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}

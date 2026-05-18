@@ -28,6 +28,8 @@ import {
   Loader2,
   Layers,
   Box,
+  Copy,
+  ClipboardPaste,
 } from "lucide-react";
 import type { ExtractorFrame, ExtractorReference, HdriLayer, CueFrame, CueSettings, ImageFrame, CueShadowConfig } from "@/types/extractor";
 import { createDefaultHdriLayer, isCueFrame, isImageFrame, STUDIO_WHITE_HDRI, DEFAULT_CUE_SHADOW } from "@/types/extractor";
@@ -251,7 +253,16 @@ export function FrameControlsPanel({
   // Local state for slider drag (for smooth UI, only commit on release)
   const [localRotationX, setLocalRotationX] = useState<number | null>(null);
   const [localRotationY, setLocalRotationY] = useState<number | null>(null);
+  const [localIntensity, setLocalIntensity] = useState<number | null>(null);
   const [zoomInputValue, setZoomInputValue] = useState<string | null>(null);
+
+  // Copy/paste clipboard: cue config (excluding studioShadow) + frame size
+  type CueConfigClipboard = {
+    cue: Omit<import("@/types/extractor").CueSettings, "studioShadow" | "lightAngle" | "hdriType">;
+    width: number;
+    height: number;
+  };
+  const [cueClipboard, setCueClipboard] = useState<CueConfigClipboard | null>(null);
 
   const updateTransform = (key: keyof ExtractorFrame["transform"], value: number) => {
     if (!selectedFrame) return;
@@ -569,6 +580,50 @@ export function FrameControlsPanel({
           </Button>
         </div>
 
+        {/* Copy / Paste config buttons — only for CueFrame */}
+        {isCueFrame(selectedFrame) && (
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 h-8"
+              onClick={() => {
+                const { studioShadow, lightAngle, hdriType, ...cue } = selectedFrame.cue;
+                setCueClipboard({
+                  cue,
+                  width: Math.round(selectedFrame.transform.width),
+                  height: Math.round(selectedFrame.transform.height),
+                });
+              }}
+            >
+              <Copy className="w-3.5 h-3.5 mr-1.5" /> Sao chép
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 h-8"
+              disabled={!cueClipboard}
+              onClick={() => {
+                if (!cueClipboard) return;
+                onFrameChange({
+                  ...selectedFrame,
+                  transform: {
+                    ...selectedFrame.transform,
+                    width: cueClipboard.width,
+                    height: cueClipboard.height,
+                  },
+                  cue: {
+                    ...selectedFrame.cue,
+                    ...cueClipboard.cue,
+                  },
+                });
+              }}
+            >
+              <ClipboardPaste className="w-3.5 h-3.5 mr-1.5" /> Dán
+            </Button>
+          </div>
+        )}
+
         {/* Frame Transform */}
         <div className="space-y-3">
           <Label className="text-sm font-medium flex items-center gap-2">
@@ -664,7 +719,7 @@ export function FrameControlsPanel({
                   type="text"
                   inputMode="numeric"
                   value={Math.round(selectedFrame.cue.phi * (180 / Math.PI))}
-                  onChange={(e) => updateCue("phi", parseNumber(e.target.value, 90) * (Math.PI / 180))}
+                  onChange={(e) => updateCue("phi", parseNumber(e.target.value, 0) * (Math.PI / 180))}
                   className="h-8"
                 />
               </div>
@@ -830,6 +885,28 @@ export function FrameControlsPanel({
                     min={0}
                     max={360}
                     step={1}
+                    className="w-full"
+                  />
+                </div>
+
+                {/* Intensity Slider */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Lightbulb className="w-3 h-3" /> Cường độ
+                    </Label>
+                    <span className="text-xs text-muted-foreground w-10 text-right">{(localIntensity ?? editingLayer.intensity).toFixed(1)}</span>
+                  </div>
+                  <Slider
+                    value={[localIntensity ?? editingLayer.intensity]}
+                    onValueChange={([value]) => setLocalIntensity(value)}
+                    onValueCommit={([value]) => {
+                      updateHdriLayer(editingLayer.id, { intensity: value });
+                      setLocalIntensity(null);
+                    }}
+                    min={0}
+                    max={3}
+                    step={0.1}
                     className="w-full"
                   />
                 </div>

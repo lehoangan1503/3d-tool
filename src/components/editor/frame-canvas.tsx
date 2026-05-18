@@ -48,7 +48,7 @@ interface FrameCanvasProps {
 
 /** Exported so consumers can fall back to the default when no prop is given */
 export const CANVAS_SIZE = 2048;
-const DISPLAY_SIZE = 600;
+const DISPLAY_SIZE_DEFAULT = 600;
 
 export function FrameCanvas({
   frames,
@@ -80,6 +80,20 @@ export function FrameCanvas({
   const [isCanvasPanning, setIsCanvasPanning] = useState(false);
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
   const wasPanningRef = useRef(false);
+
+  // Dynamically fit canvas to container size
+  const [displaySize, setDisplaySize] = useState(DISPLAY_SIZE_DEFAULT);
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const observer = new ResizeObserver((entries) => {
+      const { width, height } = entries[0].contentRect;
+      const padding = 32; // p-4 on each side
+      setDisplaySize(Math.max(200, Math.min(width - padding, height - padding)));
+    });
+    observer.observe(wrapper);
+    return () => observer.disconnect();
+  }, []);
 
   const [isDragging, setIsDragging] = useState(false);
   const [dragType, setDragType] = useState<'move' | 'resize' | 'rotate' | 'cue-3d' | 'cue-pan' | null>(null);
@@ -125,8 +139,8 @@ export function FrameCanvas({
     };
   }, [axisConstraint]);
   
-  // Scale so the longest side fits within DISPLAY_SIZE
-  const renderScale = DISPLAY_SIZE / Math.max(canvasWidth, canvasHeight);
+  // Scale so the longest side fits within displaySize
+  const renderScale = displaySize / Math.max(canvasWidth, canvasHeight);
   const displayWidth = canvasWidth * renderScale;
   const displayHeight = canvasHeight * renderScale;
   const interactionScale = renderScale * canvasView.zoom;
@@ -742,7 +756,7 @@ export function FrameCanvas({
                     style={{
                       top: '50%',
                       left: -((selectedFrame.transform.x * renderScale) + 1000),
-                      width: DISPLAY_SIZE + 2000,
+                      width: displaySize + 2000,
                       height: 2,
                       backgroundColor: 'rgba(239, 68, 68, 0.8)',
                       transform: 'translateY(-50%)',
@@ -757,7 +771,7 @@ export function FrameCanvas({
                       left: '50%',
                       top: -((selectedFrame.transform.y * renderScale) + 1000),
                       width: 2,
-                      height: DISPLAY_SIZE + 2000,
+                      height: displaySize + 2000,
                       backgroundColor: 'rgba(34, 197, 94, 0.8)',
                       transform: 'translateX(-50%)',
                     }}

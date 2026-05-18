@@ -1362,7 +1362,11 @@ export class ExtractorSceneManager {
       // (Image Extractor multi-layer mixing). Video Studio skips this — cue gets
       // its own env from setCueHdri().
       if (applyCueEnv) {
-        this.applyCueEnvMap(rt.texture, 1.0);
+        // For a single layer, pass its intensity through envMapIntensity so users can
+        // dim/brighten the HDRI lighting. For multi-layer the intensities are already
+        // baked into the blended texture, so we apply at full strength (1.0).
+        const envIntensity = activeLayers.length === 1 ? (activeLayers[0].intensity ?? 1) : 1.0;
+        this.applyCueEnvMap(rt.texture, envIntensity);
         // Invalidate setCueHdri cache so it re-applies if layers are later cleared
         this.lastCueHdriKey = '';
       }

@@ -490,7 +490,7 @@ export const DEFAULT_FRAME_TRANSFORM: FrameTransform = {
 /** Default cue settings - matches main preview camera position */
 export const DEFAULT_CUE_SETTINGS: CueSettings = {
   spinY: 0, // Model facing front
-  phi: Math.PI / 2, // Camera at side view (90°) - same as main preview y=0
+  phi: 0, // Camera default angle 0°
   zoom: 1,
   offsetX: 0,
   offsetY: 0,

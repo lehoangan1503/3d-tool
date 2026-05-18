@@ -1292,7 +1292,7 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
   return (
     <>
       <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-        <DialogContent className="max-w-6xl max-h-[95vh] overflow-hidden flex flex-col p-0">
+        <DialogContent className="w-[99vw] h-[99vh] max-w-none max-h-none overflow-hidden flex flex-col p-0">
           <DialogHeader className="px-6 pt-6 pb-2">
             <div className="flex items-center justify-between">
               <DialogTitle className="flex items-center gap-2">

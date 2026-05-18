@@ -57,17 +57,28 @@ import { SceneViewControls, type SelectionInfo } from "./scene-view-controls";
 
 /** Inline editable number field for transform values */
 function TransformInput({ label, value, onChange, suffix = "" }: { label: string; value: number; onChange: (v: number) => void; suffix?: string }) {
+  const [localValue, setLocalValue] = useState<string | null>(null);
+
+  // Sync external value only when not actively editing
+  const displayValue = localValue !== null ? localValue : parseFloat(value.toFixed(2)).toString();
+
+  const commit = (str: string) => {
+    setLocalValue(null);
+    const v = parseFloat(str);
+    if (!isNaN(v)) onChange(v);
+    else onChange(0);
+  };
+
   return (
     <div className="flex items-center gap-1.5">
       <span className="text-[10px] text-muted-foreground w-3 shrink-0">{label}</span>
       <input
         type="number"
         step="0.1"
-        value={parseFloat(value.toFixed(2))}
-        onChange={(e) => {
-          const v = parseFloat(e.target.value);
-          if (!isNaN(v)) onChange(v);
-        }}
+        value={displayValue}
+        onChange={(e) => setLocalValue(e.target.value)}
+        onBlur={(e) => commit(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.currentTarget.blur(); } }}
         className="h-6 w-full rounded border border-border/50 bg-muted/30 px-1.5 text-xs font-mono tabular-nums text-foreground outline-none focus:border-blue-500/50"
       />
       {suffix && <span className="text-[10px] text-muted-foreground shrink-0">{suffix}</span>}
@@ -483,12 +494,42 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               });
             } else if (info.type === "wallFrame" && info.frameId) {
               setConfig((prev) => {
-                const frames = prev.wallSurface.frames.map((f) => (f.id === info.frameId ? { ...f, x: position.x / 34 + 0.5, y: 0.5 - position.y / 24 } : f));
+                const WALL_W = 34, WALL_H = 24, WALL_Y = 10; // must match backdrop position
+                const frames = prev.wallSurface.frames.map((f) => {
+                  if (f.id !== info.frameId) return f;
+                  const obj = info.object as THREE.Mesh;
+                  const geo = obj?.geometry as THREE.PlaneGeometry | undefined;
+                  const baseW = geo?.parameters?.width ?? f.width * WALL_W;
+                  const baseH = geo?.parameters?.height ?? f.height * WALL_H;
+                  return {
+                    ...f,
+                    x: position.x / WALL_W + 0.5,
+                    y: 0.5 - (position.y - WALL_Y) / WALL_H,
+                    width: Math.max(0.05, (baseW * scale.x) / WALL_W),
+                    height: Math.max(0.05, (baseH * scale.y) / WALL_H),
+                    rotation: (rotation.z * 180) / Math.PI,
+                  };
+                });
                 return { ...prev, wallSurface: { ...prev.wallSurface, frames } };
               });
             } else if (info.type === "tableFrame" && info.frameId) {
               setConfig((prev) => {
-                const frames = prev.tableSurface.frames.map((f) => (f.id === info.frameId ? { ...f, x: position.x / 34 + 0.5, y: position.z / 12 + 0.5 } : f));
+                const TABLE_W = 34, TABLE_D = 12, TABLE_Z = 0.5; // must match tableSurface position
+                const frames = prev.tableSurface.frames.map((f) => {
+                  if (f.id !== info.frameId) return f;
+                  const obj = info.object as THREE.Mesh;
+                  const geo = obj?.geometry as THREE.PlaneGeometry | undefined;
+                  const baseW = geo?.parameters?.width ?? f.width * TABLE_W;
+                  const baseD = geo?.parameters?.height ?? f.height * TABLE_D;
+                  return {
+                    ...f,
+                    x: position.x / TABLE_W + 0.5,
+                    y: (position.z - TABLE_Z) / TABLE_D + 0.5,
+                    width: Math.max(0.05, (baseW * scale.x) / TABLE_W),
+                    height: Math.max(0.05, (baseD * scale.y) / TABLE_D),
+                    rotation: (rotation.y * 180) / Math.PI,
+                  };
+                });
                 return { ...prev, tableSurface: { ...prev.tableSurface, frames } };
               });
             } else if (info.type === "hdriLight" && info.layerId != null) {
@@ -656,6 +697,15 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     }
   }, [config]);
 
+  // Extract only the texture-relevant parts of frames (anything that requires a full material rebuild)
+  // Position, size, rotation, opacity changes use updateFramePlaneTransforms instead.
+  const wallFrameTextureKey = config.wallSurface.frames.map((f) =>
+    [f.id, f.enabled ? 1 : 0, f.imageUrl ?? "", f.backgroundEnabled ? 1 : 0, f.backgroundType ?? "", f.backgroundColor ?? "", f.backgroundOpacity ?? 1, f.imageOpacity ?? 1, f.type ?? "", f.color ?? "", f.gradient?.presetId ?? "", f.backgroundGradient?.angle ?? 0, JSON.stringify(f.backgroundGradient?.colors ?? [])].join(":")
+  ).join("|");
+  const tableFrameTextureKey = config.tableSurface.frames.map((f) =>
+    [f.id, f.enabled ? 1 : 0, f.imageUrl ?? "", f.backgroundEnabled ? 1 : 0, f.backgroundType ?? "", f.backgroundColor ?? "", f.backgroundOpacity ?? 1, f.imageOpacity ?? 1, f.type ?? "", f.color ?? "", f.gradient?.presetId ?? "", f.backgroundGradient?.angle ?? 0, JSON.stringify(f.backgroundGradient?.colors ?? [])].join(":")
+  ).join("|");
+
   useEffect(() => {
     if (!extractorRef.current || !open) return;
     if (rebuildTimerRef.current) clearTimeout(rebuildTimerRef.current);
@@ -671,15 +721,28 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     config.wallSurface.texturePreset,
     config.tableSurface.texturePreset,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    JSON.stringify(config.wallSurface.frames),
+    wallFrameTextureKey,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    JSON.stringify(config.tableSurface.frames),
+    tableFrameTextureKey,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     JSON.stringify(config.hdriConfig.layers.map((l) => l.hdriType)),
     config.shadow.enabled,
     config.cueConfig.instances.length,
     config.hdriConfig.layers.length,
     config.surfaceLightDisabled,
+    open,
+  ]);
+
+  // Light-weight update: sync frame transforms (position/size/rotation) without full rebuild
+  useEffect(() => {
+    if (!extractorRef.current || !open) return;
+    extractorRef.current.updateFramePlaneTransforms(config);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    JSON.stringify(config.wallSurface.frames.map((f) => [f.id, f.x, f.y, f.width, f.height, f.rotation, f.opacity])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    JSON.stringify(config.tableSurface.frames.map((f) => [f.id, f.x, f.y, f.width, f.height, f.rotation, f.opacity])),
     open,
   ]);
 

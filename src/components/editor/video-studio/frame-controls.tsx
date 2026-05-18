@@ -110,7 +110,7 @@ export function FrameControls({
   const [expanded, setExpanded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const Icon = TYPE_ICON[frame.type];
+  const Icon = TYPE_ICON[frame.type ?? "image"];
 
   const patch = useCallback(
     (partial: Partial<BackgroundFrame>) =>
@@ -138,7 +138,7 @@ export function FrameControls({
         onClick={() => setExpanded((v) => !v)}
       >
         <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="text-xs font-medium">{TYPE_LABEL[frame.type]}</span>
+        <span className="text-xs font-medium">{TYPE_LABEL[frame.type ?? "image"]}</span>
         <Swatch frame={frame} />
 
         <div className="flex-1" />

@@ -549,7 +549,19 @@ export class ExtractorSceneManager {
   setWallsVisible(visible: boolean): void {
     if (this.backdrop) this.backdrop.visible = visible;
     if (this.tableSurface) this.tableSurface.visible = visible;
-    if (this.studioCornerFill) this.studioCornerFill.visible = visible;
+    if (this.studioCornerFill) {
+      // When restoring visibility, respect whether an image frame is active
+      if (!visible) {
+        this.studioCornerFill.visible = false;
+      } else {
+        const config = this.studioConfigRef;
+        const hasImageFrame = config ? (
+          config.wallSurface.frames.some(f => f.enabled && f.imageUrl) ||
+          config.tableSurface.frames.some(f => f.enabled && f.imageUrl)
+        ) : false;
+        this.studioCornerFill.visible = !hasImageFrame;
+      }
+    }
     for (const p of this.wallFramePlanes) p.visible = visible;
     for (const p of this.tableFramePlanes) p.visible = visible;
   }
@@ -2315,14 +2327,24 @@ export class ExtractorSceneManager {
       this.scene.add(this.studioCornerFill);
     }
 
+    // Hide corner fill when any surface frame with an image is active
+    if (this.studioCornerFill) {
+      const hasImageFrame =
+        config.wallSurface.frames.some(f => f.enabled && f.imageUrl) ||
+        config.tableSurface.frames.some(f => f.enabled && f.imageUrl);
+      this.studioCornerFill.visible = !hasImageFrame;
+    }
+
     // Setup cue instances
     this.setupCueInstances(config.cueConfig);
   }
 
-  /** Create material for a frame plane based on its type */
+  /** Create material for a frame plane based on its content */
   private createFramePlaneMaterial(
     frame: BackgroundFrame,
-    loadedImages?: Map<string, HTMLImageElement>
+    loadedImages?: Map<string, HTMLImageElement>,
+    planeW = 1,
+    planeH = 1
   ): THREE.MeshBasicMaterial {
     const opts: THREE.MeshBasicMaterialParameters = {
       transparent: true,
@@ -2331,52 +2353,102 @@ export class ExtractorSceneManager {
       depthWrite: false,
     };
 
-    if (frame.type === "color" && frame.color) {
-      return new THREE.MeshBasicMaterial({ ...opts, color: frame.color });
-    }
+    // Compute canvas dimensions that match the plane's aspect ratio (max side = 1024).
+    // This ensures textures are never stretched when mapped to non-square planes.
+    const MAX_TEX = 1024;
+    const planeAR = planeW / Math.max(planeH, 0.001);
+    const canvasW = planeAR >= 1 ? MAX_TEX : Math.max(1, Math.round(MAX_TEX * planeAR));
+    const canvasH = planeAR < 1 ? MAX_TEX : Math.max(1, Math.round(MAX_TEX / planeAR));
 
-    if (frame.type === "gradient" && frame.gradient) {
+    // Draw image with object-fit:contain into the (non-square) canvas
+    const drawImageContain = (
+      ctx: CanvasRenderingContext2D,
+      img: HTMLImageElement,
+      cW: number,
+      cH: number,
+      alpha: number
+    ) => {
+      const scale = Math.min(cW / img.naturalWidth, cH / img.naturalHeight);
+      const drawW = img.naturalWidth * scale;
+      const drawH = img.naturalHeight * scale;
+      const dx = (cW - drawW) / 2;
+      const dy = (cH - drawH) / 2;
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(img, dx, dy, drawW, drawH);
+      ctx.globalAlpha = 1;
+    };
+
+    const renderToCanvas = (): THREE.CanvasTexture => {
       const canvas = document.createElement("canvas");
-      canvas.width = 256;
-      canvas.height = 256;
+      canvas.width = canvasW;
+      canvas.height = canvasH;
       const ctx = canvas.getContext("2d")!;
 
-      const preset = GRADIENT_PRESETS.find((p) => p.id === frame.gradient!.presetId);
-      if (preset) {
-        const angleDeg = frame.gradient.angle ?? preset.angle;
-        const angleRad = (angleDeg * Math.PI) / 180;
-        const len = 128;
-        const grad = ctx.createLinearGradient(
-          128 - Math.cos(angleRad) * len, 128 - Math.sin(angleRad) * len,
-          128 + Math.cos(angleRad) * len, 128 + Math.sin(angleRad) * len
-        );
-        if (preset.colors.length === 2) {
-          grad.addColorStop(0, preset.colors[0]);
-          grad.addColorStop(1, preset.colors[1]);
-        } else if (preset.colors.length >= 3) {
-          grad.addColorStop(0, preset.colors[0]);
-          grad.addColorStop(0.5, preset.colors[1]);
-          grad.addColorStop(1, preset.colors[2]);
+      if (frame.type) {
+        // Legacy format
+        if (frame.type === "color" && frame.color) {
+          ctx.fillStyle = frame.color;
+          ctx.fillRect(0, 0, canvasW, canvasH);
+        } else if (frame.type === "gradient" && frame.gradient) {
+          const preset = GRADIENT_PRESETS.find((p) => p.id === frame.gradient!.presetId);
+          if (preset) {
+            const angleDeg = frame.gradient.angle ?? preset.angle;
+            const angleRad = (angleDeg * Math.PI) / 180;
+            const len = Math.sqrt(canvasW * canvasW + canvasH * canvasH) / 2;
+            const grad = ctx.createLinearGradient(
+              canvasW / 2 - Math.cos(angleRad) * len, canvasH / 2 - Math.sin(angleRad) * len,
+              canvasW / 2 + Math.cos(angleRad) * len, canvasH / 2 + Math.sin(angleRad) * len
+            );
+            preset.colors.forEach((c, i) => grad.addColorStop(i / (preset.colors.length - 1), c));
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, canvasW, canvasH);
+          }
+        } else if (frame.type === "image" && frame.imageUrl && loadedImages) {
+          const img = loadedImages.get(frame.imageUrl);
+          if (img) {
+            drawImageContain(ctx, img, canvasW, canvasH, 1);
+          }
         }
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, 256, 256);
+      } else {
+        // New format: background layer + image layer
+        if (frame.backgroundEnabled !== false) {
+          ctx.globalAlpha = frame.backgroundOpacity ?? 1;
+          if (frame.backgroundType === "gradient" && frame.backgroundGradient) {
+            const g = frame.backgroundGradient;
+            const angleRad = (g.angle * Math.PI) / 180;
+            const len = Math.sqrt(canvasW * canvasW + canvasH * canvasH) / 2;
+            const grad = ctx.createLinearGradient(
+              canvasW / 2 - Math.cos(angleRad) * len, canvasH / 2 - Math.sin(angleRad) * len,
+              canvasW / 2 + Math.cos(angleRad) * len, canvasH / 2 + Math.sin(angleRad) * len
+            );
+            g.colors.forEach((c, i) => grad.addColorStop(i / Math.max(g.colors.length - 1, 1), c));
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, canvasW, canvasH);
+          } else {
+            ctx.fillStyle = frame.backgroundColor ?? "#1a1a1a";
+            ctx.fillRect(0, 0, canvasW, canvasH);
+          }
+          ctx.globalAlpha = 1;
+        }
+        if (frame.imageUrl && loadedImages) {
+          const img = loadedImages.get(frame.imageUrl);
+          if (img) {
+            drawImageContain(ctx, img, canvasW, canvasH, frame.imageOpacity ?? 1);
+          }
+        }
       }
 
       const tex = new THREE.CanvasTexture(canvas);
-      return new THREE.MeshBasicMaterial({ ...opts, map: tex });
-    }
+      // Mark as sRGB so THREE.js correctly converts to linear on sampling
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.needsUpdate = true;
+      return tex;
+    };
 
-    if (frame.type === "image" && frame.imageUrl && loadedImages) {
-      const img = loadedImages.get(frame.imageUrl);
-      if (img) {
-        const tex = new THREE.Texture(img);
-        tex.needsUpdate = true;
-        return new THREE.MeshBasicMaterial({ ...opts, map: tex });
-      }
-    }
-
-    // Fallback
-    return new THREE.MeshBasicMaterial({ ...opts, color: 0x333333 });
+    const mat = new THREE.MeshBasicMaterial({ ...opts, map: renderToCanvas() });
+    // Disable tone mapping so frames display original colors regardless of renderer settings
+    mat.toneMapped = false;
+    return mat;
   }
 
   /** Build frame plane meshes for a surface and add to scene */
@@ -2391,13 +2463,13 @@ export class ExtractorSceneManager {
 
     for (let i = 0; i < enabledFrames.length; i++) {
       const frame = enabledFrames[i];
-      const material = this.createFramePlaneMaterial(frame, loadedImages);
 
       if (isTable) {
         const tableWidth = 34;
         const tableDepth = 12;
         const pw = frame.width * tableWidth;
         const pd = frame.height * tableDepth;
+        const material = this.createFramePlaneMaterial(frame, loadedImages, pw, pd);
         const geo = new THREE.PlaneGeometry(pw, pd);
         const mesh = new THREE.Mesh(geo, material);
 
@@ -2417,6 +2489,7 @@ export class ExtractorSceneManager {
         const wallHeight = 24;
         const pw = frame.width * wallWidth;
         const ph = frame.height * wallHeight;
+        const material = this.createFramePlaneMaterial(frame, loadedImages, pw, ph);
         const geo = new THREE.PlaneGeometry(pw, ph);
         const mesh = new THREE.Mesh(geo, material);
 
@@ -2488,9 +2561,21 @@ export class ExtractorSceneManager {
           tablePos.y + 0.01 * (mesh.userData.frameIndex + 1),
           tablePos.z + (frame.y - 0.5) * tableDepth
         );
-        mesh.rotation.z = (frame.rotation * Math.PI) / 180;
+        mesh.rotation.set(-Math.PI / 2, 0, (frame.rotation * Math.PI) / 180);
+        const pw = frame.width * tableWidth;
+        const pd = frame.height * tableDepth;
+        mesh.scale.set(pw / (mesh.geometry as THREE.PlaneGeometry).parameters.width,
+                       pd / (mesh.geometry as THREE.PlaneGeometry).parameters.height, 1);
         (mesh.material as THREE.MeshBasicMaterial).opacity = frame.opacity;
       }
+    }
+
+    // Always sync corner fill visibility from latest config
+    if (this.studioCornerFill) {
+      const hasImageFrame =
+        config.wallSurface.frames.some(f => f.enabled && f.imageUrl) ||
+        config.tableSurface.frames.some(f => f.enabled && f.imageUrl);
+      this.studioCornerFill.visible = !hasImageFrame;
     }
   }
 
@@ -2575,6 +2660,14 @@ export class ExtractorSceneManager {
 
     // Sync frame plane positions/scales from config
     this.updateFramePlaneTransforms(config);
+
+    // Hide the curved corner fill when any surface frame with an image is active
+    if (this.studioCornerFill) {
+      const hasImageFrame =
+        config.wallSurface.frames.some(f => f.enabled && f.imageUrl) ||
+        config.tableSurface.frames.some(f => f.enabled && f.imageUrl);
+      this.studioCornerFill.visible = !hasImageFrame;
+    }
 
     // Apply shadow settings
     this.updateShadowFromConfig(config);
@@ -3468,62 +3561,53 @@ export class ExtractorSceneManager {
   /** Register a canvas element to receive minimap camera view updates */
   setMinimapCanvas(canvas: HTMLCanvasElement | null): void {
     this._minimapCanvas = canvas;
-    if (canvas && !this._minimapTarget) {
-      const { MINIMAP_W, MINIMAP_H } = ExtractorSceneManager;
-      this._minimapTarget = new THREE.WebGLRenderTarget(MINIMAP_W, MINIMAP_H);
-      this._minimapBuf = new Uint8Array(MINIMAP_W * MINIMAP_H * 4);
-    }
-    if (!canvas) {
-      this._minimapTarget?.dispose();
+    // Offscreen render target no longer needed — we use drawImage() from main canvas
+    if (this._minimapTarget) {
+      this._minimapTarget.dispose();
       this._minimapTarget = null;
       this._minimapBuf = null;
     }
   }
 
-  /** Internal: render camera view to WebGLRenderTarget then copy to 2D canvas */
+  /** Internal: render production camera to main WebGL canvas, copy via drawImage to minimap canvas.
+   *  Same pipeline as _updatePreviewInternal — includes tone mapping + sRGB encoding so colours match. */
   private _updateMinimapInternal(): void {
     const canvas = this._minimapCanvas;
-    const target = this._minimapTarget;
-    const buf = this._minimapBuf;
-    if (!canvas || !target || !buf) return;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
 
     const { MINIMAP_W, MINIMAP_H } = ExtractorSceneManager;
 
-    // Hide scene-view helpers
-    const helperVis = this.cameraHelper?.visible ?? false;
-    const gizmoVis = this.cameraGizmo?.visible ?? false;
-    if (this.cameraHelper) this.cameraHelper.visible = false;
-    if (this.cameraGizmo) this.cameraGizmo.visible = false;
+    // Hide ALL editor helpers so they don't appear in the minimap
+    this.setHelpersVisible(false);
 
-    // Adjust camera aspect for minimap
+    // Hide TransformControls gizmos
+    const hiddenObjs: THREE.Object3D[] = [];
+    this.scene.traverse((obj) => {
+      if (obj.type.startsWith('TransformControls') || (obj as any).isTransformControls) {
+        if (obj.visible) { hiddenObjs.push(obj); obj.visible = false; }
+      }
+    });
+
+    // Adjust camera aspect to match minimap dimensions
     const savedAspect = this.camera.aspect;
     this.camera.aspect = MINIMAP_W / MINIMAP_H;
     this.camera.updateProjectionMatrix();
 
-    // Render to offscreen target (no main canvas resize)
-    this.renderer.setRenderTarget(target);
+    // Render directly to main WebGL canvas (preserveDrawingBuffer: true)
+    // This ensures tone mapping + sRGB encoding match the main view exactly
     this.renderer.render(this.scene, this.camera);
-    this.renderer.setRenderTarget(null);
 
-    // Read pixels and draw to 2D canvas
-    this.renderer.readRenderTargetPixels(target, 0, 0, MINIMAP_W, MINIMAP_H, buf);
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      const imageData = ctx.createImageData(MINIMAP_W, MINIMAP_H);
-      // WebGL readPixels is bottom-up; flip rows for 2D canvas (top-down)
-      for (let y = 0; y < MINIMAP_H; y++) {
-        const srcRow = (MINIMAP_H - 1 - y) * MINIMAP_W * 4;
-        const dstRow = y * MINIMAP_W * 4;
-        imageData.data.set(buf.subarray(srcRow, srcRow + MINIMAP_W * 4), dstRow);
-      }
-      ctx.putImageData(imageData, 0, 0);
-    }
+    // GPU-accelerated blit to 2D minimap canvas — no CPU readback, correct colours
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(this.renderer.domElement, 0, 0, canvas.width, canvas.height);
 
     // Restore camera aspect and helpers
     this.camera.aspect = savedAspect;
     this.camera.updateProjectionMatrix();
-    if (this.cameraHelper) this.cameraHelper.visible = helperVis;
-    if (this.cameraGizmo) this.cameraGizmo.visible = gizmoVis;
+    if (this.isSceneView) this.setHelpersVisible(true);
+    for (const obj of hiddenObjs) obj.visible = true;
   }
 
   /**

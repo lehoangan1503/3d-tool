@@ -18,6 +18,7 @@ interface StorageImage {
   path: string;
   url: string;
   createdAt?: string;
+  isOwn?: boolean;
 }
 
 interface ImagePickerDialogProps {
@@ -41,9 +42,8 @@ export function ImagePickerDialog({
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [selectedUrl, setSelectedUrl] = useState<string | null>(
-    currentUrl || null
-  );
+  const [selectedUrl, setSelectedUrl] = useState<string | null>(currentUrl || null);
+  const [filterMode, setFilterMode] = useState<"all" | "mine">("all");
 
   // Upload state
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -59,7 +59,7 @@ export function ImagePickerDialog({
   }, [search]);
 
   const loadImages = useCallback(
-    async (offset: number, searchTerm: string, append: boolean) => {
+    async (offset: number, searchTerm: string, append: boolean, filter: "all" | "mine") => {
       if (offset === 0) setIsLoading(true);
       else setIsFetchingMore(true);
 
@@ -67,6 +67,7 @@ export function ImagePickerDialog({
         const params = new URLSearchParams({
           limit: String(PAGE_SIZE),
           offset: String(offset),
+          filter,
           ...(searchTerm ? { search: searchTerm } : {}),
         });
         const res = await fetch(`/api/storage-images?${params}`);
@@ -84,18 +85,18 @@ export function ImagePickerDialog({
     []
   );
 
-  // Load when dialog opens or search changes
+  // Load when dialog opens, search or filter changes
   useEffect(() => {
     if (!open) return;
-    loadImages(0, debouncedSearch, false);
-  }, [open, debouncedSearch, loadImages]);
+    loadImages(0, debouncedSearch, false, filterMode);
+  }, [open, debouncedSearch, filterMode, loadImages]);
 
   // Sync currentUrl when prop changes
   useEffect(() => {
     setSelectedUrl(currentUrl || null);
   }, [currentUrl]);
 
-  // Reset upload state on close
+  // Reset state on close
   useEffect(() => {
     if (!open) {
       setSearch("");
@@ -109,7 +110,6 @@ export function ImagePickerDialog({
     const file = e.target.files?.[0];
     if (!file) return;
     setUploadFile(file);
-    // Pre-fill name with original filename (without extension)
     setUploadName(file.name.replace(/\.[^.]+$/, ""));
     setUploadError(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -130,12 +130,11 @@ export function ImagePickerDialog({
 
       const { url } = await res.json();
 
-      // Reset upload state
       setUploadFile(null);
       setUploadName("");
 
-      // Reload images, auto-select and close
-      await loadImages(0, debouncedSearch, false);
+      // Reload and auto-select the new image
+      await loadImages(0, debouncedSearch, false, filterMode);
       setSelectedUrl(url);
       onSelect(url);
       onClose();
@@ -269,9 +268,36 @@ export function ImagePickerDialog({
             )}
           </div>
 
-          {/* Search */}
-          <div className="px-6 py-3 border-b flex-shrink-0">
-            <div className="relative">
+          {/* Filter tabs + Search */}
+          <div className="px-6 py-3 border-b flex-shrink-0 flex items-center gap-3">
+            {/* Filter tabs */}
+            <div className="flex rounded-md border overflow-hidden flex-shrink-0">
+              <button
+                className={cn(
+                  "px-3 py-1.5 text-xs font-medium transition-colors",
+                  filterMode === "all"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                )}
+                onClick={() => setFilterMode("all")}
+              >
+                Tất cả
+              </button>
+              <button
+                className={cn(
+                  "px-3 py-1.5 text-xs font-medium border-l transition-colors",
+                  filterMode === "mine"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                )}
+                onClick={() => setFilterMode("mine")}
+              >
+                Ảnh bạn tải lên
+              </button>
+            </div>
+
+            {/* Search */}
+            <div className="relative flex-1">
               <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
               <Input
                 value={search}
@@ -304,6 +330,7 @@ export function ImagePickerDialog({
                   {images.map((img) => {
                     const isActive = selectedUrl === img.url;
                     const isDeleting = deletingPath === img.path;
+                    const canDelete = img.isOwn !== false;
                     return (
                       <button
                         key={img.path}
@@ -333,20 +360,22 @@ export function ImagePickerDialog({
                             <Check className="h-3 w-3 text-white" />
                           </div>
                         )}
-                        {/* Delete button - visible on hover */}
-                        <button
-                          type="button"
-                          className="absolute top-1.5 left-1.5 w-6 h-6 rounded bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 focus:opacity-100"
-                          onClick={(e) => handleDelete(e, img)}
-                          disabled={isDeleting}
-                          title="Xóa ảnh"
-                        >
-                          {isDeleting ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-3 w-3" />
-                          )}
-                        </button>
+                        {/* Delete button — only for own images */}
+                        {canDelete && (
+                          <button
+                            type="button"
+                            className="absolute top-1.5 left-1.5 w-6 h-6 rounded bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 focus:opacity-100"
+                            onClick={(e) => handleDelete(e, img)}
+                            disabled={isDeleting}
+                            title="Xóa ảnh"
+                          >
+                            {isDeleting ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3 w-3" />
+                            )}
+                          </button>
+                        )}
                       </button>
                     );
                   })}
@@ -357,9 +386,7 @@ export function ImagePickerDialog({
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() =>
-                        loadImages(images.length, debouncedSearch, true)
-                      }
+                      onClick={() => loadImages(images.length, debouncedSearch, true, filterMode)}
                       disabled={isFetchingMore}
                     >
                       {isFetchingMore ? (

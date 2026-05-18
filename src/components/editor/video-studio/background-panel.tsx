@@ -3,14 +3,18 @@
 import { useState, useEffect } from "react";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { Button } from "@/components/ui/button";
 import {
   ChevronDown,
   ChevronUp,
   RectangleHorizontal,
   Table2,
+  Plus,
 } from "lucide-react";
-import type { SurfaceConfig } from "@/types/video-studio";
+import type { SurfaceConfig, BackgroundFrame } from "@/types/video-studio";
+import { createBackgroundFrame } from "@/types/video-studio";
 import type { TexturePackInfo, TextureManifest } from "@/lib/three/studio-background";
+import { SurfaceFrameControls } from "./surface-frame-controls";
 
 // ---------------------------------------------------------------------------
 // Texture Preset Picker
@@ -89,8 +93,26 @@ function SurfaceSection({
   const currentPack = texturePacks.find((p) => p.id === surface.texturePreset);
   const roughness = surface.roughness ?? currentPack?.roughnessValue ?? 0.5;
 
+  const frames = surface.frames ?? [];
+
+  const updateFrame = (id: string, updated: BackgroundFrame) => {
+    onChange({ ...surface, frames: frames.map((f) => (f.id === id ? updated : f)) });
+  };
+
+  const deleteFrame = (id: string) => {
+    onChange({ ...surface, frames: frames.filter((f) => f.id !== id) });
+  };
+
+  const moveFrame = (index: number, direction: -1 | 1) => {
+    const next = [...frames];
+    const target = index + direction;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    onChange({ ...surface, frames: next });
+  };
+
   return (
-    <div className="rounded-lg border border-border/50 overflow-hidden">
+    <div className="overflow-hidden">
       {/* Header */}
       <button
         type="button"
@@ -109,37 +131,37 @@ function SurfaceSection({
       {/* Expanded content */}
       {expanded && (
         <div className="px-2 pb-2 space-y-2">
-          {/* Texture Preset */}
-          <div className="space-y-1 px-1">
-            <Label className="text-xs text-muted-foreground">Vật liệu</Label>
-            <TexturePresetPicker
-              packs={texturePacks}
-              selected={surface.texturePreset}
-              onSelect={(id) => {
-                const pack = texturePacks.find((p) => p.id === id);
-                onChange({
-                  ...surface,
-                  texturePreset: id,
-                  roughness: pack?.roughnessValue,
-                });
-              }}
-            />
-          </div>
 
-          {/* Roughness */}
-          <div className="px-1 space-y-1">
-            <Label className="text-xs text-muted-foreground">
-              Độ nhám — {Math.round(roughness * 100)}%
-            </Label>
-            <Slider
-              value={[roughness]}
-              onValueChange={([v]) =>
-                onChange({ ...surface, roughness: v })
-              }
-              min={0}
-              max={1}
-              step={0.01}
-            />
+          {/* Background Frames (images, colours, gradients) */}
+          <div className="px-1 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs text-muted-foreground">Hình ảnh / màu nền</Label>
+              {frames.length < 4 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs gap-1"
+                  onClick={() =>
+                    onChange({ ...surface, frames: [...frames, createBackgroundFrame()] })
+                  }
+                >
+                  <Plus className="h-3 w-3" />
+                  Thêm
+                </Button>
+              )}
+            </div>
+            {frames.map((frame, i) => (
+              <SurfaceFrameControls
+                key={frame.id}
+                frame={frame}
+                onChange={(updated) => updateFrame(frame.id, updated)}
+                onDelete={() => deleteFrame(frame.id)}
+                onMoveUp={() => moveFrame(i, -1)}
+                onMoveDown={() => moveFrame(i, 1)}
+                isFirst={i === 0}
+                isLast={i === frames.length - 1}
+              />
+            ))}
           </div>
         </div>
       )}
@@ -174,7 +196,7 @@ export function BackgroundPanel({
   }, []);
 
   return (
-    <div className="space-y-3">
+    <div>
       <SurfaceSection
         title="Nền tường"
         icon={RectangleHorizontal}
@@ -182,6 +204,7 @@ export function BackgroundPanel({
         onChange={onWallSurfaceChange}
         texturePacks={manifest?.wall ?? []}
       />
+      <div className="border-t border-border/40 my-1" />
       <SurfaceSection
         title="Bề mặt bàn"
         icon={Table2}

@@ -2,6 +2,70 @@ import * as THREE from 'three';
 import type { BackgroundFrame, SurfaceConfig } from '@/types/video-studio';
 import { GRADIENT_PRESETS } from '@/types/video-studio';
 
+// ── Helper: draw a single frame onto a 2D canvas context ──
+
+function drawFrameToContext(
+  ctx: CanvasRenderingContext2D,
+  frame: BackgroundFrame,
+  fw: number,
+  fh: number,
+  outerOpacity: number,
+  loadedImages?: Map<string, HTMLImageElement>
+): void {
+  if (frame.type) {
+    // ── Legacy format (type === "color" | "gradient" | "image") ──
+    ctx.globalAlpha = outerOpacity;
+    if (frame.type === "color" && frame.color) {
+      ctx.fillStyle = frame.color;
+      ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
+    } else if (frame.type === "gradient" && frame.gradient) {
+      const preset = GRADIENT_PRESETS.find(p => p.id === frame.gradient!.presetId);
+      if (preset) {
+        const angleDeg = frame.gradient.angle ?? preset.angle;
+        const angleRad = (angleDeg * Math.PI) / 180;
+        const len = Math.sqrt(fw * fw + fh * fh) / 2;
+        const grad = ctx.createLinearGradient(
+          -Math.cos(angleRad) * len, -Math.sin(angleRad) * len,
+          Math.cos(angleRad) * len, Math.sin(angleRad) * len
+        );
+        preset.colors.forEach((c, i) => grad.addColorStop(i / (preset.colors.length - 1), c));
+        ctx.fillStyle = grad;
+        ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
+      }
+    } else if (frame.type === "image" && frame.imageUrl && loadedImages) {
+      const img = loadedImages.get(frame.imageUrl);
+      if (img) ctx.drawImage(img, -fw / 2, -fh / 2, fw, fh);
+    }
+  } else {
+    // ── New format: background layer + image layer ──
+    if (frame.backgroundEnabled !== false) {
+      ctx.globalAlpha = outerOpacity * (frame.backgroundOpacity ?? 1);
+      if (frame.backgroundType === "gradient" && frame.backgroundGradient) {
+        const g = frame.backgroundGradient;
+        const angleRad = (g.angle * Math.PI) / 180;
+        const len = Math.sqrt(fw * fw + fh * fh) / 2;
+        const grad = ctx.createLinearGradient(
+          -Math.cos(angleRad) * len, -Math.sin(angleRad) * len,
+          Math.cos(angleRad) * len, Math.sin(angleRad) * len
+        );
+        g.colors.forEach((c, i) => grad.addColorStop(i / Math.max(g.colors.length - 1, 1), c));
+        ctx.fillStyle = grad;
+        ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
+      } else {
+        ctx.fillStyle = frame.backgroundColor ?? "#1a1a1a";
+        ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
+      }
+    }
+    if (frame.imageUrl && loadedImages) {
+      const img = loadedImages.get(frame.imageUrl);
+      if (img) {
+        ctx.globalAlpha = outerOpacity * (frame.imageOpacity ?? 1);
+        ctx.drawImage(img, -fw / 2, -fh / 2, fw, fh);
+      }
+    }
+  }
+}
+
 /**
  * Composite surface frames into a CanvasTexture.
  * Frames render bottom-to-top (array order = z-order) with position, rotation, scale, and opacity.
@@ -29,7 +93,6 @@ export function compositeSurfaceFrames(
   const enabledFrames = surface.frames.filter(f => f.enabled);
   for (const frame of enabledFrames) {
     ctx.save();
-    ctx.globalAlpha = frame.opacity;
 
     // Frame center in canvas pixels
     const cx = frame.x * width;
@@ -43,40 +106,7 @@ export function compositeSurfaceFrames(
     ctx.translate(cx, cy);
     ctx.rotate((frame.rotation * Math.PI) / 180);
 
-    if (frame.type === "color" && frame.color) {
-      ctx.fillStyle = frame.color;
-      ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
-
-    } else if (frame.type === "gradient" && frame.gradient) {
-      const preset = GRADIENT_PRESETS.find(p => p.id === frame.gradient!.presetId);
-      if (preset) {
-        const angleDeg = frame.gradient.angle ?? preset.angle;
-        const angleRad = (angleDeg * Math.PI) / 180;
-        const len = Math.sqrt(fw * fw + fh * fh) / 2;
-        const x0 = -Math.cos(angleRad) * len;
-        const y0 = -Math.sin(angleRad) * len;
-        const x1 = Math.cos(angleRad) * len;
-        const y1 = Math.sin(angleRad) * len;
-
-        const grad = ctx.createLinearGradient(x0, y0, x1, y1);
-        if (preset.colors.length === 2) {
-          grad.addColorStop(0, preset.colors[0]);
-          grad.addColorStop(1, preset.colors[1]);
-        } else if (preset.colors.length >= 3) {
-          grad.addColorStop(0, preset.colors[0]);
-          grad.addColorStop(0.5, preset.colors[1]);
-          grad.addColorStop(1, preset.colors[2]);
-        }
-        ctx.fillStyle = grad;
-        ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
-      }
-
-    } else if (frame.type === "image" && frame.imageUrl && loadedImages) {
-      const img = loadedImages.get(frame.imageUrl);
-      if (img) {
-        ctx.drawImage(img, -fw / 2, -fh / 2, fw, fh);
-      }
-    }
+    drawFrameToContext(ctx, frame, fw, fh, frame.opacity, loadedImages);
 
     ctx.restore();
   }
@@ -91,22 +121,21 @@ export async function preloadFrameImages(
   frames: BackgroundFrame[]
 ): Promise<Map<string, HTMLImageElement>> {
   const map = new Map<string, HTMLImageElement>();
-  const imageFrames = frames.filter(
-    (f) => f.type === "image" && f.imageUrl && f.enabled
-  );
+  // Collect all URLs from both legacy (type === "image") and new format (imageUrl present)
+  const urlsToLoad = frames
+    .filter(f => f.enabled && f.imageUrl)
+    .map(f => f.imageUrl!);
 
   await Promise.all(
-    imageFrames.map(
-      (f) =>
+    urlsToLoad.map(
+      (url) =>
         new Promise<void>((resolve) => {
+          if (map.has(url)) { resolve(); return; }
           const img = new Image();
           img.crossOrigin = "anonymous";
-          img.onload = () => {
-            map.set(f.imageUrl!, img);
-            resolve();
-          };
+          img.onload = () => { map.set(url, img); resolve(); };
           img.onerror = () => resolve();
-          img.src = f.imageUrl!;
+          img.src = url;
         })
     )
   );

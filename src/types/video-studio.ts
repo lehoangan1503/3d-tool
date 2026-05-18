@@ -141,14 +141,21 @@ export const DEFAULT_EASING: EasingConfig = {
 
 export const MAX_BACKGROUND_FRAMES = 4;
 
+/** @deprecated Only used for legacy frames that have a `type` field */
 export type BackgroundFrameType = "color" | "gradient" | "image";
 
 export interface BackgroundFrame {
   id: string;
-  type: BackgroundFrameType;
-  color?: string;
-  gradient?: { presetId: string; angle: number };
+  // ── Image layer ──
   imageUrl?: string | null;
+  imageOpacity?: number;         // 0–1, default 1
+  // ── Background layer ──
+  backgroundEnabled?: boolean;   // default true
+  backgroundType?: "color" | "gradient";
+  backgroundColor?: string;      // Hex color
+  backgroundGradient?: { name: string; colors: string[]; angle: number };
+  backgroundOpacity?: number;    // 0–1, default 1
+  // ── Transform ──
   x: number;        // Center X (0=left, 0.5=center, 1=right)
   y: number;        // Center Y (0=top, 0.5=center, 1=bottom)
   width: number;    // 0–2 (1 = full surface width)
@@ -156,6 +163,13 @@ export interface BackgroundFrame {
   rotation: number; // Degrees 0–360
   opacity: number;  // 0–1
   enabled: boolean;
+  // ── Legacy (deprecated) ──
+  /** @deprecated */
+  type?: BackgroundFrameType;
+  /** @deprecated Use backgroundColor */
+  color?: string;
+  /** @deprecated Use backgroundGradient */
+  gradient?: { presetId: string; angle: number };
 }
 
 export interface SurfaceConfig {
@@ -439,18 +453,19 @@ function cubicBezier(p1x: number, p1y: number, p2x: number, p2y: number): (t: nu
 
 // ── Factory: Create a new background frame ──
 
-export function createBackgroundFrame(type: BackgroundFrameType = "color"): BackgroundFrame {
-  const id = crypto.randomUUID();
+export function createBackgroundFrame(): BackgroundFrame {
   return {
-    id,
-    type,
-    color: type === "color" ? "#1a1a1a" : undefined,
-    gradient: type === "gradient" ? { presetId: "n01", angle: 180 } : undefined,
-    imageUrl: type === "image" ? null : undefined,
+    id: crypto.randomUUID(),
+    imageUrl: null,
+    imageOpacity: 1,
+    backgroundEnabled: true,
+    backgroundType: "color",
+    backgroundColor: "#1a1a1a",
+    backgroundOpacity: 1,
     x: 0.5,
     y: 0.5,
-    width: 1,
-    height: 1,
+    width: 0.4,
+    height: 0.35,
     rotation: 0,
     opacity: 1,
     enabled: true,

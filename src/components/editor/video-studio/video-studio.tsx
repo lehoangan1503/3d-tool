@@ -467,7 +467,22 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               },
               scale: { x: scale.x, y: scale.y, z: scale.z },
             });
-            if (info.type === "cue") {
+            if (info.type === "camera") {
+              // Sync recording camera position into config so "Lưu Mẫu" captures the current position.
+              // position/rotation come from the camera gizmo, which is about to be synced to the
+              // actual recording camera via syncCameraFromGizmo() right after this callback returns.
+              setConfig((prev) => ({
+                ...prev,
+                cameraStart: {
+                  x: position.x,
+                  y: position.y,
+                  z: position.z,
+                  rotationX: rotation.x,
+                  rotationY: rotation.y,
+                  rotationZ: rotation.z,
+                },
+              }));
+            } else if (info.type === "cue") {
               // Immediately move shadow lights without waiting for the debounced config update
               extractorRef.current?.directUpdateCueShadowPosition(position.x, position.z);
               setConfig((prev) => {

@@ -364,6 +364,11 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     if (!open || !sceneManager) return;
 
     let sceneViewAnimId: number | null = null;
+    let isCancelled = false;
+    // Capture local refs so cleanup disposes exactly what this effect created,
+    // even if the async setup completes after the cleanup runs.
+    let localExtractor: ExtractorSceneManager | null = null;
+    let localSceneViewControls: SceneViewControls | null = null;
 
     const setup = async () => {
       sceneManager.pauseAnimation();
@@ -372,9 +377,11 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       if (!model) return;
 
       const extractor = new ExtractorSceneManager();
+      localExtractor = extractor;
       extractorRef.current = extractor;
 
       if (model) await extractor.setModel(model);
+      if (isCancelled) { extractor.dispose(); localExtractor = null; return; }
       if (hdriUrl) {
         try {
           await extractor.loadHDRI(hdriUrl);
@@ -382,13 +389,17 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
           // HDRI load failure is non-critical
         }
       }
+      if (isCancelled) { extractor.dispose(); localExtractor = null; return; }
 
       const canvas = extractor.getCanvas();
       if (previewContainerRef.current && canvas) {
         canvas.style.width = "100%";
         canvas.style.height = "100%";
         canvas.style.display = "block";
-        previewContainerRef.current.innerHTML = "";
+        // Remove only any previously-appended canvas — don't use innerHTML="" which
+        // would remove React-managed children and cause a "removeChild" reconciler error.
+        const existingCanvas = previewContainerRef.current.querySelector("canvas");
+        if (existingCanvas) existingCanvas.remove();
         previewContainerRef.current.appendChild(canvas);
         const rect = previewContainerRef.current.getBoundingClientRect();
         const initW = Math.max(rect.width || 800, 1);
@@ -398,7 +409,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         const ratioPreset = VIDEO_RATIO_PRESETS.find((r) => r.id === ratioId) ?? VIDEO_RATIO_PRESETS[0];
         extractor.setStudioCameraAspect(ratioPreset.width / ratioPreset.height);
         extractor.initSceneView();
-        sceneViewControlsRef.current = new SceneViewControls(
+        const controls = new SceneViewControls(
           extractor,
           canvas,
           (kf: CameraKeyframe) => {
@@ -589,9 +600,13 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
             configFutureRef.current = [];
           }
         );
+        localSceneViewControls = controls;
+        sceneViewControlsRef.current = controls;
       }
 
+      if (isCancelled) { extractor.dispose(); localExtractor = null; return; }
       await extractor.setupStudioFromStudioConfig(config);
+      if (isCancelled) { extractor.dispose(); localExtractor = null; return; }
       extractor.startStudioVideoPreview(config);
       // Apply initial view mode so orbit controls and _cameraPlacementMode are set correctly
       // (the viewMode useEffect fires before extractorRef is set on first mount, so we must
@@ -630,14 +645,17 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     setup();
 
     return () => {
+      isCancelled = true;
       setSceneReady(false);
       if (sceneViewAnimId) cancelAnimationFrame(sceneViewAnimId);
       sceneViewLoopRef.current = null;
-      sceneViewControlsRef.current?.dispose();
-      sceneViewControlsRef.current = null;
-      extractorRef.current?.stopVideoPreview();
-      extractorRef.current?.dispose();
-      extractorRef.current = null;
+      // Dispose exactly what this effect instance created — avoids stale-ref issues
+      // when the effect re-runs before the async setup completes.
+      localSceneViewControls?.dispose();
+      if (sceneViewControlsRef.current === localSceneViewControls) sceneViewControlsRef.current = null;
+      localExtractor?.stopVideoPreview();
+      localExtractor?.dispose();
+      if (extractorRef.current === localExtractor) extractorRef.current = null;
       sceneManager?.resumeAnimation();
     };
     // Only re-run on open/close, not on config changes
@@ -1117,6 +1135,8 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                   onLoadConfig={(c) => {
                     const migrated = migrateVideoStudioConfig(ensureFullConfig(c));
                     setConfig(migrated);
+                    // Invalidate cache so the next updateStudioPreviewConfig applies the template camera
+                    extractorRef.current?.invalidateCameraStartKey();
                     // Template already has camera positions — treat them as captured so record is ready
                     setCapturedStart(migrated.cameraStart ?? null);
                     setCapturedEnd(migrated.cameraEnd ?? null);

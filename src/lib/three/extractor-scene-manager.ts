@@ -2687,8 +2687,10 @@ export class ExtractorSceneManager {
     // Sync camera position from config ONLY if cameraStart actually changed.
     // Skipping on unrelated config changes (e.g. cue position) prevents the camera
     // from jumping back to the stored keyframe while the user has moved it via gizmo.
+    // _cameraPlacementMode is intentionally NOT checked here — it was previously blocking
+    // template camera loading when the user was in "camera" view mode.
     const camKey = `${config.cameraStart.x},${config.cameraStart.y},${config.cameraStart.z},${config.cameraStart.rotationX ?? 0},${config.cameraStart.rotationY ?? 0},${config.cameraStart.rotationZ ?? 0}`;
-    if (!this._cameraPlacementMode && camKey !== this._lastAppliedCameraStartKey) {
+    if (camKey !== this._lastAppliedCameraStartKey) {
       this._lastAppliedCameraStartKey = camKey;
       this.setCameraFromKeyframe(config.cameraStart);
     }
@@ -4004,6 +4006,11 @@ export class ExtractorSceneManager {
 
   getViewMode(): "scene" | "camera" {
     return this.isSceneView ? "scene" : "camera";
+  }
+
+  /** Reset the camera-key cache so the next updateStudioPreviewConfig always applies the camera. */
+  invalidateCameraStartKey(): void {
+    this._lastAppliedCameraStartKey = "";
   }
 
   getGodCamera(): THREE.PerspectiveCamera | null {

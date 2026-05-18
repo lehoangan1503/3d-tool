@@ -225,6 +225,8 @@ export class ExtractorSceneManager {
   private _isHelperDragging = false;
   /** When true, updateStudioPreviewConfig skips setCameraFromKeyframe so camera orbit controls can take effect */
   private _cameraPlacementMode = false;
+  /** Fingerprint of the last cameraStart that was applied via setCameraFromKeyframe in updateStudioPreviewConfig */
+  private _lastAppliedCameraStartKey = "";
   private _cameraOrbit: OrbitControls | null = null;
   /** Timer used to delay clearing _cameraPlacementMode past the config-sync debounce to prevent camera jumps */
   private _placementModeExpiryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2592,6 +2594,7 @@ export class ExtractorSceneManager {
 
     // Camera at start position — skip if placement mode is active or caller requested preserve
     if (!preserveCamera && !this._cameraPlacementMode) {
+      this._lastAppliedCameraStartKey = `${config.cameraStart.x},${config.cameraStart.y},${config.cameraStart.z},${config.cameraStart.rotationX ?? 0},${config.cameraStart.rotationY ?? 0},${config.cameraStart.rotationZ ?? 0}`;
       this.setCameraFromKeyframe(config.cameraStart);
     }
     this.camera.fov = 50;
@@ -2681,8 +2684,12 @@ export class ExtractorSceneManager {
     // Update HDRI light helpers
     this.updateHdriLightHelpers(config);
 
-    // Sync camera position from config (handles template load + slider edits) — skip during placement mode
-    if (!this._cameraPlacementMode) {
+    // Sync camera position from config ONLY if cameraStart actually changed.
+    // Skipping on unrelated config changes (e.g. cue position) prevents the camera
+    // from jumping back to the stored keyframe while the user has moved it via gizmo.
+    const camKey = `${config.cameraStart.x},${config.cameraStart.y},${config.cameraStart.z},${config.cameraStart.rotationX ?? 0},${config.cameraStart.rotationY ?? 0},${config.cameraStart.rotationZ ?? 0}`;
+    if (!this._cameraPlacementMode && camKey !== this._lastAppliedCameraStartKey) {
+      this._lastAppliedCameraStartKey = camKey;
       this.setCameraFromKeyframe(config.cameraStart);
     }
   }

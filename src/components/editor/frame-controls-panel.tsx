@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Plus,
   Trash2,
@@ -370,28 +371,31 @@ export function FrameControlsPanel({
           {/* Reference Selector */}
           <div className="space-y-2">
             <Label className="text-sm font-medium">Tải tham chiếu</Label>
-            <Popover open={refPopoverOpen} onOpenChange={setRefPopoverOpen}>
-              <PopoverTrigger asChild>
-                <Button variant="outline" className="w-full justify-between text-sm font-normal">
-                  <span className="truncate">{selectedRefName ?? "Bố cục mới"}</span>
-                  <ChevronDown className="h-4 w-4 ml-2 flex-shrink-0" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent
-                className="w-72 p-0 flex flex-col overflow-hidden"
-                style={{ maxHeight: "min(380px, var(--radix-popover-content-available-height, 380px))" }}
-                align="start"
-              >
-                <div className="flex flex-col gap-2 p-2 flex-1 min-h-0">
-                  {/* Search */}
+            <Button variant="outline" className="w-full justify-between text-sm font-normal" onClick={() => setRefPopoverOpen(true)}>
+              <span className="truncate">{selectedRefName ?? "Bố cục mới"}</span>
+              <ChevronDown className="h-4 w-4 ml-2 flex-shrink-0" />
+            </Button>
+
+            <Dialog open={refPopoverOpen} onOpenChange={setRefPopoverOpen}>
+              <DialogContent className="sm:max-w-md flex flex-col gap-0 p-0 overflow-hidden h-[560px]">
+                <DialogHeader className="px-4 pt-4 pb-3 border-b flex-shrink-0">
+                  <DialogTitle className="text-base">Tải tham chiếu</DialogTitle>
+                </DialogHeader>
+
+                <div className="flex flex-col gap-2 p-3 flex-1 min-h-0 overflow-hidden">
+                  {/* Search — spinner replaces icon while loading */}
                   <div className="relative flex-shrink-0">
-                    <Search className="absolute left-2 top-2 h-4 w-4 text-muted-foreground" />
-                    <Input value={popoverSearch} onChange={(e) => setPopoverSearch(e.target.value)} placeholder="Tìm kiếm..." className="pl-7 h-8 text-sm" />
+                    {popoverLoading ? (
+                      <Loader2 className="absolute left-2 top-2 h-4 w-4 text-muted-foreground animate-spin" />
+                    ) : (
+                      <Search className="absolute left-2 top-2 h-4 w-4 text-muted-foreground" />
+                    )}
+                    <Input value={popoverSearch} onChange={(e) => setPopoverSearch(e.target.value)} placeholder="Tìm kiếm..." className="pl-7 h-8 text-sm" autoFocus />
                   </div>
 
                   {/* New Layout option */}
                   <button
-                    className="flex-shrink-0 w-full text-left text-sm px-2 py-1.5 rounded hover:bg-accent"
+                    className="flex-shrink-0 w-full text-left text-sm px-2 py-2 rounded hover:bg-accent font-medium"
                     onClick={() => {
                       setIsRenamingRef(false);
                       setConfirmDeleteRef(false);
@@ -402,7 +406,7 @@ export function FrameControlsPanel({
                     + Bố cục mới
                   </button>
 
-                  {/* Scrollable thumbnail list — flex-1 min-h-0 required for overflow to work in flex context */}
+                  {/* Scrollable thumbnail list — fixed height via parent, never resizes */}
                   <div
                     ref={popoverListRef}
                     className="flex-1 min-h-0 overflow-y-auto space-y-1"
@@ -414,49 +418,49 @@ export function FrameControlsPanel({
                     }}
                   >
                     {popoverLoading && popoverRefs.length === 0 ? (
-                      <div className="flex justify-center py-4">
-                        <Search className="h-4 w-4 animate-pulse text-muted-foreground" />
+                      <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
+                        <Loader2 className="h-6 w-6 animate-spin" />
+                        <span className="text-xs">Đang tải...</span>
                       </div>
-                    ) : popoverRefs.length === 0 ? (
-                      <p className="text-xs text-muted-foreground text-center py-4">Không tìm thấy tham chiếu</p>
+                    ) : !popoverLoading && popoverRefs.length === 0 ? (
+                      <div className="flex items-center justify-center h-full">
+                        <p className="text-sm text-muted-foreground">Không tìm thấy tham chiếu</p>
+                      </div>
                     ) : (
-                      popoverRefs.map((ref) => {
-                        return (
-                          <button
-                            key={ref.id}
-                            className={`w-full flex items-center gap-2 p-1.5 rounded text-left hover:bg-accent ${selectedReferenceId === ref.id ? "bg-accent" : ""}`}
-                            onClick={() => {
-                              setIsRenamingRef(false);
-                              setConfirmDeleteRef(false);
-                              onSelectReference(ref.id, { id: ref.id, name: ref.name, isOwned: ref.isOwned ?? false });
-                              setRefPopoverOpen(false);
-                            }}
-                          >
-                            <div className="flex-shrink-0 w-12 h-12 rounded overflow-hidden bg-[#111827]">
-                              <img src={ref.thumbUrl} alt={ref.name} className="w-full h-full object-cover" draggable={false} />
+                      popoverRefs.map((ref) => (
+                        <button
+                          key={ref.id}
+                          className={`w-full flex items-center gap-3 p-2 rounded text-left hover:bg-accent transition-colors ${selectedReferenceId === ref.id ? "bg-accent" : ""}`}
+                          onClick={() => {
+                            setIsRenamingRef(false);
+                            setConfirmDeleteRef(false);
+                            onSelectReference(ref.id, { id: ref.id, name: ref.name, isOwned: ref.isOwned ?? false });
+                            setRefPopoverOpen(false);
+                          }}
+                        >
+                          <div className="flex-shrink-0 w-14 h-14 rounded overflow-hidden bg-[#111827]">
+                            <img src={ref.thumbUrl} alt={ref.name} className="w-full h-full object-cover" draggable={false} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium truncate">{ref.name}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {ref.frames.length} khung
+                              {ref.createdByName && <span className="ml-1.5 opacity-70">· {ref.createdByName}</span>}
                             </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="text-sm font-medium truncate">{ref.name}</div>
-                              <div className="text-xs text-muted-foreground">
-                                {ref.frames.length} khung
-                                {ref.createdByName && <span className="ml-1.5 opacity-70">· {ref.createdByName}</span>}
-                              </div>
-                            </div>
-                          </button>
-                        );
-                      })
+                          </div>
+                        </button>
+                      ))
                     )}
 
-                    {/* Load-more spinner shown while fetching next page */}
                     {popoverFetchingMore && (
-                      <div className="py-1 flex justify-center">
-                        <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                      <div className="py-2 flex justify-center">
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                       </div>
                     )}
                   </div>
                 </div>
-              </PopoverContent>
-            </Popover>
+              </DialogContent>
+            </Dialog>
 
             {/* Selected reference name + rename / delete */}
             <div className="flex items-center gap-1 min-h-[28px] px-0.5">

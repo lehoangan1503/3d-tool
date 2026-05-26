@@ -128,7 +128,7 @@ export function SurfaceUploader({
         setColorSpace("rgb"); // safe fallback
       });
 
-    return () => controller.abort();
+    return () => controller.abort(new DOMException("Effect cleanup", "AbortError"));
   }, [currentUrl, pendingFile]);
 
   // Callback ref — attaches a non-passive wheel listener the instant the

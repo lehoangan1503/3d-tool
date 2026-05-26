@@ -55,6 +55,36 @@ export async function detectCmykJpeg(file: File): Promise<boolean> {
   return false;
 }
 
+/** Canvas-based CMYK→RGB fallback (used when the server route is unavailable). */
+function convertCmykToRgbCanvas(
+  originalName: string,
+  srcBlobUrl: string,
+): Promise<{ file: File; url: string }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { reject(new Error("Canvas 2D unavailable")); return; }
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { reject(new Error("canvas.toBlob failed")); return; }
+          const baseName = originalName.replace(/\.[^.]+$/, "");
+          const file = new File([blob], `${baseName}_rgb.jpg`, { type: "image/jpeg" });
+          resolve({ file, url: URL.createObjectURL(blob) });
+        },
+        "image/jpeg",
+        0.95,
+      );
+    };
+    img.onerror = () => reject(new Error("Image load failed"));
+    img.src = srcBlobUrl;
+  });
+}
+
 /**
  * Converts a CMYK JPEG to sRGB JPEG using the server-side sharp/LittleCMS
  * pipeline (/api/convert-cmyk).
@@ -63,6 +93,10 @@ export async function detectCmykJpeg(file: File): Promise<boolean> {
  * ICC profile to produce perceptually accurate sRGB output with no clipping.
  * JPEG output (quality 95, 4:4:4 chroma) keeps file sizes similar to or
  * smaller than the original CMYK JPEG (3 channels vs 4).
+ *
+ * Falls back to canvas-based conversion if the server route is unavailable
+ * (e.g. during deployment of a new build) so CMYK detection and tabs still
+ * work, just with slightly reduced colour accuracy.
  *
  * @param originalName  - Source file name; used to derive output name (_rgb.jpg)
  * @param srcBlobUrl    - Object URL pointing to the source CMYK JPEG
@@ -74,25 +108,35 @@ export async function convertCmykToRgb(
   originalName: string,
   srcBlobUrl: string,
 ): Promise<{ file: File; url: string }> {
-  const sourceBlob = await fetch(srcBlobUrl).then((r) => r.blob());
+  try {
+    const sourceBlob = await fetch(srcBlobUrl).then((r) => r.blob());
 
-  const formData = new FormData();
-  formData.append("file", sourceBlob, originalName);
+    const formData = new FormData();
+    formData.append("file", sourceBlob, originalName);
 
-  const response = await fetch("/api/convert-cmyk", {
-    method: "POST",
-    body: formData,
-  });
+    const response = await fetch("/api/convert-cmyk", {
+      method: "POST",
+      body: formData,
+    });
 
-  if (!response.ok) {
-    throw new Error(`CMYK conversion failed (HTTP ${response.status})`);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const jpegBlob = await response.blob();
+    const baseName = originalName.replace(/\.[^.]+$/, "");
+    const rgbFile = new File([jpegBlob], `${baseName}_rgb.jpg`, {
+      type: "image/jpeg",
+    });
+
+    return { file: rgbFile, url: URL.createObjectURL(jpegBlob) };
+  } catch (serverErr) {
+    // Server route unavailable (not yet deployed, auth issue, etc.) —
+    // fall back to canvas so CMYK detection and tabs still work.
+    console.warn(
+      "[convertCmykToRgb] server route failed, using canvas fallback:",
+      serverErr,
+    );
+    return convertCmykToRgbCanvas(originalName, srcBlobUrl);
   }
-
-  const jpegBlob = await response.blob();
-  const baseName = originalName.replace(/\.[^.]+$/, "");
-  const rgbFile = new File([jpegBlob], `${baseName}_rgb.jpg`, {
-    type: "image/jpeg",
-  });
-
-  return { file: rgbFile, url: URL.createObjectURL(jpegBlob) };
 }

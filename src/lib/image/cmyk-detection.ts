@@ -56,14 +56,14 @@ export async function detectCmykJpeg(file: File): Promise<boolean> {
 }
 
 /**
- * Converts an image to sRGB PNG by drawing it through the Canvas 2D API.
+ * Converts a CMYK JPEG to sRGB PNG using the server-side sharp/LittleCMS
+ * pipeline (/api/convert-cmyk).
  *
- * The browser decodes CMYK JPEGs using their embedded ICC profiles during
- * drawImage(), and canvas always exports sRGB. PNG output is lossless so
- * no color information is discarded after the ICC-profile conversion.
+ * Canvas 2D clips CMYK wide-gamut colors to sRGB. Sharp uses the embedded
+ * ICC profile to produce perceptually accurate sRGB output with no clipping.
  *
  * @param originalName  - Source file name; used to derive output name (_rgb.png)
- * @param srcBlobUrl    - Object URL pointing to the source file
+ * @param srcBlobUrl    - Object URL pointing to the source CMYK JPEG
  * @returns New sRGB PNG File and its Object URL
  * @important The caller is responsible for revoking the returned `url` via
  *   `URL.revokeObjectURL(url)` when it is no longer needed, to avoid memory leaks.
@@ -72,41 +72,26 @@ export async function convertCmykToRgb(
   originalName: string,
   srcBlobUrl: string,
 ): Promise<{ file: File; url: string }> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
+  // Fetch the local blob and POST it to the server for sharp conversion
+  const sourceBlob = await fetch(srcBlobUrl).then((r) => r.blob());
 
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
+  const formData = new FormData();
+  formData.append("file", sourceBlob, originalName);
 
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        reject(new Error("Canvas 2D context unavailable"));
-        return;
-      }
-
-      ctx.drawImage(img, 0, 0);
-
-      // PNG = lossless; preserves all color detail from the ICC-profile decode
-      canvas.toBlob(
-        (blob) => {
-          if (!blob) {
-            reject(new Error("canvas.toBlob failed"));
-            return;
-          }
-          const baseName = originalName.replace(/\.[^.]+$/, "");
-          const rgbFile = new File([blob], `${baseName}_rgb.png`, {
-            type: "image/png",
-          });
-          resolve({ file: rgbFile, url: URL.createObjectURL(blob) });
-        },
-        "image/png",
-      );
-    };
-
-    img.onerror = () =>
-      reject(new Error("Failed to load image for RGB conversion"));
-    img.src = srcBlobUrl;
+  const response = await fetch("/api/convert-cmyk", {
+    method: "POST",
+    body: formData,
   });
+
+  if (!response.ok) {
+    throw new Error(`CMYK conversion failed (HTTP ${response.status})`);
+  }
+
+  const pngBlob = await response.blob();
+  const baseName = originalName.replace(/\.[^.]+$/, "");
+  const rgbFile = new File([pngBlob], `${baseName}_rgb.png`, {
+    type: "image/png",
+  });
+
+  return { file: rgbFile, url: URL.createObjectURL(pngBlob) };
 }

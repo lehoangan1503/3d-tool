@@ -5,12 +5,14 @@ import { createClient } from "@/lib/supabase/server";
 /**
  * POST /api/convert-cmyk
  *
- * Accepts a CMYK JPEG via multipart/form-data and returns a sRGB PNG.
+ * Accepts a CMYK JPEG via multipart/form-data and returns an sRGB JPEG.
  * Sharp uses LittleCMS with the embedded ICC profile for accurate color
  * mapping — avoids the sRGB-gamut clipping that happens in Canvas 2D.
+ * JPEG output at quality 95 produces files equal to or smaller than the
+ * original CMYK JPEG (3 channels vs 4).
  *
  * Body: FormData { file: File (image/jpeg) }
- * Response: image/png binary
+ * Response: image/jpeg binary
  */
 export async function POST(request: Request) {
   try {
@@ -32,13 +34,18 @@ export async function POST(request: Request) {
     const buffer = Buffer.from(await file.arrayBuffer());
 
     // sharp/libvips reads the embedded CMYK ICC profile via LittleCMS and
-    // converts to sRGB using relative-colorimetric + BPC — no gamut clipping.
-    const pngBuffer = await sharp(buffer).toColorspace("srgb").png().toBuffer();
+    // converts to sRGB — no gamut hard-clipping like Canvas 2D.
+    // chromaSubsampling 4:4:4 preserves fine colour detail at full chroma.
+    const jpegBuffer = await sharp(buffer)
+      .toColorspace("srgb")
+      .withMetadata() // preserve EXIF (rotation, copyright); ICC updated to sRGB
+      .jpeg({ quality: 95, chromaSubsampling: "4:4:4" })
+      .toBuffer();
 
-    return new Response(pngBuffer.buffer as ArrayBuffer, {
+    return new Response(jpegBuffer.buffer as ArrayBuffer, {
       headers: {
-        "Content-Type": "image/png",
-        "Content-Length": String(pngBuffer.length),
+        "Content-Type": "image/jpeg",
+        "Content-Length": String(jpegBuffer.length),
         "Cache-Control": "no-store",
       },
     });

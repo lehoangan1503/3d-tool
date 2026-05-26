@@ -56,15 +56,17 @@ export async function detectCmykJpeg(file: File): Promise<boolean> {
 }
 
 /**
- * Converts a CMYK JPEG to sRGB PNG using the server-side sharp/LittleCMS
+ * Converts a CMYK JPEG to sRGB JPEG using the server-side sharp/LittleCMS
  * pipeline (/api/convert-cmyk).
  *
  * Canvas 2D clips CMYK wide-gamut colors to sRGB. Sharp uses the embedded
  * ICC profile to produce perceptually accurate sRGB output with no clipping.
+ * JPEG output (quality 95, 4:4:4 chroma) keeps file sizes similar to or
+ * smaller than the original CMYK JPEG (3 channels vs 4).
  *
- * @param originalName  - Source file name; used to derive output name (_rgb.png)
+ * @param originalName  - Source file name; used to derive output name (_rgb.jpg)
  * @param srcBlobUrl    - Object URL pointing to the source CMYK JPEG
- * @returns New sRGB PNG File and its Object URL
+ * @returns New sRGB JPEG File and its Object URL
  * @important The caller is responsible for revoking the returned `url` via
  *   `URL.revokeObjectURL(url)` when it is no longer needed, to avoid memory leaks.
  */
@@ -72,7 +74,6 @@ export async function convertCmykToRgb(
   originalName: string,
   srcBlobUrl: string,
 ): Promise<{ file: File; url: string }> {
-  // Fetch the local blob and POST it to the server for sharp conversion
   const sourceBlob = await fetch(srcBlobUrl).then((r) => r.blob());
 
   const formData = new FormData();
@@ -87,11 +88,11 @@ export async function convertCmykToRgb(
     throw new Error(`CMYK conversion failed (HTTP ${response.status})`);
   }
 
-  const pngBlob = await response.blob();
+  const jpegBlob = await response.blob();
   const baseName = originalName.replace(/\.[^.]+$/, "");
-  const rgbFile = new File([pngBlob], `${baseName}_rgb.png`, {
-    type: "image/png",
+  const rgbFile = new File([jpegBlob], `${baseName}_rgb.jpg`, {
+    type: "image/jpeg",
   });
 
-  return { file: rgbFile, url: URL.createObjectURL(pngBlob) };
+  return { file: rgbFile, url: URL.createObjectURL(jpegBlob) };
 }

@@ -35,6 +35,11 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 
+# Sharp native binaries are not included in Next.js standalone output.
+# Copy them explicitly so /api/convert-cmyk can use sharp on the server.
+COPY --from=builder /app/node_modules/sharp ./node_modules/sharp
+COPY --from=builder /app/node_modules/@img ./node_modules/@img
+
 USER nextjs
 
 EXPOSE 3000

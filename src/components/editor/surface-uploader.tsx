@@ -49,6 +49,10 @@ export function SurfaceUploader({
   const rgbConvertedUrlRef = useRef<string | null>(null);
   const originalCmykUrlRef = useRef<string | null>(null);
 
+  // For existing URL detection (silent background check, no overlay)
+  const detectedUrlRef = useRef<string | null>(null);
+  const existingDetectionGenRef = useRef(0);
+
   // Keep refs in sync so the native wheel handler always reads latest values
   zoomRef.current = zoom;
   panRef.current = pan;
@@ -87,6 +91,45 @@ export function SurfaceUploader({
       }
     };
   }, []);
+
+  // Silently detect color space of the already-saved surface image.
+  // Runs when currentUrl changes or pendingFile clears (e.g. after remove).
+  // Does NOT set "detecting" state to avoid hiding controls.
+  useEffect(() => {
+    // If a new file is pending, handleFile manages colorSpace — don't interfere
+    if (pendingFile != null || !currentUrl) return;
+    // Already detected this exact URL — skip
+    if (detectedUrlRef.current === currentUrl) return;
+
+    const myGen = ++existingDetectionGenRef.current;
+    const controller = new AbortController();
+
+    fetch(currentUrl, { signal: controller.signal })
+      .then((r) => r.blob())
+      .then((blob) => {
+        if (myGen !== existingDetectionGenRef.current) return;
+        const isJpeg = blob.type === "image/jpeg" || blob.type === "image/jpg";
+        if (!isJpeg) {
+          detectedUrlRef.current = currentUrl;
+          setColorSpace("rgb");
+          return;
+        }
+        const file = new File([blob], "surface.jpg", { type: blob.type });
+        return detectCmykJpeg(file).then((isCmyk) => {
+          if (myGen !== existingDetectionGenRef.current) return;
+          detectedUrlRef.current = currentUrl;
+          setColorSpace(isCmyk ? "cmyk" : "rgb");
+        });
+      })
+      .catch((err) => {
+        if ((err as Error).name === "AbortError") return;
+        if (myGen !== existingDetectionGenRef.current) return;
+        detectedUrlRef.current = currentUrl;
+        setColorSpace("rgb"); // safe fallback
+      });
+
+    return () => controller.abort();
+  }, [currentUrl, pendingFile]);
 
   // Callback ref — attaches a non-passive wheel listener the instant the
   // dialog viewport mounts (portals render async, so useEffect + ref misses it)
@@ -269,6 +312,7 @@ export function SurfaceUploader({
     }
     setColorSpace(null);
     originalCmykUrlRef.current = null;
+    detectedUrlRef.current = null;
     setOriginalCmykUrl(null);
     setActiveTab("converted");
     onFileSelect(null, "");
@@ -361,8 +405,18 @@ export function SurfaceUploader({
         </div>
       )}
 
+      {/* CMYK warning — shown when the stored image is detected as CMYK (no pending file) */}
+      {colorSpace === "cmyk" && !uploading && !pendingFile && (
+        <div className="flex items-center gap-1.5">
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded-md bg-amber-500/15 text-amber-400 border border-amber-500/25">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+            CMYK - Tải lại để chuyển đổi
+          </span>
+        </div>
+      )}
+
       {/* CMYK tabs — shown when the pending file was CMYK-converted */}
-      {colorSpace === "cmyk" && !uploading && (
+      {colorSpace === "cmyk" && !uploading && pendingFile != null && (
         <div className="flex gap-1">
           <button
             type="button"

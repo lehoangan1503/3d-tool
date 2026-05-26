@@ -9,6 +9,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { X, Loader2, ImageIcon, Maximize2, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { detectCmykJpeg, convertCmykToRgb } from "@/lib/image/cmyk-detection";
 
 interface SurfaceUploaderProps {
   productId: string;
@@ -37,6 +39,16 @@ export function SurfaceUploader({
   const panRef = useRef(pan);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // CMYK detection state
+  const [colorSpace, setColorSpace] = useState<"rgb" | "cmyk" | "detecting" | null>(null);
+  const [originalCmykUrl, setOriginalCmykUrl] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"original" | "converted">("converted");
+  const isDetectingRef = useRef(false);
+  const detectionIdRef = useRef(0);
+  const prevPendingFileRef = useRef<File | null | undefined>(undefined);
+  const rgbConvertedUrlRef = useRef<string | null>(null);
+  const originalCmykUrlRef = useRef<string | null>(null);
+
   // Keep refs in sync so the native wheel handler always reads latest values
   zoomRef.current = zoom;
   panRef.current = pan;
@@ -45,6 +57,36 @@ export function SurfaceUploader({
   useEffect(() => {
     if (!fullscreenOpen) { setZoom(1); setPan({ x: 0, y: 0 }); }
   }, [fullscreenOpen]);
+
+  // Reset color state when the pending file transitions from a File → null (save completed)
+  useEffect(() => {
+    if (prevPendingFileRef.current instanceof File && pendingFile == null) {
+      if (originalCmykUrlRef.current?.startsWith("blob:")) {
+        URL.revokeObjectURL(originalCmykUrlRef.current);
+        originalCmykUrlRef.current = null;
+      }
+      if (rgbConvertedUrlRef.current?.startsWith("blob:")) {
+        URL.revokeObjectURL(rgbConvertedUrlRef.current);
+        rgbConvertedUrlRef.current = null;
+      }
+      setColorSpace(null);
+      setOriginalCmykUrl(null);
+      setActiveTab("converted");
+    }
+    prevPendingFileRef.current = pendingFile ?? null;
+  }, [pendingFile]); // Only pendingFile — reads blob URLs from refs (always current)
+
+  // Revoke any blob URLs on unmount to prevent leaks
+  useEffect(() => {
+    return () => {
+      if (originalCmykUrlRef.current?.startsWith("blob:")) {
+        URL.revokeObjectURL(originalCmykUrlRef.current);
+      }
+      if (rgbConvertedUrlRef.current?.startsWith("blob:")) {
+        URL.revokeObjectURL(rgbConvertedUrlRef.current);
+      }
+    };
+  }, []);
 
   // Callback ref — attaches a non-passive wheel listener the instant the
   // dialog viewport mounts (portals render async, so useEffect + ref misses it)
@@ -99,15 +141,92 @@ export function SurfaceUploader({
   const zoomOut = () => applyZoom(1 / 1.25);
   const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
 
-  // Use pending preview if available, otherwise current URL
-  const preview = pendingPreview || currentUrl || null;
+  // During detection or when viewing the CMYK original tab, show the local CMYK blob URL.
+  // Otherwise fall through to the parent-managed preview (pendingPreview) or saved URL (currentUrl).
+  const effectivePreview =
+    (colorSpace === "detecting" || (colorSpace === "cmyk" && activeTab === "original")) &&
+    originalCmykUrl
+      ? originalCmykUrl
+      : pendingPreview || currentUrl || null;
 
   const handleFile = useCallback(
-    (file: File) => {
+    async (file: File) => {
+      // Monotonically increasing ID — increments on each new file selection
+      const myId = ++detectionIdRef.current;
+
+      // Revoke previous blob before creating new one
+      if (originalCmykUrlRef.current?.startsWith("blob:")) {
+        URL.revokeObjectURL(originalCmykUrlRef.current);
+      }
       const localUrl = URL.createObjectURL(file);
-      onFileSelect(file, localUrl);
+      isDetectingRef.current = true;
+      originalCmykUrlRef.current = localUrl;
+      setColorSpace("detecting");
+      setOriginalCmykUrl(localUrl);
+      setActiveTab("converted");
+
+      try {
+        const isCmyk = await detectCmykJpeg(file);
+
+        // If a newer file selection has started, discard this result
+        if (myId !== detectionIdRef.current) {
+          URL.revokeObjectURL(localUrl);
+          return;
+        }
+
+        if (isCmyk) {
+          const { file: rgbFile, url: rgbUrl } = await convertCmykToRgb(file.name, localUrl);
+
+          // Check after second await — if superseded, discard both URLs we created
+          if (myId !== detectionIdRef.current) {
+            URL.revokeObjectURL(localUrl);
+            URL.revokeObjectURL(rgbUrl);
+            return;
+          }
+
+          // Confirmed current detection — safe to revoke previous RGB URL
+          if (rgbConvertedUrlRef.current?.startsWith("blob:")) {
+            URL.revokeObjectURL(rgbConvertedUrlRef.current);
+          }
+          rgbConvertedUrlRef.current = rgbUrl;
+          originalCmykUrlRef.current = localUrl;
+          setColorSpace("cmyk");
+          setOriginalCmykUrl(localUrl);
+          onFileSelect(rgbFile, rgbUrl);
+        } else {
+          if (rgbConvertedUrlRef.current?.startsWith("blob:")) {
+            URL.revokeObjectURL(rgbConvertedUrlRef.current);
+          }
+          rgbConvertedUrlRef.current = localUrl;
+          originalCmykUrlRef.current = null;
+          setColorSpace("rgb");
+          setOriginalCmykUrl(null);
+          onFileSelect(file, localUrl);
+        }
+      } catch (err) {
+        console.error("[SurfaceUploader] CMYK detection/conversion error:", err);
+
+        if (myId !== detectionIdRef.current) {
+          URL.revokeObjectURL(localUrl);
+          return;
+        }
+
+        if (rgbConvertedUrlRef.current?.startsWith("blob:")) {
+          URL.revokeObjectURL(rgbConvertedUrlRef.current);
+        }
+        rgbConvertedUrlRef.current = localUrl;
+        originalCmykUrlRef.current = null;
+        setColorSpace("rgb");
+        setOriginalCmykUrl(null);
+        onFileSelect(file, localUrl);
+      } finally {
+        // Only clear the detecting flag if this is still the active detection
+        if (myId === detectionIdRef.current) {
+          isDetectingRef.current = false;
+        }
+      }
     },
-    [onFileSelect]
+    [onFileSelect],
   );
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -141,6 +260,17 @@ export function SurfaceUploader({
   }
 
   function handleRemove() {
+    if (originalCmykUrlRef.current?.startsWith("blob:")) {
+      URL.revokeObjectURL(originalCmykUrlRef.current);
+    }
+    if (rgbConvertedUrlRef.current?.startsWith("blob:")) {
+      URL.revokeObjectURL(rgbConvertedUrlRef.current);
+      rgbConvertedUrlRef.current = null;
+    }
+    setColorSpace(null);
+    originalCmykUrlRef.current = null;
+    setOriginalCmykUrl(null);
+    setActiveTab("converted");
     onFileSelect(null, "");
     if (inputRef.current) {
       inputRef.current.value = "";
@@ -151,10 +281,10 @@ export function SurfaceUploader({
     <div className="flex flex-col gap-3">
       <Label>Ảnh Bề Mặt</Label>
 
-      {preview ? (
+      {effectivePreview ? (
         <div className="relative rounded-lg overflow-hidden border bg-muted group">
           <img
-            src={preview}
+            src={effectivePreview}
             alt="Xem trước bề mặt"
             className="w-full h-32 object-contain bg-black/5"
           />
@@ -263,9 +393,9 @@ export function SurfaceUploader({
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
           >
-            {preview && (
+            {effectivePreview && (
               <img
-                src={preview}
+                src={effectivePreview}
                 alt="Bề mặt toàn màn hình"
                 draggable={false}
                 style={{

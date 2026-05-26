@@ -56,23 +56,21 @@ export async function detectCmykJpeg(file: File): Promise<boolean> {
 }
 
 /**
- * Converts an image to sRGB JPEG by drawing it through the Canvas 2D API.
+ * Converts an image to sRGB PNG by drawing it through the Canvas 2D API.
  *
  * The browser decodes CMYK JPEGs using their embedded ICC profiles during
- * drawImage(), and canvas always exports sRGB. This is the standard
- * browser-side CMYK → RGB conversion path.
+ * drawImage(), and canvas always exports sRGB. PNG output is lossless so
+ * no color information is discarded after the ICC-profile conversion.
  *
- * @param originalName  - Source file name; used to derive output name (_rgb.jpg)
+ * @param originalName  - Source file name; used to derive output name (_rgb.png)
  * @param srcBlobUrl    - Object URL pointing to the source file
- * @param quality       - JPEG quality 0–1 (default 0.95)
- * @returns New sRGB JPEG File and its Object URL
+ * @returns New sRGB PNG File and its Object URL
  * @important The caller is responsible for revoking the returned `url` via
  *   `URL.revokeObjectURL(url)` when it is no longer needed, to avoid memory leaks.
  */
 export async function convertCmykToRgb(
   originalName: string,
   srcBlobUrl: string,
-  quality = 0.95,
 ): Promise<{ file: File; url: string }> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -90,6 +88,7 @@ export async function convertCmykToRgb(
 
       ctx.drawImage(img, 0, 0);
 
+      // PNG = lossless; preserves all color detail from the ICC-profile decode
       canvas.toBlob(
         (blob) => {
           if (!blob) {
@@ -97,13 +96,12 @@ export async function convertCmykToRgb(
             return;
           }
           const baseName = originalName.replace(/\.[^.]+$/, "");
-          const rgbFile = new File([blob], `${baseName}_rgb.jpg`, {
-            type: "image/jpeg",
+          const rgbFile = new File([blob], `${baseName}_rgb.png`, {
+            type: "image/png",
           });
           resolve({ file: rgbFile, url: URL.createObjectURL(blob) });
         },
-        "image/jpeg",
-        quality,
+        "image/png",
       );
     };
 

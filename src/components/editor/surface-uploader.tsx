@@ -461,7 +461,40 @@ export function SurfaceUploader({
       <Dialog open={fullscreenOpen} onOpenChange={setFullscreenOpen}>
         <DialogContent className="w-screen h-screen max-w-none max-h-none rounded-none p-0 overflow-hidden">
           <DialogHeader className="p-4 pb-2 flex flex-row items-center justify-between">
-            <DialogTitle>Ảnh Bề Mặt</DialogTitle>
+            <div className="flex items-center gap-3">
+              <DialogTitle>Ảnh Bề Mặt</DialogTitle>
+              {/* CMYK / RGB tab toggle inside fullscreen dialog */}
+              {colorSpace === "cmyk" && pendingFile != null && (
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    className={cn(
+                      "px-3 py-1 text-[11px] rounded font-medium transition-colors border",
+                      activeTab === "original"
+                        ? "bg-amber-500/20 text-amber-400 border-amber-500/30"
+                        : "border-muted text-muted-foreground hover:text-foreground hover:bg-muted/50",
+                    )}
+                    aria-pressed={activeTab === "original"}
+                    onClick={() => setActiveTab("original")}
+                  >
+                    Gốc (CMYK)
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "px-3 py-1 text-[11px] rounded font-medium transition-colors border",
+                      activeTab === "converted"
+                        ? "bg-green-500/20 text-green-400 border-green-500/30"
+                        : "border-muted text-muted-foreground hover:text-foreground hover:bg-muted/50",
+                    )}
+                    aria-pressed={activeTab === "converted"}
+                    onClick={() => setActiveTab("converted")}
+                  >
+                    RGB ✓
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="flex items-center gap-1 mr-8">
               <button
                 onClick={zoomOut}

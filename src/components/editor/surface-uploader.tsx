@@ -102,16 +102,14 @@ export function SurfaceUploader({
     if (detectedUrlRef.current === currentUrl) return;
 
     const myGen = ++existingDetectionGenRef.current;
-    const controller = new AbortController();
+    let cancelled = false;
 
-    // async/await + try/catch keeps the AbortError local — never reaches the
-    // global unhandled-rejection handler that powers the Next.js dev overlay.
     (async () => {
       try {
-        const r = await fetch(currentUrl, { signal: controller.signal });
+        const r = await fetch(currentUrl);
         const blob = await r.blob();
 
-        if (myGen !== existingDetectionGenRef.current) return;
+        if (cancelled || myGen !== existingDetectionGenRef.current) return;
 
         const isJpeg = blob.type === "image/jpeg" || blob.type === "image/jpg";
         if (!isJpeg) {
@@ -123,18 +121,17 @@ export function SurfaceUploader({
         const file = new File([blob], "surface.jpg", { type: blob.type });
         const isCmyk = await detectCmykJpeg(file);
 
-        if (myGen !== existingDetectionGenRef.current) return;
+        if (cancelled || myGen !== existingDetectionGenRef.current) return;
         detectedUrlRef.current = currentUrl;
         setColorSpace(isCmyk ? "cmyk" : "rgb");
-      } catch (err) {
-        if ((err as Error).name === "AbortError") return; // intentional cleanup
-        if (myGen !== existingDetectionGenRef.current) return;
+      } catch {
+        if (cancelled || myGen !== existingDetectionGenRef.current) return;
         detectedUrlRef.current = currentUrl;
         setColorSpace("rgb"); // safe fallback
       }
     })();
 
-    return () => controller.abort();
+    return () => { cancelled = true; };
   }, [currentUrl, pendingFile]);
 
   // Callback ref — attaches a non-passive wheel listener the instant the

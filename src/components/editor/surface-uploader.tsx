@@ -104,31 +104,37 @@ export function SurfaceUploader({
     const myGen = ++existingDetectionGenRef.current;
     const controller = new AbortController();
 
-    fetch(currentUrl, { signal: controller.signal })
-      .then((r) => r.blob())
-      .then((blob) => {
+    // async/await + try/catch keeps the AbortError local — never reaches the
+    // global unhandled-rejection handler that powers the Next.js dev overlay.
+    (async () => {
+      try {
+        const r = await fetch(currentUrl, { signal: controller.signal });
+        const blob = await r.blob();
+
         if (myGen !== existingDetectionGenRef.current) return;
+
         const isJpeg = blob.type === "image/jpeg" || blob.type === "image/jpg";
         if (!isJpeg) {
           detectedUrlRef.current = currentUrl;
           setColorSpace("rgb");
           return;
         }
+
         const file = new File([blob], "surface.jpg", { type: blob.type });
-        return detectCmykJpeg(file).then((isCmyk) => {
-          if (myGen !== existingDetectionGenRef.current) return;
-          detectedUrlRef.current = currentUrl;
-          setColorSpace(isCmyk ? "cmyk" : "rgb");
-        });
-      })
-      .catch((err) => {
-        if ((err as Error).name === "AbortError") return;
+        const isCmyk = await detectCmykJpeg(file);
+
+        if (myGen !== existingDetectionGenRef.current) return;
+        detectedUrlRef.current = currentUrl;
+        setColorSpace(isCmyk ? "cmyk" : "rgb");
+      } catch (err) {
+        if ((err as Error).name === "AbortError") return; // intentional cleanup
         if (myGen !== existingDetectionGenRef.current) return;
         detectedUrlRef.current = currentUrl;
         setColorSpace("rgb"); // safe fallback
-      });
+      }
+    })();
 
-    return () => controller.abort(new DOMException("Effect cleanup", "AbortError"));
+    return () => controller.abort();
   }, [currentUrl, pendingFile]);
 
   // Callback ref — attaches a non-passive wheel listener the instant the

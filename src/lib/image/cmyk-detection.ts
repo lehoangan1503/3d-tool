@@ -120,7 +120,10 @@ export async function convertCmykToRgb(
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      // HTTP 413 = nginx client_max_body_size too small for this image.
+      // HTTP 401 = auth not forwarded through proxy.
+      // HTTP 404 = route not yet deployed (Docker rebuild needed).
+      throw new Error(`HTTP ${response.status} from /api/convert-cmyk`);
     }
 
     const jpegBlob = await response.blob();

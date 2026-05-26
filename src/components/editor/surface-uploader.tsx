@@ -288,7 +288,7 @@ export function SurfaceUploader({
             alt="Xem trước bề mặt"
             className="w-full h-32 object-contain bg-black/5"
           />
-          {!uploading && (
+          {!uploading && colorSpace !== "detecting" && (
             <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200">
               <button
                 onClick={() => setFullscreenOpen(true)}
@@ -319,6 +319,15 @@ export function SurfaceUploader({
               Chưa lưu
             </div>
           )}
+          {/* CMYK detection in progress */}
+          {colorSpace === "detecting" && (
+            <div className="absolute inset-0 flex items-center justify-center bg-background/75 backdrop-blur-sm">
+              <div className="flex flex-col items-center gap-2">
+                <Loader2 className="h-5 w-5 text-primary animate-spin" />
+                <span className="text-xs text-muted-foreground">Đang phát hiện màu...</span>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <button
@@ -340,6 +349,48 @@ export function SurfaceUploader({
             {isDragging ? "Thả ảnh vào đây" : "Nhấn hoặc kéo để tải lên"}
           </span>
         </button>
+      )}
+
+      {/* RGB badge — shown when the pending file is confirmed RGB */}
+      {colorSpace === "rgb" && !uploading && (
+        <div className="flex items-center gap-1.5">
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded-md bg-green-500/15 text-green-400 border border-green-500/25">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+            RGB
+          </span>
+        </div>
+      )}
+
+      {/* CMYK tabs — shown when the pending file was CMYK-converted */}
+      {colorSpace === "cmyk" && !uploading && (
+        <div className="flex gap-1">
+          <button
+            type="button"
+            className={cn(
+              "flex-1 py-1.5 text-[11px] rounded font-medium transition-colors border",
+              activeTab === "original"
+                ? "bg-amber-500/20 text-amber-400 border-amber-500/30"
+                : "border-muted text-muted-foreground hover:text-foreground hover:bg-muted/50",
+            )}
+            aria-pressed={activeTab === "original"}
+            onClick={() => setActiveTab("original")}
+          >
+            Gốc (CMYK)
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "flex-1 py-1.5 text-[11px] rounded font-medium transition-colors border",
+              activeTab === "converted"
+                ? "bg-green-500/20 text-green-400 border-green-500/30"
+                : "border-muted text-muted-foreground hover:text-foreground hover:bg-muted/50",
+            )}
+            aria-pressed={activeTab === "converted"}
+            onClick={() => setActiveTab("converted")}
+          >
+            RGB ✓
+          </button>
+        </div>
       )}
 
       <input

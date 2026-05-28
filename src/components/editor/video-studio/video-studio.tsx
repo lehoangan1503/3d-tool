@@ -47,6 +47,7 @@ import {
   ensureFullConfig,
   migrateVideoStudioConfig,
   computeVideoDuration,
+  isCameraFixed,
 } from "@/types/video-studio";
 import { createDefaultHdriLayer, STUDIO_WHITE_HDRI } from "@/types/extractor";
 import { CameraControlsPanel } from "./camera-controls-panel";
@@ -78,7 +79,11 @@ function TransformInput({ label, value, onChange, suffix = "" }: { label: string
         value={displayValue}
         onChange={(e) => setLocalValue(e.target.value)}
         onBlur={(e) => commit(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter") { e.currentTarget.blur(); } }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.currentTarget.blur();
+          }
+        }}
         className="h-6 w-full rounded border border-border/50 bg-muted/30 px-1.5 text-xs font-mono tabular-nums text-foreground outline-none focus:border-blue-500/50"
       />
       {suffix && <span className="text-[10px] text-muted-foreground shrink-0">{suffix}</span>}
@@ -351,12 +356,51 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     const containerW = container.clientWidth;
     const containerH = container.clientHeight;
     if (!containerW || !containerH) return;
-    // Editor canvas always uses container's natural dimensions — view is ratio-agnostic.
-    extractor.resize(containerW, containerH);
-    // Studio camera (used for "góc nhìn máy quay" view) needs the actual video aspect.
+
     const ratio = configRef.current.videoRatio ?? "16:9";
     const preset = VIDEO_RATIO_PRESETS.find((r) => r.id === ratio) ?? VIDEO_RATIO_PRESETS[0];
-    extractor.setStudioCameraAspect(preset.width / preset.height);
+    const targetAspect = preset.width / preset.height;
+    const canvas = extractor.getCanvas();
+
+    if (viewModeRef.current === "camera") {
+      // Camera preview: render at exact video-ratio dimensions so there is no stretch.
+      // Compute the largest rect that fits inside the container at the target aspect ratio.
+      const containerAspect = containerW / containerH;
+      let renderW: number, renderH: number;
+      if (targetAspect <= containerAspect) {
+        // Target is taller (portrait) → constrain by height, pillarbox the sides
+        renderH = containerH;
+        renderW = Math.max(1, Math.round(containerH * targetAspect));
+      } else {
+        // Target is wider (landscape) → constrain by width, letterbox top/bottom
+        renderW = containerW;
+        renderH = Math.max(1, Math.round(containerW / targetAspect));
+      }
+      // resize() sets renderer size AND camera.aspect = renderW/renderH = targetAspect ✓
+      extractor.resize(renderW, renderH);
+      // Center the canvas inside the container; the surrounding bg-black acts as letter/pillarbox.
+      if (canvas) {
+        canvas.style.width = `${renderW}px`;
+        canvas.style.height = `${renderH}px`;
+        canvas.style.position = "absolute";
+        canvas.style.left = "50%";
+        canvas.style.top = "50%";
+        canvas.style.transform = "translate(-50%, -50%)";
+      }
+    } else {
+      // Scene edit mode: fill the container; set studio camera aspect separately so the
+      // camera gizmo/helper is drawn with the correct video-ratio frustum.
+      extractor.resize(containerW, containerH);
+      extractor.setStudioCameraAspect(targetAspect);
+      if (canvas) {
+        canvas.style.width = "100%";
+        canvas.style.height = "100%";
+        canvas.style.position = "";
+        canvas.style.left = "";
+        canvas.style.top = "";
+        canvas.style.transform = "";
+      }
+    }
   }, []);
 
   // Setup ExtractorSceneManager when dialog opens
@@ -381,7 +425,11 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       extractorRef.current = extractor;
 
       if (model) await extractor.setModel(model);
-      if (isCancelled) { extractor.dispose(); localExtractor = null; return; }
+      if (isCancelled) {
+        extractor.dispose();
+        localExtractor = null;
+        return;
+      }
       if (hdriUrl) {
         try {
           await extractor.loadHDRI(hdriUrl);
@@ -389,12 +437,14 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
           // HDRI load failure is non-critical
         }
       }
-      if (isCancelled) { extractor.dispose(); localExtractor = null; return; }
+      if (isCancelled) {
+        extractor.dispose();
+        localExtractor = null;
+        return;
+      }
 
       const canvas = extractor.getCanvas();
       if (previewContainerRef.current && canvas) {
-        canvas.style.width = "100%";
-        canvas.style.height = "100%";
         canvas.style.display = "block";
         // Remove only any previously-appended canvas — don't use innerHTML="" which
         // would remove React-managed children and cause a "removeChild" reconciler error.
@@ -408,6 +458,9 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         const ratioId = configRef.current.videoRatio ?? "16:9";
         const ratioPreset = VIDEO_RATIO_PRESETS.find((r) => r.id === ratioId) ?? VIDEO_RATIO_PRESETS[0];
         extractor.setStudioCameraAspect(ratioPreset.width / ratioPreset.height);
+        // Initial canvas CSS; resizePreviewCanvas() (called later via rAF) will finalize based on viewMode.
+        canvas.style.width = "100%";
+        canvas.style.height = "100%";
         extractor.initSceneView();
         const controls = new SceneViewControls(
           extractor,
@@ -520,7 +573,9 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               });
             } else if (info.type === "wallFrame" && info.frameId) {
               setConfig((prev) => {
-                const WALL_W = 34, WALL_H = 24, WALL_Y = 10; // must match backdrop position
+                const WALL_W = 34,
+                  WALL_H = 24,
+                  WALL_Y = 10; // must match backdrop position
                 const frames = prev.wallSurface.frames.map((f) => {
                   if (f.id !== info.frameId) return f;
                   const obj = info.object as THREE.Mesh;
@@ -540,7 +595,9 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               });
             } else if (info.type === "tableFrame" && info.frameId) {
               setConfig((prev) => {
-                const TABLE_W = 34, TABLE_D = 12, TABLE_Z = 0.5; // must match tableSurface position
+                const TABLE_W = 34,
+                  TABLE_D = 12,
+                  TABLE_Z = 0.5; // must match tableSurface position
                 const frames = prev.tableSurface.frames.map((f) => {
                   if (f.id !== info.frameId) return f;
                   const obj = info.object as THREE.Mesh;
@@ -604,9 +661,17 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         sceneViewControlsRef.current = controls;
       }
 
-      if (isCancelled) { extractor.dispose(); localExtractor = null; return; }
+      if (isCancelled) {
+        extractor.dispose();
+        localExtractor = null;
+        return;
+      }
       await extractor.setupStudioFromStudioConfig(config);
-      if (isCancelled) { extractor.dispose(); localExtractor = null; return; }
+      if (isCancelled) {
+        extractor.dispose();
+        localExtractor = null;
+        return;
+      }
       extractor.startStudioVideoPreview(config);
       // Apply initial view mode so orbit controls and _cameraPlacementMode are set correctly
       // (the viewMode useEffect fires before extractorRef is set on first mount, so we must
@@ -690,14 +755,17 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     viewModeRef.current = viewMode;
   }, [viewMode]);
 
-  // Sync view mode to extractor + enable/disable scene view controls
+  // Sync view mode to extractor + enable/disable scene view controls + fix canvas sizing
   useEffect(() => {
     if (!extractorRef.current) return;
     extractorRef.current.setViewMode(viewMode);
     if (sceneViewControlsRef.current) {
       sceneViewControlsRef.current.setEnabled(viewMode === "scene");
     }
-  }, [viewMode]);
+    // Re-apply canvas sizing so camera view renders at exact video-ratio dimensions
+    // and scene view fills the container.
+    requestAnimationFrame(() => resizePreviewCanvas());
+  }, [viewMode, resizePreviewCanvas]);
 
   // Debounced preview updates on config change
   useEffect(() => {
@@ -732,12 +800,44 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
 
   // Extract only the texture-relevant parts of frames (anything that requires a full material rebuild)
   // Position, size, rotation, opacity changes use updateFramePlaneTransforms instead.
-  const wallFrameTextureKey = config.wallSurface.frames.map((f) =>
-    [f.id, f.enabled ? 1 : 0, f.imageUrl ?? "", f.backgroundEnabled ? 1 : 0, f.backgroundType ?? "", f.backgroundColor ?? "", f.backgroundOpacity ?? 1, f.imageOpacity ?? 1, f.type ?? "", f.color ?? "", f.gradient?.presetId ?? "", f.backgroundGradient?.angle ?? 0, JSON.stringify(f.backgroundGradient?.colors ?? [])].join(":")
-  ).join("|");
-  const tableFrameTextureKey = config.tableSurface.frames.map((f) =>
-    [f.id, f.enabled ? 1 : 0, f.imageUrl ?? "", f.backgroundEnabled ? 1 : 0, f.backgroundType ?? "", f.backgroundColor ?? "", f.backgroundOpacity ?? 1, f.imageOpacity ?? 1, f.type ?? "", f.color ?? "", f.gradient?.presetId ?? "", f.backgroundGradient?.angle ?? 0, JSON.stringify(f.backgroundGradient?.colors ?? [])].join(":")
-  ).join("|");
+  const wallFrameTextureKey = config.wallSurface.frames
+    .map((f) =>
+      [
+        f.id,
+        f.enabled ? 1 : 0,
+        f.imageUrl ?? "",
+        f.backgroundEnabled ? 1 : 0,
+        f.backgroundType ?? "",
+        f.backgroundColor ?? "",
+        f.backgroundOpacity ?? 1,
+        f.imageOpacity ?? 1,
+        f.type ?? "",
+        f.color ?? "",
+        f.gradient?.presetId ?? "",
+        f.backgroundGradient?.angle ?? 0,
+        JSON.stringify(f.backgroundGradient?.colors ?? []),
+      ].join(":")
+    )
+    .join("|");
+  const tableFrameTextureKey = config.tableSurface.frames
+    .map((f) =>
+      [
+        f.id,
+        f.enabled ? 1 : 0,
+        f.imageUrl ?? "",
+        f.backgroundEnabled ? 1 : 0,
+        f.backgroundType ?? "",
+        f.backgroundColor ?? "",
+        f.backgroundOpacity ?? 1,
+        f.imageOpacity ?? 1,
+        f.type ?? "",
+        f.color ?? "",
+        f.gradient?.presetId ?? "",
+        f.backgroundGradient?.angle ?? 0,
+        JSON.stringify(f.backgroundGradient?.colors ?? []),
+      ].join(":")
+    )
+    .join("|");
 
   useEffect(() => {
     if (!extractorRef.current || !open) return;
@@ -841,6 +941,14 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         cameraStart: capturedStart ?? config.cameraStart,
         cameraEnd: capturedEnd ?? config.cameraEnd,
       };
+
+      // For fixed cameras, silently persist the current config (including
+      // fixedCameraDuration) back to the selected template so "Tải xuống nhiều"
+      // can read the correct duration without the user manually clicking "Lưu".
+      if (isCameraFixed(recordConfig.cameraStart, recordConfig.cameraEnd)) {
+        templateSelectorRef.current?.silentSave();
+      }
+
       const blob = await extractorRef.current.startStudioRecording(recordConfig, (p) => {
         // Throttle React state updates: setProgress at most every 100ms so the
         // component doesn't re-render at 60fps while the GPU is under full load.
@@ -1044,12 +1152,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
             {/* Left: Preview */}
             <div className="flex-1 flex flex-col p-4 min-w-0">
               {/* 3D preview canvas — always kept in the DOM so captureStream works during recording */}
-              <div
-                ref={previewContainerRef}
-                className={`bg-black rounded-lg overflow-hidden relative flex-1 ${
-                  viewMode === "camera" ? "pointer-events-none" : ""
-                }`}
-              >
+              <div ref={previewContainerRef} className={`bg-black rounded-lg overflow-hidden relative flex-1 ${viewMode === "camera" ? "pointer-events-none" : ""}`}>
                 <div
                   className={`absolute inset-0 flex items-center justify-center bg-black/40 z-10 transition-opacity duration-500 pointer-events-none ${
                     !sceneReady || isRebuilding ? "opacity-100" : "opacity-0"
@@ -1060,10 +1163,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                     <span className="text-xs text-white/50">{!sceneReady ? "Đang thiết lập cảnh…" : "Đang cập nhật…"}</span>
                   </div>
                 </div>
-                {/* Ratio guide overlay — only shown when a non-16:9 ratio is selected */}
-                {viewMode !== "scene" && config.videoRatio && config.videoRatio !== "16:9" && <RatioGuideOverlay ratio={config.videoRatio} />}
-                {/* Camera snapshot — static screenshot shown in "Góc nhìn máy quay" mode */}
-                {viewMode === "camera" && cameraSnapshot && <img src={cameraSnapshot} className="absolute inset-0 w-full h-full object-contain z-20" alt="Góc nhìn máy quay" />}
+
                 {/* Recording progress overlay — shown on top of canvas so captureStream still captures frames */}
                 {isRecording && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/90 z-30 p-8">
@@ -1074,7 +1174,13 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                       </div>
                       <p className="text-sm text-muted-foreground text-center">
                         {(() => {
-                          const total = computeVideoDuration(capturedStart ?? config.cameraStart, capturedEnd ?? config.cameraEnd, config.cameraSpeed, "xyz");
+                          const total = computeVideoDuration(
+                            capturedStart ?? config.cameraStart,
+                            capturedEnd ?? config.cameraEnd,
+                            config.cameraSpeed,
+                            "xyz",
+                            isCameraFixed(capturedStart ?? config.cameraStart, capturedEnd ?? config.cameraEnd) ? config.fixedCameraDuration : undefined
+                          );
                           const elapsed = (progress / 100) * total;
                           const fmt = (s: number) => {
                             const m = Math.floor(s / 60);
@@ -1320,10 +1426,12 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                                   cameraEnd={capturedEnd ?? config.cameraEnd}
                                   cameraSpeed={config.cameraSpeed}
                                   easing={config.easing}
+                                  fixedCameraDuration={config.fixedCameraDuration}
                                   onStartChange={(s) => updateConfig("cameraStart", s)}
                                   onEndChange={(e) => updateConfig("cameraEnd", e)}
                                   onSpeedChange={(s) => updateConfig("cameraSpeed", s)}
                                   onEasingChange={(e) => updateConfig("easing", e)}
+                                  onFixedDurationChange={(d) => updateConfig("fixedCameraDuration", d)}
                                   onSetStart={handleSetStart}
                                   onSetEnd={handleSetEnd}
                                   startPositionSet={capturedStart !== null}
@@ -1736,7 +1844,13 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                 {capturedStart && capturedEnd ? (
                   <>
                     {(() => {
-                      const sec = computeVideoDuration(capturedStart, capturedEnd, config.cameraSpeed, "xyz");
+                      const sec = computeVideoDuration(
+                        capturedStart,
+                        capturedEnd,
+                        config.cameraSpeed,
+                        "xyz",
+                        isCameraFixed(capturedStart, capturedEnd) ? config.fixedCameraDuration : undefined
+                      );
                       const m = Math.floor(sec / 60);
                       const s = Math.round(sec % 60);
                       const label = m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `${sec.toFixed(1)}s`;

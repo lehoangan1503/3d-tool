@@ -1,23 +1,25 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Gauge, Crosshair } from "lucide-react";
 import type { CameraKeyframe, EasingConfig } from "@/types/video-studio";
-import { EASING_PRESETS, computeVideoDuration } from "@/types/video-studio";
+import { EASING_PRESETS, computeVideoDuration, isCameraFixed } from "@/types/video-studio";
 
 interface CameraControlsPanelProps {
   cameraStart: CameraKeyframe;
   cameraEnd: CameraKeyframe;
   cameraSpeed: number;
   easing: EasingConfig;
+  fixedCameraDuration?: number;
   onStartChange: (k: CameraKeyframe) => void;
   onEndChange: (k: CameraKeyframe) => void;
   onSpeedChange: (s: number) => void;
   onEasingChange: (e: EasingConfig) => void;
+  onFixedDurationChange?: (d: number) => void;
   onSetStart: () => void;
   onSetEnd: () => void;
   startPositionSet?: boolean;
@@ -56,8 +58,10 @@ export function CameraControlsPanel({
   cameraEnd,
   cameraSpeed,
   easing,
+  fixedCameraDuration = 10,
   onSpeedChange,
   onEasingChange,
+  onFixedDurationChange,
   onSetStart,
   onSetEnd,
   startPositionSet,
@@ -69,6 +73,17 @@ export function CameraControlsPanel({
     },
     [onEasingChange]
   );
+
+  const isFixed = isCameraFixed(cameraStart, cameraEnd);
+  const [localDuration, setLocalDuration] = useState<string | null>(null);
+
+  const commitDuration = (str: string) => {
+    setLocalDuration(null);
+    const v = parseFloat(str);
+    if (!isNaN(v) && onFixedDurationChange) {
+      onFixedDurationChange(Math.max(3, Math.min(300, v)));
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -84,14 +99,16 @@ export function CameraControlsPanel({
       {/* End Position */}
       <KeyframeDisplay title="Vị trí kết thúc" keyframe={cameraEnd} onSet={onSetEnd} positionSet={endPositionSet} />
 
-      {/* Camera Speed */}
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <Label className="text-xs text-muted-foreground">Tốc độ camera</Label>
-          <span className="text-xs text-muted-foreground tabular-nums">{cameraSpeed.toFixed(2)}</span>
+      {/* Camera Speed — only relevant when camera actually moves */}
+      {!isFixed && (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <Label className="text-xs text-muted-foreground">Tốc độ camera</Label>
+            <span className="text-xs text-muted-foreground tabular-nums">{cameraSpeed.toFixed(2)}</span>
+          </div>
+          <Slider value={[cameraSpeed]} onValueChange={([v]) => onSpeedChange(v)} min={0.1} max={2} step={0.05} />
         </div>
-        <Slider value={[cameraSpeed]} onValueChange={([v]) => onSpeedChange(v)} min={0.1} max={2} step={0.05} />
-      </div>
+      )}
 
       {/* Easing */}
       <div className="space-y-1.5">
@@ -112,17 +129,34 @@ export function CameraControlsPanel({
         </Select>
       </div>
 
-      {/* Computed Duration */}
+      {/* Duration — editable when fixed camera, computed when moving */}
       <div className="flex items-center justify-between rounded-md bg-muted px-3 py-2">
         <Label className="text-xs text-muted-foreground">Thời lượng</Label>
-        <span className="text-sm font-medium tabular-nums">
-          {(() => {
-            const sec = computeVideoDuration(cameraStart, cameraEnd, cameraSpeed, "xyz");
-            const m = Math.floor(sec / 60);
-            const s = Math.round(sec % 60);
-            return m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `${sec.toFixed(1)}s`;
-          })()}
-        </span>
+        {isFixed ? (
+          <div className="flex items-center gap-1.5">
+            <input
+              type="number"
+              min={3}
+              max={300}
+              step={1}
+              value={localDuration !== null ? localDuration : fixedCameraDuration}
+              onChange={(e) => setLocalDuration(e.target.value)}
+              onBlur={(e) => commitDuration(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") commitDuration((e.target as HTMLInputElement).value); }}
+              className="w-16 text-right text-sm font-medium tabular-nums bg-transparent border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+            <span className="text-xs text-muted-foreground">s</span>
+          </div>
+        ) : (
+          <span className="text-sm font-medium tabular-nums">
+            {(() => {
+              const sec = computeVideoDuration(cameraStart, cameraEnd, cameraSpeed, "xyz");
+              const m = Math.floor(sec / 60);
+              const s = Math.round(sec % 60);
+              return m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `${sec.toFixed(1)}s`;
+            })()}
+          </span>
+        )}
       </div>
     </div>
   );

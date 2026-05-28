@@ -26,7 +26,7 @@ import {
   loadPBRTexturePack,
 } from './studio-background';
 import type { VideoStudioConfig, CameraKeyframe, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig, CueHdriConfig } from '@/types/video-studio';
-import { computeVideoDuration, createEasingFunction, applyDirection, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI, getRecordingDimensions } from '@/types/video-studio';
+import { computeVideoDuration, createEasingFunction, applyDirection, isCameraFixed, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI, getRecordingDimensions } from '@/types/video-studio';
 import { compositeSurfaceFrames, preloadFrameImages } from './background-compositor';
 import { applyBumperEmissiveShaderMask, applyLogoToExistingMaterial } from './leather-material';
 import { isRubberMaterial, isTopCapMaterial, isTopCapFaceMaterial, isCylinderLeatherMaterial } from './leather-config';
@@ -2885,12 +2885,14 @@ export class ExtractorSceneManager {
 
     // Diagnostic: log actual values used for this recording
     const _diagEnd = applyDirection(config.cameraStart, config.cameraEnd, "xyz");
-    const _diagDur = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz");
+    const _fixedDur = isCameraFixed(config.cameraStart, config.cameraEnd) ? config.fixedCameraDuration : undefined;
+    const _diagDur = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz", _fixedDur);
     console.log('[VideoStudio] recording', {
       start: { x: config.cameraStart.x?.toFixed(2), y: config.cameraStart.y?.toFixed(2), z: config.cameraStart.z?.toFixed(2) },
       end: { x: _diagEnd.x?.toFixed(2), y: _diagEnd.y?.toFixed(2), z: _diagEnd.z?.toFixed(2) },
       speed: config.cameraSpeed,
       duration: `${_diagDur.toFixed(1)}s`,
+      fixed: _fixedDur !== undefined,
     });
 
     // Hide all helpers/gizmos so they don't appear in the recorded video
@@ -2940,8 +2942,8 @@ export class ExtractorSceneManager {
     // Camera moves directly from start to end (full xyz interpolation)
     const effectiveEnd = applyDirection(config.cameraStart, config.cameraEnd, "xyz");
 
-    // Compute duration from path + speed
-    const duration = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz");
+    // Compute duration from path + speed (or fixed duration when camera is static)
+    const duration = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz", isCameraFixed(config.cameraStart, config.cameraEnd) ? config.fixedCameraDuration : undefined);
     const easingFn = createEasingFunction(config.easing);
 
     // Compute wall-clock duration in ms before MediaRecorder setup so the onstop closure can use it
@@ -2974,6 +2976,18 @@ export class ExtractorSceneManager {
     //   start(timeslice): Encoder flushes every ENCODER_WARMUP_MS → peak buffer ~5 MB.
     //                    Regular flushes keep memory pressure low → smooth encoding throughout.
     const ENCODER_WARMUP_MS = 2000;
+
+    // Whether the camera is fixed (start == end position). Hoisted here so both
+    // the onstop handler and the animate loop can share the same value.
+    const isFixed = isCameraFixed(config.cameraStart, config.cameraEnd);
+
+    // For fixed camera, the warmup (ENCODER_WARMUP_MS) is included in the final
+    // file, so we record only (durationMs - ENCODER_WARMUP_MS) of animation to
+    // keep the total at exactly durationMs.  For moving camera the warmup is
+    // trimmed in onstop, so the animation runs for the full durationMs.
+    const animDurationMs = isFixed
+      ? Math.max(1000, durationMs - ENCODER_WARMUP_MS)
+      : durationMs;
 
     // Use the full configured fps — do NOT cap at 60.
     // Chrome bug #639939 (timestamps 5× too large at >60 fps on high-refresh displays) was
@@ -3051,7 +3065,38 @@ export class ExtractorSceneManager {
       let outBlob: Blob;
       let finalDurationMs = durationMs;
 
-      if (warmupBlob && this.recordedChunks.length > 0) {
+      // ── Fixed camera: no trimming needed ──────────────────────────────────────
+      // Chrome's VP9 cluster (keyframe) interval is typically 3–5 s, much larger
+      // than ENCODER_WARMUP_MS (2 s). With the timeslice approach the 0 ms cluster
+      // straddles the warmup/animation boundary: its header lands in warmupBlob and
+      // its continuation bytes land at the start of animBuf. _findClusterOffsetAtTime
+      // skips those continuation bytes and lands on the next complete cluster, which
+      // can be 3–5 s into the recording — silently dropping that many seconds of video.
+      //
+      // For a FIXED camera the warmup frames are identical to animation frames (the
+      // camera never moves). The animation was shortened by ENCODER_WARMUP_MS so the
+      // combined file (warmup + animation) has exactly durationMs of content.
+      // We include all data without trimming and patch Duration = durationMs.
+      const allChunks = ([warmupBlob, ...this.recordedChunks]).filter((b): b is Blob => !!b);
+
+      if (isFixed && allChunks.length > 0) {
+        const allBufs = await Promise.all(allChunks.map(c => c.arrayBuffer()));
+        const totalSize = allBufs.reduce((s, b) => s + b.byteLength, 0);
+        const combined = new Uint8Array(totalSize);
+        let off = 0;
+        for (const buf of allBufs) { combined.set(new Uint8Array(buf), off); off += buf.byteLength; }
+        const combinedBuf = combined.buffer;
+
+        const rawHeaderBuf = this._extractWebmHeader(combinedBuf);
+        const headerBuf = this._patchEbmlDuration(rawHeaderBuf, finalDurationMs);
+        outBlob = new Blob([headerBuf, combinedBuf.slice(rawHeaderBuf.byteLength)], { type: getSupportedMimeType() });
+
+        console.log('[VideoStudio] fixed-camera passthrough', {
+          chunks: allChunks.length, totalSize, finalDurationMs,
+        });
+
+      } else if (warmupBlob && this.recordedChunks.length > 0) {
+        // ── Moving camera: trim warmup clusters, keep animation data ────────────
         // Combine all animation chunks into one buffer.
         const animChunkBufs = await Promise.all(this.recordedChunks.map(c => c.arrayBuffer()));
         const totalAnimSize = animChunkBufs.reduce((s, b) => s + b.byteLength, 0);
@@ -3103,8 +3148,7 @@ export class ExtractorSceneManager {
       } else {
         // Fallback: warmup timeslice didn't fire cleanly — combine everything as-is.
         console.warn('[VideoStudio] warmup split missing, using raw fallback');
-        const allBlobs = ([warmupBlob, ...this.recordedChunks]).filter((b): b is Blob => !!b);
-        outBlob = new Blob(allBlobs, { type: getSupportedMimeType() });
+        outBlob = new Blob(allChunks, { type: getSupportedMimeType() });
       }
 
       // Safety net: fixWebmDuration won't overwrite a non-zero Duration, so this only
@@ -3125,15 +3169,9 @@ export class ExtractorSceneManager {
     // Constant spin delta per rendered frame — guaranteed consistent speed in the video.
     const spinPerFrame = FRAME_INTERVAL_MS / SPIN_REF_MS;
 
-    // Animation frame count for deterministic camera motion.
-    // Frame-count-based progress (animFrameIdx / ANIM_FRAMES) guarantees every video frame
-    // advances the camera by exactly 1/ANIM_FRAMES regardless of how long that frame took
-    // to render — eliminates camera jumps from wall-clock performance.now() drift.
-    const ANIM_FRAMES = Math.ceil(durationMs * RECORD_FPS / 1000); // total animation frames
-
     let loopStart = -1;
     let frameCount = -1;         // monotonically increasing throttled frame index
-    let animFrameIdx = 0;        // frames rendered in animation phase
+    let animStartTime = -1;      // rAF timestamp when Phase 2 animation first begins
     let encoderWarmupDone = false; // true once first ondataavailable (warmup timeslice) fires
 
     const start = config.cameraStart;
@@ -3193,6 +3231,14 @@ export class ExtractorSceneManager {
       // the timeslice fires (warmupFlushed = true), telling us the encoder is warm
       // and the warmup EBML header has been cleanly committed to warmupBlob.
       if (!encoderWarmupDone) {
+        // For fixed cameras the warmup is kept in the final file (not trimmed), so
+        // the cue must spin during warmup to avoid a frozen 2s opening.
+        if (isFixed && hasAnySpin) {
+          this.spinCueInstances(
+            cue.spinSpeed > 0 ? cue.spinSpeed * 0.02 * spinPerFrame : 0,
+            (cue.spinSpeedX || 0) > 0 ? (cue.spinSpeedX || 0) * 0.02 * spinPerFrame : 0
+          );
+        }
         renderFrame(easingFn(0));
         onProgress?.(0);
         if (!warmupFlushed) {
@@ -3206,9 +3252,15 @@ export class ExtractorSceneManager {
       }
 
       // ── Phase 2: Animation recording ───────────────────────────────────────
-      // Frame-count-based progress: each frame advances exactly 1/ANIM_FRAMES
-      // regardless of wall-clock elapsed time, guaranteeing smooth camera motion.
-      if (this.isDisposed || animFrameIdx >= ANIM_FRAMES) {
+      // Time-based stop: record until wall-clock elapsed time reaches animDurationMs.
+      // This ensures captureStream captures exactly animDurationMs of content
+      // regardless of rendering speed — on slow machines each rAF gap is longer but
+      // the stream still samples at wall-clock rate, so frame-count-based approaches
+      // would over-run (ANIM_FRAMES rAFs × slow_render_time >> animDurationMs).
+      if (animStartTime < 0) animStartTime = timestamp;
+      const elapsed = timestamp - animStartTime;
+
+      if (this.isDisposed || elapsed >= animDurationMs) {
         renderFrame(easingFn(1));
         onProgress?.(100);
         this.animationFrameId = null;
@@ -3216,7 +3268,7 @@ export class ExtractorSceneManager {
         return;
       }
 
-      const progress = animFrameIdx / ANIM_FRAMES;
+      const progress = elapsed / animDurationMs;
       onProgress?.(Math.round(progress * 100));
 
       // Advance cue spin by exactly one frame's worth (constant angular velocity).
@@ -3230,7 +3282,6 @@ export class ExtractorSceneManager {
       }
 
       renderFrame(easingFn(progress));
-      animFrameIdx++;
       this.animationFrameId = requestAnimationFrame(animate);
     };
 

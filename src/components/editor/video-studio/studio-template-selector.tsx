@@ -32,6 +32,9 @@ const NEW_TEMPLATE_VALUE = "__new__";
 export interface StudioTemplateSelectorHandle {
   triggerSave: () => void;
   resetSelection: () => void;
+  /** Silently save current config to the selected template if the user owns it.
+   *  Used by the Record button to persist fixedCameraDuration without a dialog. */
+  silentSave: () => Promise<void>;
 }
 
 interface StudioTemplateSelectorProps {
@@ -106,8 +109,26 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
     () => ({
       triggerSave: handleSaveClick,
       resetSelection: () => setSelectedId(null),
+      silentSave: async () => {
+        if (!selectedId) return;
+        const selected = templates.find((t) => t.id === selectedId);
+        if (!selected?.isOwner) return;
+        setIsSaving(true);
+        try {
+          await fetch(`/api/video-studio-templates/${selectedId}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ config: currentConfig }),
+          });
+          await fetchTemplates();
+        } catch (err) {
+          console.error("StudioTemplateSelector silentSave error:", err);
+        } finally {
+          setIsSaving(false);
+        }
+      },
     }),
-    [handleSaveClick]
+    [handleSaveClick, selectedId, templates, currentConfig, fetchTemplates]
   );
 
   const handleUpdateCurrent = useCallback(async () => {

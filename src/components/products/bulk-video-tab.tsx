@@ -8,7 +8,7 @@ import { Loader2, Download, CheckCircle2, XCircle, Video, ChevronDown, RotateCcw
 import JSZip from "jszip";
 import type { Product } from "@/types/product";
 import type { VideoStudioTemplate, VideoStudioConfig } from "@/types/video-studio";
-import { ensureFullConfig, computeVideoDuration } from "@/types/video-studio";
+import { ensureFullConfig, computeVideoDuration, isCameraFixed } from "@/types/video-studio";
 import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import { loadProductIntoEsm } from "@/lib/three/load-product-for-esm";
 
@@ -164,7 +164,8 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
 
       const config = ensureFullConfig(item.template.config);
       const totalDuration = computeVideoDuration(
-        config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz"
+        config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz",
+        isCameraFixed(config.cameraStart, config.cameraEnd) ? config.fixedCameraDuration : undefined
       );
 
       // Throttle React state updates: at most every 100ms to avoid re-rendering

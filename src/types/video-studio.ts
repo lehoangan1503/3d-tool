@@ -298,6 +298,9 @@ export interface VideoStudioConfig {
   surfaceLightDisabled?: boolean;
   /** Output aspect ratio for recording. Defaults to "16:9". */
   videoRatio?: VideoRatio;
+  /** Duration (seconds) used when camera start and end positions are identical (fixed camera).
+   *  Ignored when start ≠ end — in that case duration is computed from path length + speed. */
+  fixedCameraDuration?: number;
   /** @deprecated Unified HDRI now used. Wall/table use envMapIntensity on SurfaceConfig. */
   surfaceHdri?: { enabled: boolean; hdriFile: string; rotationX: number; rotationY: number; intensity: number };
 }
@@ -320,6 +323,7 @@ export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
   hdriFile: "ferndale_studio_07_2k.hdr",
   surfaceLightDisabled: true,
   videoRatio: "16:9",
+  fixedCameraDuration: 10,
 };
 
 // ── Studio Template (DB record) ──
@@ -379,6 +383,12 @@ export function getRecordingDimensions(
 
 // ── Utility: Compute video duration from camera path ──
 
+/** Returns true when start and end positions are identical (fixed / static camera). */
+export function isCameraFixed(start: CameraKeyframe, end: CameraKeyframe): boolean {
+  const EPS = 1e-6;
+  return Math.abs(start.x - end.x) < EPS && Math.abs(start.y - end.y) < EPS && Math.abs(start.z - end.z) < EPS;
+}
+
 /** Apply direction constraint: only axes included in `direction` interpolate; others stay at start value */
 export function applyDirection(
   start: CameraKeyframe,
@@ -402,8 +412,12 @@ export function computeVideoDuration(
   start: CameraKeyframe,
   end: CameraKeyframe,
   cameraSpeed: number,
-  direction: CameraDirection = "xyz"
+  direction: CameraDirection = "xyz",
+  fixedDuration?: number
 ): number {
+  if (isCameraFixed(start, end) && fixedDuration !== undefined) {
+    return Math.max(3, Math.min(300, fixedDuration));
+  }
   const effectiveEnd = applyDirection(start, end, direction);
   const dX = effectiveEnd.x - start.x;
   const dY = effectiveEnd.y - start.y;
@@ -521,6 +535,7 @@ export function ensureFullConfig(partial: Partial<VideoStudioConfig>): VideoStud
     shadow: { ...d.shadow, ...partial.shadow },
     surfaceLightDisabled: partial.surfaceLightDisabled ?? d.surfaceLightDisabled,
     videoRatio: partial.videoRatio ?? d.videoRatio,
+    fixedCameraDuration: partial.fixedCameraDuration ?? d.fixedCameraDuration,
   };
 }
 

@@ -43,26 +43,11 @@ export function CreateUserForm() {
         <form onSubmit={handleSubmit} className="flex flex-col gap-4 max-w-sm">
           <div className="flex flex-col gap-2">
             <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              name="email"
-              type="email"
-              placeholder="user@example.com"
-              required
-              autoComplete="off"
-            />
+            <Input id="email" name="email" type="email" placeholder="user@example.com" required autoComplete="off" />
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="password">Mật khẩu</Label>
-            <Input
-              id="password"
-              name="password"
-              type="password"
-              placeholder="••••••••"
-              required
-              minLength={6}
-              autoComplete="new-password"
-            />
+            <Input id="password" name="password" type="password" placeholder="••••••••" required minLength={6} autoComplete="new-password" />
           </div>
 
           {error && (
@@ -80,14 +65,7 @@ export function CreateUserForm() {
           )}
 
           <Button type="submit" disabled={loading} className="w-fit">
-            {loading ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Đang tạo...
-              </>
-            ) : (
-              "Tạo Tài Khoản"
-            )}
+            {loading ? <>Đang tạo...</> : "Tạo Tài Khoản"}
           </Button>
         </form>
       </CardContent>

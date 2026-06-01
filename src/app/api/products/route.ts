@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import type { CreateProductInput } from "@/types/product";
+import { getSessionRole } from "@/lib/auth/roles";
+import type { CreateProductInput, ShopifyDeploymentSummary } from "@/types/product";
 import { DEFAULT_SMOOTH_CONFIG, DEFAULT_LEATHER_CONFIG, configToSettingsJson } from "@/types/product";
 
 // GET /api/products - List ALL products (global) with pagination + search + type filter
@@ -51,12 +52,62 @@ export async function GET(request: Request) {
 
     const profileMap = new Map(profiles?.map((p) => [p.user_id, p]) ?? []);
 
+    // Shopify deployment badges — surfaced per the viewer's role:
+    // admin sees all; mode sees only their own; normal users see none.
+    const { isAdmin, isMode } = await getSessionRole();
+    const deploymentMap = new Map<string, ShopifyDeploymentSummary>();
+    if (isAdmin || isMode) {
+      const productIds = products.map((p) => p.id);
+      const { data: deployments } = await supabase
+        .from("shopify_deployments")
+        .select("product_id, shopify_product_id, admin_url, storefront_url, title, created_by, created_at")
+        .in("product_id", productIds);
+
+      const creatorIds = [
+        ...new Set((deployments ?? []).map((d) => d.created_by).filter(Boolean)),
+      ] as string[];
+      const creatorMap = new Map(
+        profiles
+          ?.filter((p) => creatorIds.includes(p.user_id))
+          .map((p) => [p.user_id, p]) ?? []
+      );
+      // Creators may not be among the product owners already fetched.
+      const missingCreatorIds = creatorIds.filter((id) => !creatorMap.has(id));
+      if (missingCreatorIds.length) {
+        const { data: extraProfiles } = await supabase
+          .from("user_profiles")
+          .select("user_id, nickname, email")
+          .in("user_id", missingCreatorIds);
+        for (const p of extraProfiles ?? []) creatorMap.set(p.user_id, p);
+      }
+
+      for (const d of deployments ?? []) {
+        deploymentMap.set(d.product_id, {
+          shopify_product_id: d.shopify_product_id,
+          admin_url: d.admin_url,
+          storefront_url: d.storefront_url,
+          title: d.title,
+          created_by: d.created_by,
+          creator_nickname: d.created_by
+            ? creatorMap.get(d.created_by)?.nickname ?? null
+            : null,
+          created_at: d.created_at,
+        });
+      }
+    }
+
     const items = products.map((p) => {
       const profile = profileMap.get(p.user_id);
+      // mode users only see badges on their own products
+      const deployment =
+        isAdmin || (isMode && p.user_id === user.id)
+          ? deploymentMap.get(p.id) ?? null
+          : null;
       return {
         ...p,
         owner_nickname: profile?.nickname ?? null,
         owner_email: profile?.email ?? null,
+        shopify_deployment: deployment,
       };
     });
 

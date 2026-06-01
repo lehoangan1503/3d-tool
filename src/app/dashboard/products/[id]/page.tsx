@@ -1,7 +1,14 @@
 import { redirect, notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getSessionRole } from "@/lib/auth/roles";
 import { EditorClient } from "@/components/editor/editor-client";
-import type { Product, ProductConfig, ThreeJSSettingsJson, UserProfile } from "@/types/product";
+import type {
+  Product,
+  ProductConfig,
+  ThreeJSSettingsJson,
+  UserProfile,
+  ShopifyDeploymentSummary,
+} from "@/types/product";
 import { settingsJsonToConfig } from "@/types/product";
 
 interface PageProps {
@@ -61,6 +68,43 @@ export default async function ProductEditorPage({ params }: PageProps) {
     ownerProfile = ownerData as UserProfile | null;
   }
 
+  // Role-based Shopify access:
+  // admin → deploy any product; mode → deploy own products only.
+  const { isAdmin, isMode } = await getSessionRole();
+  const canDeploy = isAdmin || (isMode && isOwner);
+
+  // Surface the deployment badge only to viewers allowed to see it
+  // (admin: always; mode: own product).
+  let deployment: ShopifyDeploymentSummary | null = null;
+  if (isAdmin || (isMode && isOwner)) {
+    const { data: dep } = await supabase
+      .from("shopify_deployments")
+      .select("shopify_product_id, admin_url, storefront_url, title, created_by, created_at")
+      .eq("product_id", id)
+      .maybeSingle();
+
+    if (dep) {
+      let creatorNickname: string | null = null;
+      if (dep.created_by) {
+        const { data: creator } = await supabase
+          .from("user_profiles")
+          .select("nickname")
+          .eq("user_id", dep.created_by)
+          .single();
+        creatorNickname = creator?.nickname ?? null;
+      }
+      deployment = {
+        shopify_product_id: dep.shopify_product_id,
+        admin_url: dep.admin_url,
+        storefront_url: dep.storefront_url,
+        title: dep.title,
+        created_by: dep.created_by,
+        creator_nickname: creatorNickname,
+        created_at: dep.created_at,
+      };
+    }
+  }
+
   return (
     <EditorClient
       key={product.id}
@@ -68,6 +112,8 @@ export default async function ProductEditorPage({ params }: PageProps) {
       initialConfig={initialConfig}
       isOwner={isOwner}
       ownerProfile={ownerProfile}
+      canDeploy={canDeploy}
+      deployment={deployment}
     />
   );
 }

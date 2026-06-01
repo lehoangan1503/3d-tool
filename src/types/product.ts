@@ -4,6 +4,10 @@ export type LeatherTextureType = "crocodile" | "cowhide" | "snake" | "custom";
 
 export type LeatherColor = "black" | "chestnut" | "chocolate" | "darkBrown" | "whiskey" | "tan";
 
+// Assignable role stored on user_profiles. 'admin' is authoritative via
+// auth.users.app_metadata.role and is NOT stored here. null = normal user.
+export type UserRole = "mode" | null;
+
 export interface Product {
   id: string;
   user_id: string;
@@ -19,6 +23,9 @@ export interface Product {
   // Optional owner info joined from user_profiles (present in list API responses)
   owner_nickname?: string | null;
   owner_email?: string | null;
+  // Shopify deployment summary, attached by the list API and gated by the
+  // viewer's role (admin: all products; mode: own products; normal: null).
+  shopify_deployment?: ShopifyDeploymentSummary | null;
 }
 
 export interface UserProfile {
@@ -26,8 +33,34 @@ export interface UserProfile {
   user_id: string;
   nickname: string | null;
   email: string;
+  role: UserRole;
   created_at: string;
   updated_at: string;
+}
+
+// Full Shopify deployment record (shopify_deployments table).
+export interface ShopifyDeployment {
+  id: string;
+  product_id: string;
+  shopify_product_id: number;
+  shopify_handle: string | null;
+  admin_url: string | null;
+  storefront_url: string | null;
+  title: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Lightweight deployment info surfaced to the UI (badge + creator name).
+export interface ShopifyDeploymentSummary {
+  shopify_product_id: number;
+  admin_url: string | null;
+  storefront_url: string | null;
+  title: string | null;
+  created_by: string | null;
+  creator_nickname: string | null;
+  created_at: string;
 }
 
 // Editable configuration for 3D preview

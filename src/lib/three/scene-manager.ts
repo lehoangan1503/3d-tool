@@ -1237,14 +1237,10 @@ export class SceneManager {
 
     console.log("[SceneManager] Surface loaded:", surfaceImage.width, "x", surfaceImage.height);
 
-    // Create canvas texture
-    const canvas = document.createElement("canvas");
-    canvas.width = TEXTURE_CANVAS_SIZE;
-    canvas.height = TEXTURE_CANVAS_SIZE;
-    const ctx = canvas.getContext("2d")!;
-    ctx.drawImage(surfaceImage, 0, 0, TEXTURE_CANVAS_SIZE, TEXTURE_CANVAS_SIZE);
-
-    const mapTexture = new THREE.CanvasTexture(canvas);
+    // Create texture directly from the image to preserve its full native resolution.
+    // Previously this drew into a fixed-size square canvas (TEXTURE_CANVAS_SIZE × TEXTURE_CANVAS_SIZE)
+    // which silently downsampled and distorted the image's aspect ratio.
+    const mapTexture = new THREE.Texture(surfaceImage);
     mapTexture.colorSpace = THREE.SRGBColorSpace;
     mapTexture.wrapS = THREE.RepeatWrapping;
     mapTexture.wrapT = THREE.ClampToEdgeWrapping;

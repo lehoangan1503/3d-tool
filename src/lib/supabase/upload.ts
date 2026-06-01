@@ -53,9 +53,35 @@ export async function uploadToStorage(
 }
 
 /**
- * Upload multiple files in parallel
- * Returns object with URLs keyed by fileType
+ * Upload a blob directly to Supabase Storage with a custom path.
+ * Used for shopify mockup images and videos.
  */
+export async function uploadBlobToStorage(
+  blob: Blob,
+  path: string,
+  contentType: string,
+): Promise<string> {
+  const supabase = createClient();
+
+  const { error: uploadError } = await supabase.storage
+    .from("product-assets")
+    .upload(path, blob, {
+      contentType,
+      upsert: true,
+    });
+
+  if (uploadError) {
+    console.error("[Upload] Blob upload error:", uploadError);
+    throw new Error(uploadError.message);
+  }
+
+  const { data: urlData } = supabase.storage
+    .from("product-assets")
+    .getPublicUrl(path);
+
+  return `${urlData.publicUrl}?t=${Date.now()}`;
+}
+
 export async function uploadFilesInParallel(
   files: Array<{
     file: File;

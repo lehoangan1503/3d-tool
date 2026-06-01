@@ -8,6 +8,7 @@ import { LeatherPicker } from "@/components/editor/leather-picker";
 import { SurfaceUploader } from "@/components/editor/surface-uploader";
 import { ImageExtractor } from "@/components/editor/image-extractor";
 import { VideoStudio } from "@/components/editor/video-studio";
+import { ShopifyDeployDialog } from "@/components/editor/shopify-deploy-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,8 +35,10 @@ import {
   Move,
   Camera,
   Video,
+  ShoppingBag,
 } from "lucide-react";
-import type { Product, ProductConfig, LeatherColor, LeatherTextureType } from "@/types/product";
+import { Badge } from "@/components/ui/badge";
+import type { Product, ProductConfig, LeatherColor, LeatherTextureType, ShopifyDeploymentSummary } from "@/types/product";
 import { DEFAULT_PRODUCT_CONFIG, configToSettingsJson } from "@/types/product";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { uploadToStorage } from "@/lib/supabase/upload";
@@ -45,6 +48,10 @@ interface EditorClientProps {
   initialConfig?: ProductConfig;
   isOwner?: boolean;
   ownerProfile?: { nickname: string | null; email: string } | null;
+  /** Whether the current viewer (admin or mode) may deploy to Shopify. */
+  canDeploy?: boolean;
+  /** Existing Shopify deployment for this product, if any (role-gated). */
+  deployment?: ShopifyDeploymentSummary | null;
 }
 
 interface PendingFiles {
@@ -52,7 +59,7 @@ interface PendingFiles {
   customTexture: { file: File; preview: string } | null;
 }
 
-export function EditorClient({ product: initialProduct, initialConfig, isOwner = true, ownerProfile }: EditorClientProps) {
+export function EditorClient({ product: initialProduct, initialConfig, isOwner = true, ownerProfile, canDeploy = false, deployment = null }: EditorClientProps) {
   const router = useRouter();
   const [product, setProduct] = useState(initialProduct);
   const [config, setConfig] = useState<ProductConfig>(initialConfig || DEFAULT_PRODUCT_CONFIG);
@@ -71,6 +78,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
   });
   const [showImageExtractor, setShowImageExtractor] = useState(false);
   const [showVideoExtractor, setShowVideoExtractor] = useState(false);
+  const [showShopifyDeploy, setShowShopifyDeploy] = useState(false);
   const [cloning, setCloning] = useState(false);
 
   const [hdriOptions, setHdriOptions] = useState<Array<{ id: string; label: string }>>([]);
@@ -410,15 +418,31 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
             </Button>
           </Link>
           <div className="min-w-0 flex-1">
-            {isOwner ? (
-              <Input
-                value={product.name}
-                onChange={(e) => updateProduct({ name: e.target.value })}
-                className="font-semibold text-base sm:text-lg border-none shadow-none px-0 h-auto focus-visible:ring-0 bg-transparent truncate"
-              />
-            ) : (
-              <p className="font-semibold text-base sm:text-lg truncate">{product.name}</p>
-            )}
+            <div className="flex items-center gap-2 min-w-0">
+              {isOwner ? (
+                <Input
+                  value={product.name}
+                  onChange={(e) => updateProduct({ name: e.target.value })}
+                  className="font-semibold text-base sm:text-lg border-none shadow-none px-0 h-auto focus-visible:ring-0 bg-transparent truncate"
+                />
+              ) : (
+                <p className="font-semibold text-base sm:text-lg truncate">{product.name}</p>
+              )}
+              {deployment && (
+                <a
+                  href={deployment.admin_url ?? "#"}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="shrink-0"
+                  title={deployment.title ?? "Sản phẩm Shopify"}
+                >
+                  <Badge variant="success">
+                    <ShoppingBag className="h-3 w-3" />
+                    Đã kết nối Shopify
+                  </Badge>
+                </a>
+              )}
+            </div>
             <p className="text-xs sm:text-sm text-muted-foreground capitalize">
               {isOwner ? (
                 `${product.type} cơ`
@@ -478,6 +502,20 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
           >
             <Video className="h-4 w-4 sm:h-5 sm:w-5" />
           </Button>
+          {canDeploy && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowShopifyDeploy(true)}
+              title={deployment ? "Cập nhật Shopify" : "Triển khai Shopify"}
+              className="h-8 sm:h-10 px-2 sm:px-3 text-xs sm:text-sm gap-1.5 text-green-400 hover:text-green-300 hover:bg-green-500/10"
+            >
+              <ShoppingBag className="h-4 w-4 sm:h-5 sm:w-5" />
+              <span className="hidden sm:inline">
+                {deployment ? "Cập nhật Shopify" : "Triển khai Shopify"}
+              </span>
+            </Button>
+          )}
           {isOwner ? (
             <Button
               onClick={handleSave}
@@ -1561,6 +1599,14 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
         open={showVideoExtractor}
         onClose={() => setShowVideoExtractor(false)}
       />
+      {showShopifyDeploy && canDeploy && (
+        <ShopifyDeployDialog
+          product={product}
+          sceneManager={sceneManager}
+          deployment={deployment}
+          onClose={() => setShowShopifyDeploy(false)}
+        />
+      )}
     </div>
   );
 }

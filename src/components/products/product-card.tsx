@@ -6,7 +6,8 @@ import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Trash2, ArrowRight, ImageOff } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Trash2, ArrowRight, ImageOff, ShoppingBag } from "lucide-react";
 import type { Product } from "@/types/product";
 import { LEATHER_COLORS } from "@/types/product";
 import { ProductPreviewDialog } from "./product-preview-dialog";
@@ -26,6 +27,7 @@ export function ProductCard({ product, currentUserId, onDeleted, selected, onTog
 
   const isOwner = product.user_id === currentUserId;
   const ownerDisplay = product.owner_nickname || product.owner_email || "";
+  const deployment = product.shopify_deployment ?? null;
 
   async function handleDelete(e: React.MouseEvent) {
     e.preventDefault();
@@ -102,6 +104,12 @@ export function ProductCard({ product, currentUserId, onDeleted, selected, onTog
               <p className="font-semibold text-sm leading-tight text-foreground break-words">
                 {product.name}
               </p>
+              {deployment && (
+                <Badge variant="success" className="w-fit mt-0.5">
+                  <ShoppingBag className="h-3 w-3" />
+                  Đã kết nối Shopify
+                </Badge>
+              )}
               <p className="text-xs text-muted-foreground capitalize">
                 {product.type} cue
                 {product.type === "leather" && product.color && (
@@ -127,6 +135,14 @@ export function ProductCard({ product, currentUserId, onDeleted, selected, onTog
             {ownerDisplay && (
               <p className="text-[11px] text-muted-foreground/70 truncate" title={ownerDisplay}>
                 👤 {ownerDisplay}
+              </p>
+            )}
+            {deployment?.creator_nickname && (
+              <p
+                className="text-[11px] text-green-600/80 dark:text-green-400/80 truncate"
+                title={`Shopify: ${deployment.creator_nickname}`}
+              >
+                🛍️ Tạo bởi {deployment.creator_nickname}
               </p>
             )}
             <div className="flex items-center justify-between text-xs">

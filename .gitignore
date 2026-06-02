@@ -45,12 +45,17 @@ coverage/
 *.pem
 *.key
 *.cert
+*.bak
 
 # Docker
 Dockerfile
 docker-compose.yml
 docker-compose*.yml
-shopify/
+
+# Generated Shopify build output at the repo root only (NOT src/**/shopify dirs).
+# Leading slash anchors to root so it doesn't ignore source folders named
+# "shopify" (e.g. src/lib/shopify, src/app/api/shopify).
+/shopify/
 
 # Local Python tooling (not part of the Next.js app)
 up_web_python/

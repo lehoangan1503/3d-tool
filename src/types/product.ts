@@ -38,29 +38,81 @@ export interface UserProfile {
   updated_at: string;
 }
 
+// Shopify product versions / wrap options.
+export type ShopifyVersionName = "Standard" | "Premium" | "Pro";
+export type ShopifyWrapType = "wrap" | "wrapless";
+
+export interface ShopifyCustomText {
+  label: string;
+  example: string;
+}
+
+// The complete deploy-form payload, persisted so a deployed product can be
+// re-opened, edited and re-deployed (or deleted + re-created).
+export interface ShopifyFormData {
+  productCode: string;
+  title: string;
+  description: string;
+  aiHint: string;
+  aiModel: string;
+  versions: ShopifyVersionName[];
+  wrapType: ShopifyWrapType;
+  laserShaft: boolean;
+  customImage: boolean;
+  // Free custom text (no surcharge) — label/example added to the design.
+  customText: ShopifyCustomText | null;
+  // Paid custom text (+$20) — requires extra design work.
+  customTextPaid: ShopifyCustomText | null;
+  collections: string[];
+  imageUrls: string[];
+  videoUrl: string | null;
+  // IDs of the AI skills last used for this product (re-selected on reopen).
+  skillIds: string[];
+}
+
 // Full Shopify deployment record (shopify_deployments table).
 export interface ShopifyDeployment {
   id: string;
   product_id: string;
-  shopify_product_id: number;
+  shopify_product_id: number | null;
   shopify_handle: string | null;
   admin_url: string | null;
   storefront_url: string | null;
   title: string | null;
+  form_data: ShopifyFormData | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
 }
 
-// Lightweight deployment info surfaced to the UI (badge + creator name).
+// Lightweight deployment info surfaced to the UI (badge + creator name + prefill).
 export interface ShopifyDeploymentSummary {
-  shopify_product_id: number;
+  shopify_product_id: number | null;
   admin_url: string | null;
   storefront_url: string | null;
   title: string | null;
   created_by: string | null;
   creator_nickname: string | null;
   created_at: string;
+  form_data: ShopifyFormData | null;
+}
+
+// A saved collection value for the deploy-form Collections picker.
+export interface ShopifyCollection {
+  id: string;
+  value: string;
+  created_by: string | null;
+  created_at: string;
+}
+
+// A reusable AI prompt template ("skill") selectable in the deploy form.
+export interface ShopifySkill {
+  id: string;
+  name: string;
+  prompt_text: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // Editable configuration for 3D preview

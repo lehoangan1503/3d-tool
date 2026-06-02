@@ -69,17 +69,18 @@ export default async function ProductEditorPage({ params }: PageProps) {
   }
 
   // Role-based Shopify access:
-  // admin → deploy any product; mode → deploy own products only.
+  // admin → deploy/delete any product; mode → own products only.
   const { isAdmin, isMode } = await getSessionRole();
   const canDeploy = isAdmin || (isMode && isOwner);
+  const canDelete = canDeploy;
 
-  // Surface the deployment badge only to viewers allowed to see it
-  // (admin: always; mode: own product).
+  // Surface the deployment (badge + prefill data) only to viewers allowed to
+  // see it (admin: always; mode: own product).
   let deployment: ShopifyDeploymentSummary | null = null;
   if (isAdmin || (isMode && isOwner)) {
     const { data: dep } = await supabase
       .from("shopify_deployments")
-      .select("shopify_product_id, admin_url, storefront_url, title, created_by, created_at")
+      .select("shopify_product_id, admin_url, storefront_url, title, form_data, created_by, created_at")
       .eq("product_id", id)
       .maybeSingle();
 
@@ -98,6 +99,7 @@ export default async function ProductEditorPage({ params }: PageProps) {
         admin_url: dep.admin_url,
         storefront_url: dep.storefront_url,
         title: dep.title,
+        form_data: (dep.form_data as ShopifyDeploymentSummary["form_data"]) ?? null,
         created_by: dep.created_by,
         creator_nickname: creatorNickname,
         created_at: dep.created_at,
@@ -113,6 +115,7 @@ export default async function ProductEditorPage({ params }: PageProps) {
       isOwner={isOwner}
       ownerProfile={ownerProfile}
       canDeploy={canDeploy}
+      canDelete={canDelete}
       deployment={deployment}
     />
   );

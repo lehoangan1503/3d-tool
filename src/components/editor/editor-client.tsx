@@ -36,6 +36,7 @@ import {
   Camera,
   Video,
   ShoppingBag,
+  ExternalLink,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { Product, ProductConfig, LeatherColor, LeatherTextureType, ShopifyDeploymentSummary } from "@/types/product";
@@ -50,6 +51,8 @@ interface EditorClientProps {
   ownerProfile?: { nickname: string | null; email: string } | null;
   /** Whether the current viewer (admin or mode) may deploy to Shopify. */
   canDeploy?: boolean;
+  /** Whether the current viewer may delete the Shopify product. */
+  canDelete?: boolean;
   /** Existing Shopify deployment for this product, if any (role-gated). */
   deployment?: ShopifyDeploymentSummary | null;
 }
@@ -59,9 +62,20 @@ interface PendingFiles {
   customTexture: { file: File; preview: string } | null;
 }
 
-export function EditorClient({ product: initialProduct, initialConfig, isOwner = true, ownerProfile, canDeploy = false, deployment = null }: EditorClientProps) {
+export function EditorClient({
+  product: initialProduct,
+  initialConfig,
+  isOwner = true,
+  ownerProfile,
+  canDeploy = false,
+  canDelete = false,
+  deployment: initialDeployment = null,
+}: EditorClientProps) {
   const router = useRouter();
   const [product, setProduct] = useState(initialProduct);
+  // Held in state so the badge / button / header links update immediately after
+  // a deploy or delete, without needing a page reload.
+  const [deployment, setDeployment] = useState<ShopifyDeploymentSummary | null>(initialDeployment);
   const [config, setConfig] = useState<ProductConfig>(initialConfig || DEFAULT_PRODUCT_CONFIG);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -86,7 +100,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
   // Ref to access current config in callbacks
   const configRef = useRef(config);
   configRef.current = config;
-  
+
   // Ref to access current product in callbacks
   const productRef = useRef(product);
   productRef.current = product;
@@ -223,37 +237,31 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
     setHasChanges(true);
   };
 
-  const handleSurfaceFileSelect = useCallback(
-    (file: File | null, previewUrl: string) => {
-      if (file) {
-        setPendingFiles((prev) => ({
-          ...prev,
-          surface: { file, preview: previewUrl },
-        }));
-        updateProduct({ surface_url: previewUrl });
-      } else {
-        setPendingFiles((prev) => ({ ...prev, surface: null }));
-        updateProduct({ surface_url: null });
-      }
-    },
-    []
-  );
+  const handleSurfaceFileSelect = useCallback((file: File | null, previewUrl: string) => {
+    if (file) {
+      setPendingFiles((prev) => ({
+        ...prev,
+        surface: { file, preview: previewUrl },
+      }));
+      updateProduct({ surface_url: previewUrl });
+    } else {
+      setPendingFiles((prev) => ({ ...prev, surface: null }));
+      updateProduct({ surface_url: null });
+    }
+  }, []);
 
-  const handleCustomTextureSelect = useCallback(
-    (file: File | null, previewUrl: string) => {
-      if (file) {
-        setPendingFiles((prev) => ({
-          ...prev,
-          customTexture: { file, preview: previewUrl },
-        }));
-        updateProduct({ texture_url: previewUrl });
-      } else {
-        setPendingFiles((prev) => ({ ...prev, customTexture: null }));
-        updateProduct({ texture_url: null });
-      }
-    },
-    []
-  );
+  const handleCustomTextureSelect = useCallback((file: File | null, previewUrl: string) => {
+    if (file) {
+      setPendingFiles((prev) => ({
+        ...prev,
+        customTexture: { file, preview: previewUrl },
+      }));
+      updateProduct({ texture_url: previewUrl });
+    } else {
+      setPendingFiles((prev) => ({ ...prev, customTexture: null }));
+      updateProduct({ texture_url: null });
+    }
+  }, []);
 
   const handleSave = async () => {
     setSaving(true);
@@ -267,25 +275,11 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
       const uploadTasks: Promise<{ type: "surface" | "texture"; url: string }>[] = [];
 
       if (pendingFiles.surface) {
-        uploadTasks.push(
-          uploadToStorage(
-            pendingFiles.surface.file,
-            product.id,
-            "surface",
-            product.user_id
-          ).then((url) => ({ type: "surface" as const, url }))
-        );
+        uploadTasks.push(uploadToStorage(pendingFiles.surface.file, product.id, "surface", product.user_id).then((url) => ({ type: "surface" as const, url })));
       }
 
       if (pendingFiles.customTexture) {
-        uploadTasks.push(
-          uploadToStorage(
-            pendingFiles.customTexture.file,
-            product.id,
-            "texture",
-            product.user_id
-          ).then((url) => ({ type: "texture" as const, url }))
-        );
+        uploadTasks.push(uploadToStorage(pendingFiles.customTexture.file, product.id, "texture", product.user_id).then((url) => ({ type: "texture" as const, url })));
       }
 
       // Upload files in parallel (direct to Supabase - no Next.js proxy)
@@ -387,7 +381,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
         hdriUrls: [
           "https://cdn.shopify.com/s/files/1/0728/7314/8553/files/church_museum_2k.hdr",
           "https://cdn.shopify.com/s/files/1/0728/7314/8553/files/church_stairway_2k.hdr",
-          "https://cdn.shopify.com/s/files/1/0728/7314/8553/files/bloem_train_track_clear_2k.hdr"
+          "https://cdn.shopify.com/s/files/1/0728/7314/8553/files/bloem_train_track_clear_2k.hdr",
         ],
         textureScale: config.textureScale,
         joint: {
@@ -423,19 +417,13 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
                 <Input
                   value={product.name}
                   onChange={(e) => updateProduct({ name: e.target.value })}
-                  className="font-semibold text-base sm:text-lg border-none shadow-none px-0 h-auto focus-visible:ring-0 bg-transparent truncate"
+                  className="w-fit font-semibold text-base sm:text-lg border-none shadow-none px-0 h-auto focus-visible:ring-0 bg-transparent truncate"
                 />
               ) : (
                 <p className="font-semibold text-base sm:text-lg truncate">{product.name}</p>
               )}
-              {deployment && (
-                <a
-                  href={deployment.admin_url ?? "#"}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="shrink-0"
-                  title={deployment.title ?? "Sản phẩm Shopify"}
-                >
+              {deployment?.shopify_product_id && (
+                <a href={deployment.admin_url ?? "#"} target="_blank" rel="noopener noreferrer" className="shrink-0" title={deployment.title ?? "Sản phẩm Shopify"}>
                   <Badge variant="success">
                     <ShoppingBag className="h-3 w-3" />
                     Đã kết nối Shopify
@@ -448,10 +436,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
                 `${product.type} cơ`
               ) : (
                 <span>
-                  Sở hữu bởi:{" "}
-                  <span className="font-medium text-foreground">
-                    {ownerProfile?.nickname || ownerProfile?.email || "Người dùng"}
-                  </span>
+                  Sở hữu bởi: <span className="font-medium text-foreground">{ownerProfile?.nickname || ownerProfile?.email || "Người dùng"}</span>
                 </span>
               )}
             </p>
@@ -465,64 +450,32 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
             title={isAutoRotating ? "Tạm dừng tự động xoay" : "Bắt đầu tự động xoay"}
             className="h-8 w-8 sm:h-10 sm:w-10"
           >
-            {isAutoRotating ? (
-              <Pause className="h-4 w-4 sm:h-5 sm:w-5" />
-            ) : (
-              <Play className="h-4 w-4 sm:h-5 sm:w-5" />
-            )}
+            {isAutoRotating ? <Pause className="h-4 w-4 sm:h-5 sm:w-5" /> : <Play className="h-4 w-4 sm:h-5 sm:w-5" />}
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleBackground}
-            title={isDarkBg ? "Nền sáng" : "Nền tối"}
-            className="h-8 w-8 sm:h-10 sm:w-10"
-          >
-            {isDarkBg ? (
-              <Sun className="h-4 w-4 sm:h-5 sm:w-5" />
-            ) : (
-              <Moon className="h-4 w-4 sm:h-5 sm:w-5" />
-            )}
+          <Button variant="ghost" size="icon" onClick={toggleBackground} title={isDarkBg ? "Nền sáng" : "Nền tối"} className="h-8 w-8 sm:h-10 sm:w-10">
+            {isDarkBg ? <Sun className="h-4 w-4 sm:h-5 sm:w-5" /> : <Moon className="h-4 w-4 sm:h-5 sm:w-5" />}
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setShowImageExtractor(true)}
-            title="Chụp ảnh"
-            className="h-8 w-8 sm:h-10 sm:w-10"
-          >
+          <Button variant="ghost" size="icon" onClick={() => setShowImageExtractor(true)} title="Chụp ảnh" className="h-8 w-8 sm:h-10 sm:w-10">
             <Camera className="h-4 w-4 sm:h-5 sm:w-5" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setShowVideoExtractor(true)}
-            title="Quay video"
-            className="h-8 w-8 sm:h-10 sm:w-10"
-          >
+          <Button variant="ghost" size="icon" onClick={() => setShowVideoExtractor(true)} title="Quay video" className="h-8 w-8 sm:h-10 sm:w-10">
             <Video className="h-4 w-4 sm:h-5 sm:w-5" />
           </Button>
+
           {canDeploy && (
             <Button
               variant="ghost"
               size="sm"
               onClick={() => setShowShopifyDeploy(true)}
-              title={deployment ? "Cập nhật Shopify" : "Triển khai Shopify"}
+              title={deployment?.shopify_product_id ? "Cập nhật Shopify" : "Triển khai Shopify"}
               className="h-8 sm:h-10 px-2 sm:px-3 text-xs sm:text-sm gap-1.5 text-green-400 hover:text-green-300 hover:bg-green-500/10"
             >
               <ShoppingBag className="h-4 w-4 sm:h-5 sm:w-5" />
-              <span className="hidden sm:inline">
-                {deployment ? "Cập nhật Shopify" : "Triển khai Shopify"}
-              </span>
+              <span className="hidden sm:inline">{deployment?.shopify_product_id ? "Cập nhật Shopify" : "Triển khai Shopify"}</span>
             </Button>
           )}
           {isOwner ? (
-            <Button
-              onClick={handleSave}
-              disabled={saving || !hasChanges}
-              size="sm"
-              className="h-8 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm"
-            >
+            <Button onClick={handleSave} disabled={saving || !hasChanges} size="sm" className="h-8 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm">
               {saving ? (
                 <>
                   <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
@@ -536,12 +489,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
               )}
             </Button>
           ) : (
-            <Button
-              onClick={handleClone}
-              disabled={cloning}
-              size="sm"
-              className="h-8 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm"
-            >
+            <Button onClick={handleClone} disabled={cloning} size="sm" className="h-8 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm">
               {cloning ? (
                 <>
                   <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
@@ -567,26 +515,24 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
 
         {/* Mobile Bottom Sheet Overlay */}
         {mobileControlsExpanded && (
-          <div 
-            className="lg:hidden fixed inset-0 bg-black/40 z-40 transition-opacity duration-300"
-            onClick={() => setMobileControlsExpanded(false)}
-            aria-hidden="true"
-          />
+          <div className="lg:hidden fixed inset-0 bg-black/40 z-40 transition-opacity duration-300" onClick={() => setMobileControlsExpanded(false)} aria-hidden="true" />
         )}
 
         {/* Mobile Bottom Sheet */}
-        <div 
+        <div
           className={`lg:hidden fixed bottom-0 left-0 right-0 bg-card border-t border-border rounded-t-2xl shadow-2xl transition-transform duration-300 ease-out z-50 ${
-            mobileControlsExpanded ? '' : 'translate-y-[calc(100%-56px)]'
+            mobileControlsExpanded ? "" : "translate-y-[calc(100%-56px)]"
           }`}
-          style={{ height: '40vh' }}
+          style={{ height: "40vh" }}
         >
           {/* Drag handle */}
           <div
             role="button"
             tabIndex={0}
             onClick={() => setMobileControlsExpanded(!mobileControlsExpanded)}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setMobileControlsExpanded(!mobileControlsExpanded); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") setMobileControlsExpanded(!mobileControlsExpanded);
+            }}
             onTouchStart={(e) => {
               setSheetDragStart(e.touches[0].clientY);
             }}
@@ -609,14 +555,20 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
           >
             <div className="w-12 h-1.5 rounded-full bg-muted-foreground/50" />
           </div>
-          
+
           {/* Scrollable content */}
-          <div className="overflow-y-auto px-4 pb-6" style={{ height: 'calc(40vh - 56px)' }}>
+          <div className="overflow-y-auto px-4 pb-6" style={{ height: "calc(40vh - 56px)" }}>
             {/* Touch control hints */}
             <div className="flex justify-center gap-4 text-xs text-muted-foreground mb-3 pb-3 border-b border-border">
-              <span className="flex items-center gap-1"><RotateCcw className="h-3 w-3" /> Kéo để xoay</span>
-              <span className="flex items-center gap-1"><ZoomIn className="h-3 w-3" /> Chụm để thu phóng</span>
-              <span className="flex items-center gap-1"><Move className="h-3 w-3" /> Hai ngón để di chuyển</span>
+              <span className="flex items-center gap-1">
+                <RotateCcw className="h-3 w-3" /> Kéo để xoay
+              </span>
+              <span className="flex items-center gap-1">
+                <ZoomIn className="h-3 w-3" /> Chụm để thu phóng
+              </span>
+              <span className="flex items-center gap-1">
+                <Move className="h-3 w-3" /> Hai ngón để di chuyển
+              </span>
             </div>
             <div className="flex flex-col gap-3">
               {/* Preview-only banner for non-owners */}
@@ -626,10 +578,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
                 </div>
               )}
               {/* Surface Upload */}
-              <CollapsibleCard
-                title="Bề mặt"
-                icon={<Image className="h-4 w-4 text-primary" />}
-              >
+              <CollapsibleCard title="Bề mặt" icon={<Image className="h-4 w-4 text-primary" />}>
                 <SurfaceUploader
                   productId={product.id}
                   currentUrl={product.surface_url}
@@ -641,10 +590,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
               </CollapsibleCard>
 
               {/* HDRI Exposure Control */}
-              <CollapsibleCard
-                title="Ánh sáng HDRI"
-                icon={<Lightbulb className="h-4 w-4 text-primary" />}
-              >
+              <CollapsibleCard title="Ánh sáng HDRI" icon={<Lightbulb className="h-4 w-4 text-primary" />}>
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-2">
                     <Label>Loại HDRI</Label>
@@ -691,9 +637,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
                       max={360}
                       step={1}
                       value={config.hdriRotationX}
-                      onChange={(e) =>
-                        updateConfig({ hdriRotationX: parseFloat(e.target.value) })
-                      }
+                      onChange={(e) => updateConfig({ hdriRotationX: parseFloat(e.target.value) })}
                       className="w-full accent-primary"
                     />
                   </div>
@@ -710,9 +654,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
                       max={360}
                       step={1}
                       value={config.hdriRotationY}
-                      onChange={(e) =>
-                        updateConfig({ hdriRotationY: parseFloat(e.target.value) })
-                      }
+                      onChange={(e) => updateConfig({ hdriRotationY: parseFloat(e.target.value) })}
                       className="w-full accent-primary"
                     />
                   </div>
@@ -918,10 +860,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
               */}
 
               {/* Joint Top Config */}
-              <CollapsibleCard
-                title="Khớp đầu"
-                icon={<Settings className="h-4 w-4 text-primary" />}
-              >
+              <CollapsibleCard title="Khớp đầu" icon={<Settings className="h-4 w-4 text-primary" />}>
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="jointRoughness-mobile">Độ nhám</Label>
@@ -1065,55 +1004,32 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
               </div>
             )}
             {/* 3D Controls */}
-            <CollapsibleCard
-              title="Điều khiển 3D"
-              icon={<Info className="h-4 w-4 text-primary" />}
-              defaultExpanded={true}
-            >
+            <CollapsibleCard title="Điều khiển 3D" icon={<Info className="h-4 w-4 text-primary" />} defaultExpanded={true}>
               <div className="text-sm text-muted-foreground">
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center justify-between">
                     <span>Xoay</span>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs bg-background px-2 py-0.5 rounded">
-                        Click trái + kéo (ngang: quay, dọc: nghiêng)
-                      </span>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={toggleAutoRotate}
-                        className="h-7 px-2"
-                        title={isAutoRotating ? "Tạm dừng tự động xoay" : "Bắt đầu tự động xoay"}
-                      >
-                        {isAutoRotating ? (
-                          <Pause className="h-3.5 w-3.5" />
-                        ) : (
-                          <Play className="h-3.5 w-3.5" />
-                        )}
+                      <span className="text-xs bg-background px-2 py-0.5 rounded">Click trái + kéo (ngang: quay, dọc: nghiêng)</span>
+                      <Button variant="outline" size="sm" onClick={toggleAutoRotate} className="h-7 px-2" title={isAutoRotating ? "Tạm dừng tự động xoay" : "Bắt đầu tự động xoay"}>
+                        {isAutoRotating ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                       </Button>
                     </div>
                   </div>
                   <div className="flex items-center justify-between">
                     <span>Thu phóng</span>
-                    <span className="text-xs bg-background px-2 py-0.5 rounded">
-                      Con lăn chuột
-                    </span>
+                    <span className="text-xs bg-background px-2 py-0.5 rounded">Con lăn chuột</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span>Di chuyển</span>
-                    <span className="text-xs bg-background px-2 py-0.5 rounded">
-                      Click phải + kéo
-                    </span>
+                    <span className="text-xs bg-background px-2 py-0.5 rounded">Click phải + kéo</span>
                   </div>
                 </div>
               </div>
             </CollapsibleCard>
 
             {/* Surface Upload */}
-            <CollapsibleCard
-              title="Bề mặt"
-              icon={<Image className="h-4 w-4 text-primary" />}
-            >
+            <CollapsibleCard title="Bề mặt" icon={<Image className="h-4 w-4 text-primary" />}>
               <SurfaceUploader
                 productId={product.id}
                 currentUrl={product.surface_url}
@@ -1125,10 +1041,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
             </CollapsibleCard>
 
             {/* HDRI Exposure Control */}
-            <CollapsibleCard
-              title="Ánh sáng HDRI"
-              icon={<Lightbulb className="h-4 w-4 text-primary" />}
-            >
+            <CollapsibleCard title="Ánh sáng HDRI" icon={<Lightbulb className="h-4 w-4 text-primary" />}>
               <div className="flex flex-col gap-4">
                 <div className="flex flex-col gap-2">
                   <Label>Loại HDRI</Label>
@@ -1176,9 +1089,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
                     max={360}
                     step={1}
                     value={config.hdriRotationX}
-                    onChange={(e) =>
-                      updateConfig({ hdriRotationX: parseFloat(e.target.value) })
-                    }
+                    onChange={(e) => updateConfig({ hdriRotationX: parseFloat(e.target.value) })}
                     className="w-full accent-primary"
                   />
                 </div>
@@ -1195,9 +1106,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
                     max={360}
                     step={1}
                     value={config.hdriRotationY}
-                    onChange={(e) =>
-                      updateConfig({ hdriRotationY: parseFloat(e.target.value) })
-                    }
+                    onChange={(e) => updateConfig({ hdriRotationY: parseFloat(e.target.value) })}
                     className="w-full accent-primary"
                   />
                 </div>
@@ -1414,10 +1323,7 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
             */}
 
             {/* Joint Top Config */}
-            <CollapsibleCard
-              title="Khớp đầu"
-              icon={<Settings className="h-4 w-4 text-primary" />}
-            >
+            <CollapsibleCard title="Khớp đầu" icon={<Settings className="h-4 w-4 text-primary" />}>
               <div className="flex flex-col gap-4">
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="jointRoughness">Độ nhám</Label>
@@ -1554,20 +1460,10 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
             )} */}
 
             {/* Copy JSON Metadata */}
-            <CollapsibleCard
-              title="Xuất"
-              icon={<Copy className="h-4 w-4 text-primary" />}
-            >
+            <CollapsibleCard title="Xuất" icon={<Copy className="h-4 w-4 text-primary" />}>
               <div className="flex flex-col gap-2">
-                <p className="text-sm text-muted-foreground">
-                  Sao chép toàn bộ cấu hình dưới dạng JSON để tích hợp metafield Shopify.
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={copyJsonMetadata}
-                  className="w-full"
-                >
+                <p className="text-sm text-muted-foreground">Sao chép toàn bộ cấu hình dưới dạng JSON để tích hợp metafield Shopify.</p>
+                <Button variant="outline" size="sm" onClick={copyJsonMetadata} className="w-full">
                   {copied ? (
                     <>
                       <Check className="h-4 w-4" />
@@ -1585,25 +1481,15 @@ export function EditorClient({ product: initialProduct, initialConfig, isOwner =
           </div>
         </div>
       </div>
-      <ImageExtractor
-        sceneManager={sceneManager}
-        productName={product.name}
-        productType={product.type}
-        open={showImageExtractor}
-        onClose={() => setShowImageExtractor(false)}
-      />
-      <VideoStudio
-        sceneManager={sceneManager}
-        productName={product.name}
-        productId={product.id}
-        open={showVideoExtractor}
-        onClose={() => setShowVideoExtractor(false)}
-      />
+      <ImageExtractor sceneManager={sceneManager} productName={product.name} productType={product.type} open={showImageExtractor} onClose={() => setShowImageExtractor(false)} />
+      <VideoStudio sceneManager={sceneManager} productName={product.name} productId={product.id} open={showVideoExtractor} onClose={() => setShowVideoExtractor(false)} />
       {showShopifyDeploy && canDeploy && (
         <ShopifyDeployDialog
           product={product}
           sceneManager={sceneManager}
           deployment={deployment}
+          canDelete={canDelete}
+          onDeploymentChange={setDeployment}
           onClose={() => setShowShopifyDeploy(false)}
         />
       )}

@@ -82,6 +82,9 @@ export async function GET(request: Request) {
       }
 
       for (const d of deployments ?? []) {
+        // Only surface rows that are actually live on Shopify. A row with a
+        // null id was deleted and only retains form_data for re-deploy.
+        if (!d.shopify_product_id) continue;
         deploymentMap.set(d.product_id, {
           shopify_product_id: d.shopify_product_id,
           admin_url: d.admin_url,
@@ -92,6 +95,7 @@ export async function GET(request: Request) {
             ? creatorMap.get(d.created_by)?.nickname ?? null
             : null,
           created_at: d.created_at,
+          form_data: null,
         });
       }
     }

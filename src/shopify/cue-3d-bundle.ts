@@ -1,11 +1,12 @@
 import { SceneManager } from "@/lib/three/scene-manager";
 import { RUBBER_CONFIG, TOP_CAP_CONFIG } from "@/lib/three/leather-config";
-import type { LeatherColor } from "@/types/product";
+import type { LeatherColor, ProductType } from "@/types/product";
+import { isLeatherLikeType } from "@/types/product";
 
 type ToneMappingMode = "agx" | "neutral";
 
 type ExportedMeta = {
-  type: "smooth" | "leather";
+  type: ProductType;
   surface_url?: string | null;
   texture_type?: string | null;
   texture_url?: string | null;
@@ -118,7 +119,7 @@ async function mountSingleViewer(): Promise<void> {
     manager.updateBodyRoughness(Number(meta.config.lighting.bodyRoughness));
   }
 
-  if (meta.type === "leather" && meta.config?.leather) {
+  if (isLeatherLikeType(meta.type) && meta.config?.leather) {
     manager.updateLeatherConfig({
       roughness: meta.config.leather.roughness,
       sheen: meta.config.leather.sheen,

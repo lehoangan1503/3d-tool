@@ -12,6 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ChevronsUpDown } from "lucide-react";
 import { SceneViewControls, type SelectionInfo } from "./video-studio/scene-view-controls";
 import type { CueShadowConfig, HdriLayer } from "@/types/extractor";
+import type { ProductType } from "@/types/product";
 import { createDefaultHdriLayer, DEFAULT_CUE_SHADOW, STUDIO_WHITE_HDRI } from "@/types/extractor";
 import type { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import { ExtractorSceneManager as ESMClass, HDRI_OPTIONS_FALLBACK } from "@/lib/three/extractor-scene-manager";
@@ -163,7 +164,7 @@ interface ShadowSimulateDialogProps {
   extractorRef: React.MutableRefObject<ExtractorSceneManager | null>;
   cueSettings: { phi: number; zoom: number; offsetX: number; offsetY: number; spinY: number };
   /** Current product type — used to filter the product surface picker */
-  productType: "smooth" | "leather";
+  productType: ProductType;
 }
 
 function TransformInput({ label, value, onChange, suffix = "" }: { label: string; value: number; onChange: (v: number) => void; suffix?: string }) {
@@ -1940,7 +1941,7 @@ export function ShadowSimulateDialog({ open, onOpenChange, shadowConfig, onConfi
                   <div>
                     <p className="text-sm font-semibold">Chọn bề mặt</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Sản phẩm {productType === "leather" ? "da" : "trơn"}
+                      Sản phẩm {productType === "leather" ? "da" : productType === "lizard" ? "da kỳ đà" : "trơn"}
                     </p>
                   </div>
                   <button

@@ -1,4 +1,14 @@
-export type ProductType = "smooth" | "leather";
+export type ProductType = "smooth" | "leather" | "lizard";
+
+// Leather-like product types share the same material/texture handling
+// (leather normal map, color, texture_type, leather material config).
+// Only the loaded GLB model differs between them.
+export const LEATHER_LIKE_TYPES: ProductType[] = ["leather", "lizard"];
+
+// True for any product type that uses the leather material pipeline.
+export function isLeatherLikeType(type: ProductType): boolean {
+  return LEATHER_LIKE_TYPES.includes(type);
+}
 
 export type LeatherTextureType = "crocodile" | "cowhide" | "snake" | "custom";
 
@@ -65,7 +75,12 @@ export interface ShopifyFormData {
   customTextPaid: ShopifyCustomText | null;
   collections: string[];
   imageUrls: string[];
+  // Names of the rendered images (parallel to imageUrls), used to classify
+  // gallery vs metafield images (Mockup-Web-N, Details-N, Package-N) on deploy.
+  imageNames?: string[];
   videoUrl: string | null;
+  // Extra freeform tags the editor typed (test tags etc.) — not saved to DB.
+  manualTags?: string[];
   // IDs of the AI skills last used for this product (re-selected on reopen).
   skillIds: string[];
 }
@@ -273,6 +288,7 @@ export const LEATHER_COLORS: Record<LeatherColor, { name: string; hex: string }>
 export const MODEL_PATHS: Record<ProductType, string> = {
   smooth: "/models/cue-butt-leather-ktx2.glb",
   leather: "/models/cue-butt-leather-ver2-ktx2.glb",
+  lizard: "/models/cue-butt-leather-lizard-ktx2.glb",
 };
 
 // Default textures (normal maps for leather types)
@@ -333,6 +349,20 @@ export const DEFAULT_LEATHER_CONFIG: ProductConfig = {
   cylinderNormalScale: 1.0,
   cylinderSheen: 0,
   cylinderSheenColor: "#FFFFFF",
+};
+
+// Default values for config - Lizard cue type.
+// Lizard is treated the same as leather (leather material pipeline), so it
+// shares the leather defaults. Kept as a named constant so it can diverge later.
+export const DEFAULT_LIZARD_CONFIG: ProductConfig = {
+  ...DEFAULT_LEATHER_CONFIG,
+};
+
+// Default config per product type.
+export const DEFAULT_CONFIG_BY_TYPE: Record<ProductType, ProductConfig> = {
+  smooth: DEFAULT_SMOOTH_CONFIG,
+  leather: DEFAULT_LEATHER_CONFIG,
+  lizard: DEFAULT_LIZARD_CONFIG,
 };
 
 // Recommended texture settings per leather type

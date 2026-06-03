@@ -115,7 +115,18 @@ export function CreateProductDialog({ onCreated }: { onCreated?: () => void }) {
                     </div>
                     <div className="flex flex-col gap-0.5">
                       <span className="font-medium">Da</span>
-                      <span className="text-xs text-white/60">Bọc da vân</span>
+                      <span className="text-xs text-white/60">Bọc da bò</span>
+                    </div>
+                  </div>
+                </SelectItem>
+                <SelectItem value="lizard">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/10">
+                      <Layers className="h-4 w-4 text-white/80" />
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="font-medium">Da kỳ đà</span>
+                      <span className="text-xs text-white/60">Bọc da kỳ đà</span>
                     </div>
                   </div>
                 </SelectItem>

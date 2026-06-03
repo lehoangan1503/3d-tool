@@ -40,7 +40,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { Product, ProductConfig, LeatherColor, LeatherTextureType, ShopifyDeploymentSummary } from "@/types/product";
-import { DEFAULT_PRODUCT_CONFIG, configToSettingsJson } from "@/types/product";
+import { DEFAULT_PRODUCT_CONFIG, configToSettingsJson, isLeatherLikeType } from "@/types/product";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { uploadToStorage } from "@/lib/supabase/upload";
 
@@ -160,7 +160,7 @@ export function EditorClient({
     manager.updateHdriRotation(currentConfig.hdriRotationX, currentConfig.hdriRotationY);
     manager.updateClearcoat(currentConfig.clearcoat);
     manager.updateBodyRoughness(currentConfig.bodyRoughness);
-    if (currentProduct.type === "leather") {
+    if (isLeatherLikeType(currentProduct.type)) {
       manager.updateLeatherConfig({
         roughness: currentConfig.leatherRoughness,
         sheen: currentConfig.leatherSheen,
@@ -199,7 +199,7 @@ export function EditorClient({
     sceneManager.updateBodyRoughness(config.bodyRoughness);
 
     // Update leather-specific material config (overrides body roughness for leather parts)
-    if (product.type === "leather") {
+    if (isLeatherLikeType(product.type)) {
       sceneManager.updateLeatherConfig({
         roughness: config.leatherRoughness,
         sheen: config.leatherSheen,
@@ -1481,7 +1481,7 @@ export function EditorClient({
           </div>
         </div>
       </div>
-      <ImageExtractor sceneManager={sceneManager} productName={product.name} productType={product.type} open={showImageExtractor} onClose={() => setShowImageExtractor(false)} />
+      <ImageExtractor sceneManager={sceneManager} productName={product.name} productType={product.type} productSurfaceUrl={product.surface_url} open={showImageExtractor} onClose={() => setShowImageExtractor(false)} />
       <VideoStudio sceneManager={sceneManager} productName={product.name} productId={product.id} open={showVideoExtractor} onClose={() => setShowVideoExtractor(false)} />
       {showShopifyDeploy && canDeploy && (
         <ShopifyDeployDialog

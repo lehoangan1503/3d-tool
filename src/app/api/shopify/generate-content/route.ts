@@ -53,6 +53,25 @@ TAGS: <5-10 comma-separated tags relevant to the design, e.g. floral, blue, grad
 
 Focus on the theme and style described by the user. Create compelling marketing copy.`;
 
+// Output-format contract appended after a ticked skill. The skill decides the
+// tone/content; this only guarantees the markers the parser reads, so the
+// title/description/tags fields always render. Keep these markers in sync with
+// the extract() calls below.
+const OUTPUT_FORMAT_CONTRACT = `IMPORTANT — output format rules (override any conflicting instruction):
+
+- Output ONLY the markers below. Do NOT write any preamble, classification, or
+  headings before ENGLISH_TITLE. Your entire reply must start with ENGLISH_TITLE.
+- Put ALL the rich content (design highlights, materials, why-choose, gifting,
+  etc.) INSIDE the ENGLISH_DESCRIPTION marker — not before it. Markdown is allowed
+  in the description (headings, bullet lists, bold) and will be rendered.
+- Each marker label sits on its own line, exactly as written.
+
+ENGLISH_TITLE: <concise product title, max 80 chars, no code>
+ENGLISH_DESCRIPTION: <full rich description — multiple paragraphs / bullet sections, markdown ok>
+VIETNAMESE_TITLE: <Vietnamese translation of the title>
+VIETNAMESE_DESCRIPTION: <Vietnamese translation of the full description, same richness>
+TAGS: <5-10 comma-separated tags>`;
+
 function buildPromptWithAiHint(baseHint: string, withImage: boolean): string {
   const hint = baseHint.trim();
   if (!hint && withImage) {
@@ -163,20 +182,38 @@ export async function POST(request: Request) {
   if (!imageUrl) return NextResponse.json({ error: "imageUrl is required" }, { status: 400 });
   if (!YESCALE_TOKEN) return NextResponse.json({ error: "YESCALE_API_TOKEN is not configured" }, { status: 500 });
 
-  // When skills are provided, they lead the system prompt so the model follows
-  // their classification/format rules. The built-in marker contract is appended
-  // so we can still parse ENGLISH_TITLE / DESCRIPTION / TAGS out of the result.
+  // When a skill is ticked, it controls the tone/content (the built-in copywriter
+  // persona is dropped). But the parser below reads ENGLISH_TITLE / DESCRIPTION /
+  // TAGS markers out of the response, so we ALWAYS append just the output-format
+  // contract after the skill — otherwise the model writes free-form prose with no
+  // markers and the title/description fields come back empty.
   const skill = skillPrompt?.trim();
-  const visionSystem = skill ? `${skill}\n\n---\n\n${SYSTEM_PROMPT}` : SYSTEM_PROMPT;
-  const textSystem = skill ? `${skill}\n\n---\n\n${TEXT_ONLY_SYSTEM_PROMPT}` : TEXT_ONLY_SYSTEM_PROMPT;
+  const visionSystem = skill ? `${skill}\n\n---\n\n${OUTPUT_FORMAT_CONTRACT}` : SYSTEM_PROMPT;
+  const textSystem = skill ? `${skill}\n\n---\n\n${OUTPUT_FORMAT_CONTRACT}` : TEXT_ONLY_SYSTEM_PROMPT;
 
   const primaryModel = requestedModel ?? DEFAULT_MODEL;
   const modelsToTry = [primaryModel, ...FALLBACK_MODELS.filter((m) => m !== primaryModel)];
 
+  const visionUserText = buildPromptWithAiHint(hint ?? "", true);
+
+  // ── DEBUG: log the exact final payload sent to the LLM ──────────────────
+  // Server-side only — visible in the terminal running `npm run dev`, NOT in
+  // Chrome (Chrome only shows the browser→/api request body, not the prompt
+  // assembled here and forwarded to YesScale).
+  console.log("\n========== [generate-content] FINAL PAYLOAD TO LLM ==========");
+  console.log(`[skill received] ${skill ? `YES (${skill.length} chars)` : "NO — none ticked / empty"}`);
+  console.log(`[ai hint]        ${hint?.trim() ? hint.trim() : "(none)"}`);
+  console.log(`[model]          ${primaryModel}`);
+  console.log("---------- SYSTEM (vision) ----------");
+  console.log(visionSystem);
+  console.log("---------- USER (vision) ----------");
+  console.log(visionUserText);
+  console.log("============================================================\n");
+
   const visionMessages = [
     { role: "system", content: visionSystem },
     { role: "user", content: [
-      { type: "text", text: buildPromptWithAiHint(hint ?? "", true) },
+      { type: "text", text: visionUserText },
       { type: "image_url", image_url: { url: imageUrl, detail: "low" } },
     ]},
   ];
@@ -186,8 +223,13 @@ export async function POST(request: Request) {
       const enc = new TextEncoder();
       const push = (event: Record<string, unknown>) => controller.enqueue(enc.encode(sse(event)));
 
+      // Stop a field only at the NEXT known marker, not at any uppercase-colon
+      // line — rich descriptions may contain headings like "WHY CHOOSE:" that
+      // would otherwise truncate ENGLISH_DESCRIPTION.
+      const MARKERS = ["ENGLISH_TITLE", "ENGLISH_DESCRIPTION", "VIETNAMESE_TITLE", "VIETNAMESE_DESCRIPTION", "TAGS"];
       function extract(content: string, marker: string): string {
-        const match = content.match(new RegExp(`${marker}:\\s*(.+?)(?=\\n[A-Z_]+:|$)`, "s"));
+        const others = MARKERS.filter((m) => m !== marker).join("|");
+        const match = content.match(new RegExp(`${marker}:\\s*(.+?)(?=\\n(?:${others}):|$)`, "s"));
         return match ? match[1].trim() : "";
       }
 
@@ -257,12 +299,22 @@ export async function POST(request: Request) {
         return;
       }
 
+      // ── DEBUG: log the RAW model response + what the parser extracted ──
+      console.log("\n========== [generate-content] RAW MODEL RESPONSE ==========");
+      console.log(content);
+      console.log("============================================================\n");
+
       const enTitle = cleanTitle(extract(content, "ENGLISH_TITLE"));
       const enDesc = extract(content, "ENGLISH_DESCRIPTION");
       const viTitle = cleanTitle(extract(content, "VIETNAMESE_TITLE"));
       const viDesc = extract(content, "VIETNAMESE_DESCRIPTION");
       const tagsRaw = extract(content, "TAGS");
       const tags = tagsRaw.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+
+      console.log("[generate-content] PARSED →",
+        `enTitle=${enTitle ? `"${enTitle}"` : "(empty)"}`,
+        `| enDesc=${enDesc ? `${enDesc.length} chars` : "(empty)"}`,
+        `| tags=${tags.length}`);
 
       push({ type: "result", title: enTitle, description: enDesc, viTitle, viDescription: viDesc, tags, raw: content });
       controller.close();

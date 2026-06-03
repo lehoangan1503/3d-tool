@@ -9,7 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Trash2, ArrowRight, ImageOff, ShoppingBag } from "lucide-react";
 import type { Product } from "@/types/product";
-import { LEATHER_COLORS } from "@/types/product";
+import { LEATHER_COLORS, isLeatherLikeType } from "@/types/product";
 import { ProductPreviewDialog } from "./product-preview-dialog";
 
 interface ProductCardProps {
@@ -93,7 +93,7 @@ export function ProductCard({ product, currentUserId, onDeleted, selected, onTog
 
               <p className="text-xs text-muted-foreground capitalize">
                 {product.type} cue
-                {product.type === "leather" && product.color && <span className="ml-1">· {LEATHER_COLORS[product.color]?.name || product.color}</span>}
+                {isLeatherLikeType(product.type) && product.color && <span className="ml-1">· {LEATHER_COLORS[product.color]?.name || product.color}</span>}
               </p>
             </div>
             {isOwner && (

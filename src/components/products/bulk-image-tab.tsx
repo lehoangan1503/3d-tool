@@ -12,7 +12,7 @@ import type { ExtractorReference, ExtractorReferenceGroup } from "@/types/extrac
 import { isCueFrame, isImageFrame, DEFAULT_CUE_SHADOW, DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT } from "@/types/extractor";
 import { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
-import { renderCueFrameViaStudio, hdriLayersToCueHdri, createCanvasGradient, drawImageWithObjectFit } from "@/components/editor/image-extractor";
+import { renderCueFrameViaStudio, hdriLayersToCueHdri, createCanvasGradient, drawImageWithObjectFit, drawSurfaceWithPan } from "@/components/editor/image-extractor";
 import { resolveStorageUrl } from "@/lib/resolve-storage-url";
 
 type ItemStatus = "pending" | "in_progress" | "done" | "failed";
@@ -112,14 +112,22 @@ async function renderRefForProduct(
           ctx.fillRect(-hw, -hh, frame.transform.width, frame.transform.height);
           ctx.globalAlpha = 1;
         }
-        if (frame.imageSettings.imageUrl) {
+        // Dynamic-surface frames draw this product's flat surface (overrideSurfaceUrl).
+        const srcUrl = frame.imageSettings.dynamicSurface
+          ? overrideSurfaceUrl ?? null
+          : frame.imageSettings.imageUrl;
+        if (srcUrl) {
           const img = new Image();
           img.crossOrigin = "anonymous";
-          img.src = resolveStorageUrl(frame.imageSettings.imageUrl)!;
+          img.src = resolveStorageUrl(srcUrl)!;
           await new Promise<void>((r) => { img.onload = () => r(); img.onerror = () => r(); });
           ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
           ctx.globalCompositeOperation = (frame.imageSettings.blendMode === "normal" ? "source-over" : frame.imageSettings.blendMode) as GlobalCompositeOperation;
-          drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? "cover");
+          if (frame.imageSettings.dynamicSurface) {
+            drawSurfaceWithPan(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.surfacePan ?? { x: 0, y: 0, scale: 1 });
+          } else {
+            drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? "cover");
+          }
           ctx.globalAlpha = 1;
           ctx.globalCompositeOperation = "source-over";
         }

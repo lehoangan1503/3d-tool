@@ -32,8 +32,12 @@ type WrapType = "wrap" | "wrapless";
 interface RenderedImage {
   refId: string;
   refName: string;
-  url: string; // object URL for preview
-  blob: Blob;
+  url: string; // object URL (freshly rendered) OR a saved storage URL on reopen
+  // Freshly rendered images carry a blob to upload; images restored from a saved
+  // deployment have no blob — their `url` is already a public storage URL.
+  blob: Blob | null;
+  /** True when this entry was restored from form_data (url is already hosted). */
+  saved?: boolean;
 }
 
 interface ContentResult {
@@ -241,12 +245,25 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
   const [loadingRefs, setLoadingRefs] = useState(false);
 
   // ── Render pipeline ──
-  const [renderedImages, setRenderedImages] = useState<RenderedImage[]>([]);
+  // Restore previously-deployed images from the saved form snapshot so a
+  // connected product re-opens with its gallery visible (no re-render needed).
+  const [renderedImages, setRenderedImages] = useState<RenderedImage[]>(() => {
+    const urls = prefill?.imageUrls ?? [];
+    const names = prefill?.imageNames ?? [];
+    return urls.map((url, i) => ({
+      refId: `saved-${i}`,
+      refName: names[i] ?? `image-${i + 1}`,
+      url,
+      blob: null,
+      saved: true,
+    }));
+  });
   const [renderingImages, setRenderingImages] = useState(false);
   const [imageGridExpanded, setImageGridExpanded] = useState(false);
   const [imageProgress, setImageProgress] = useState({ done: 0, total: 0 });
   const [renderedVideoBlob, setRenderedVideoBlob] = useState<Blob | null>(null);
-  const [renderedVideoUrl, setRenderedVideoUrl] = useState<string | null>(null);
+  // Restore the saved video (already hosted) so it previews on reopen.
+  const [renderedVideoUrl, setRenderedVideoUrl] = useState<string | null>(prefill?.videoUrl ?? null);
   const [renderingVideo, setRenderingVideo] = useState(false);
   const [videoProgressPct, setVideoProgressPct] = useState(0);
   const [videoProgressLabel, setVideoProgressLabel] = useState("");
@@ -266,6 +283,10 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
   const [customTextMode, setCustomTextMode] = useState<"none" | "free" | "paid">(prefill?.customTextPaid ? "paid" : prefill?.customText ? "free" : "none");
   const [customTextLabel, setCustomTextLabel] = useState(prefill?.customTextPaid?.label ?? prefill?.customText?.label ?? "");
   const [customTextExample, setCustomTextExample] = useState(prefill?.customTextPaid?.example ?? prefill?.customText?.example ?? "");
+  // Extra freeform tags the editor adds (e.g. for testing). Not persisted to a
+  // collection DB — just written onto the Shopify product alongside auto tags.
+  const [manualTags, setManualTags] = useState<string[]>(prefill?.manualTags ?? []);
+  const [manualTagInput, setManualTagInput] = useState("");
 
   // ── Content ──
   const [aiHint, setAiHint] = useState(prefill?.aiHint ?? "");
@@ -413,7 +434,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     for (let i = 0; i < groupRefs.length; i++) {
       const ref = groupRefs[i];
       try {
-        const blob = await renderReferenceToBlob(model, ref);
+        const blob = await renderReferenceToBlob(model, ref, undefined, product.surface_url);
         const url = URL.createObjectURL(blob);
         renderedImageUrlsRef.current.push(url);
         results.push({ refId: ref.id, refName: ref.name, url, blob });
@@ -538,7 +559,10 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     setGenWarn("");
     setGeneratingContent(true);
     try {
-      const firstBlob = renderedImages[0].blob;
+      // Freshly rendered images carry a blob; restored ones only have a hosted
+      // URL — fetch it back into a blob so the AI vision call still works.
+      const first = renderedImages[0];
+      const firstBlob: Blob = first.blob ?? (await fetch(first.url).then((r) => r.blob()));
       const reader = new FileReader();
       const dataUrl = await new Promise<string>((res, rej) => {
         reader.onload = () => res(reader.result as string);
@@ -621,7 +645,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
   const handleDeploy = useCallback(async () => {
     const customTextOn = customTextMode !== "none";
     if (!productCode.trim()) {
-      alert("Nhập mã sản phẩm (vd: n01-05)");
+      alert("Tên sản phẩm phải bắt đầu bằng mã nXX-YY (vd: n01-05 - American). Hãy đổi tên sản phẩm.");
       return;
     }
     if (!versions.length) {
@@ -663,16 +687,24 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
 
       for (let i = 0; i < renderedImages.length; i++) {
         const ri = renderedImages[i];
+        // Restored images already have a hosted URL — reuse it; only freshly
+        // rendered images (with a blob) need uploading.
+        if (!ri.blob) {
+          uploadedImageUrls.push(ri.url);
+          continue;
+        }
         const path = `shopify-mockups/${product.id}/${ts}-img-${i}.png`;
         const url = await uploadBlobToStorage(ri.blob, path, "image/png");
         uploadedImageUrls.push(url);
       }
 
-      // Upload video if rendered
+      // Upload video if freshly rendered; otherwise reuse the saved video URL.
       let videoUrl: string | undefined;
       if (renderedVideoBlob) {
         const videoPath = `shopify-mockups/${product.id}/${ts}-video.webm`;
         videoUrl = await uploadBlobToStorage(renderedVideoBlob, videoPath, "video/webm");
+      } else if (renderedVideoUrl) {
+        videoUrl = renderedVideoUrl;
       }
 
       setUploadingAssets(false);
@@ -689,6 +721,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
           description,
           collections: collectionList.join(", "),
           imageUrls: uploadedImageUrls,
+          imageNames: renderedImages.map((ri) => ri.refName),
           videoUrl,
           versions,
           wrapType,
@@ -698,6 +731,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
           customTextPaid: customTextMode === "paid" ? customTextConfig : null,
           aiHint: aiHint.trim(),
           aiModel,
+          manualTags,
           skillIds: selectedSkillIds,
         }),
       });
@@ -737,12 +771,25 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     collectionList,
     aiHint,
     aiModel,
+    manualTags,
     selectedSkillIds,
     renderedImages,
     renderedVideoBlob,
+    renderedVideoUrl,
     deployment,
     onDeploymentChange,
   ]);
+
+  // ── Manual tag helpers ──
+  const addManualTag = useCallback((value: string) => {
+    const v = value.trim().toLowerCase();
+    if (!v) return;
+    setManualTags((prev) => (prev.includes(v) ? prev : [...prev, v]));
+    setManualTagInput("");
+  }, []);
+  const removeManualTag = useCallback((value: string) => {
+    setManualTags((prev) => prev.filter((t) => t !== value));
+  }, []);
 
   // ── Delete the live Shopify product (keeps saved form data for re-deploy) ──
   const handleDelete = useCallback(async () => {
@@ -762,11 +809,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
       setDeployResult(null);
       // Notify the editor: clear the Shopify link (badge/links disappear), but
       // keep the row's form_data for re-deploy.
-      onDeploymentChange?.(
-        deployment
-          ? { ...deployment, shopify_product_id: null, admin_url: null, storefront_url: null }
-          : null
-      );
+      onDeploymentChange?.(deployment ? { ...deployment, shopify_product_id: null, admin_url: null, storefront_url: null } : null);
     } catch (err) {
       setDeployError(err instanceof Error ? err.message : "Lỗi không xác định");
     } finally {
@@ -794,11 +837,14 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId);
 
   // Auto-generated tags preview (mirrors the server-side builder logic):
-  // sku code, "laser shaft" when on, and col_<collection> for each collection.
+  // wrap/wrapless, full product code (nXX-YY), "laser shaft", custom-*, and
+  // col_<collection> for each collection. Manual tags are shown separately.
+  const codeLower = productCode.trim().toLowerCase();
   const generatedTags = [
-    productCode.trim().toLowerCase(),
+    ...(wrapType ? [wrapType] : []),
+    ...(codeLower ? [codeLower] : []),
     ...(laserShaft ? ["laser shaft"] : []),
-    ...(customImage ? ["custom-image"] : []),
+    ...(customImage ? ["custom-upload", "custom-image"] : []),
     ...(customTextMode !== "none" ? ["custom-text"] : []),
     ...collectionList.map((c) => `col_${c.toLowerCase().replace(/\s+/g, "_")}`),
   ].filter(Boolean);
@@ -942,7 +988,9 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                         {renderedImages.map((ri) => (
                           <div
                             key={ri.refId}
-                            className={`relative aspect-square rounded-lg overflow-hidden border border-blue-500/40 bg-white/5 ${imageGridExpanded ? "" : "w-20 shrink-0"}`}
+                            className={`relative rounded-lg overflow-hidden border border-blue-500/40 bg-white/5 ${
+                              imageGridExpanded ? "aspect-[2/3]" : "aspect-square w-20 shrink-0"
+                            }`}
                           >
                             <img src={ri.url} alt={ri.refName} className="w-full h-full object-cover" />
                             <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
@@ -958,8 +1006,8 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                           groupRefs.slice(renderedImages.length).map((ref) => (
                             <div
                               key={ref.id}
-                              className={`relative aspect-square rounded-lg overflow-hidden border border-white/10 bg-white/5 flex items-center justify-center ${
-                                imageGridExpanded ? "" : "w-20 shrink-0"
+                              className={`relative rounded-lg overflow-hidden border border-white/10 bg-white/5 flex items-center justify-center ${
+                                imageGridExpanded ? "aspect-[2/3]" : "aspect-square w-20 shrink-0"
                               }`}
                             >
                               <Loader2 className="h-6 w-6 text-white/30 animate-spin" />
@@ -993,6 +1041,39 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                   )}
                 </>
               )
+            )}
+
+            {/* Saved images restored from a previous deploy — shown when no group
+                is selected yet so a reopened product still previews its gallery.
+                Picking a group (above) clears these and renders fresh ones. */}
+            {!selectedGroupId && renderedImages.some((ri) => ri.saved) && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-white/40">{renderedImages.length} ảnh đã lưu (lần đăng trước)</span>
+                  <button type="button" onClick={() => setImageGridExpanded((p) => !p)} className="text-xs text-blue-400 hover:text-blue-300">
+                    {imageGridExpanded ? "Thu nhỏ" : "Mở rộng"}
+                  </button>
+                </div>
+                <div className={imageGridExpanded ? "grid grid-cols-3 sm:grid-cols-4 gap-2" : "flex gap-2 overflow-x-auto pb-1"}>
+                  {renderedImages.map((ri) => (
+                    <div
+                      key={ri.refId}
+                      className={`relative rounded-lg overflow-hidden border border-blue-500/40 bg-white/5 ${
+                        imageGridExpanded ? "aspect-[2/3]" : "aspect-square w-20 shrink-0"
+                      }`}
+                    >
+                      <img src={ri.url} alt={ri.refName} className="w-full h-full object-cover" />
+                      <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
+                        <p className="text-[10px] text-white/70 truncate">{ri.refName}</p>
+                      </div>
+                      <div className="absolute top-1 right-1 h-4 w-4 rounded-full bg-green-500 flex items-center justify-center">
+                        <Check className="h-2.5 w-2.5 text-white" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[11px] text-white/40">Chọn nhóm ảnh ở trên để render lại, hoặc đăng lại ngay với ảnh đã lưu.</p>
+              </div>
             )}
           </Section>
 
@@ -1086,18 +1167,8 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
           {/* 3. Product config */}
           <Section title="3. Cấu hình sản phẩm">
             <div className="space-y-4">
-              <div>
-                <Label className="text-white/70 text-xs mb-1 block">
-                  Mã sản phẩm (nXX-YY) <span className="text-red-400">*</span>
-                </Label>
-                <Input
-                  value={productCode}
-                  onChange={(e) => setProductCode(e.target.value)}
-                  placeholder="n01-05"
-                  className="bg-white/5 border-white/20 text-white placeholder:text-white/30 focus:ring-green-500/50"
-                />
-              </div>
-
+              {/* Product code is derived silently from the product name (nXX-YY).
+                  It's not editable here — to change it, rename the product. */}
               <div>
                 <Label className="text-white/70 text-xs mb-2 block">Phiên bản</Label>
                 <div className="flex gap-2 flex-wrap">
@@ -1200,20 +1271,38 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                 {customTextMode === "paid" && <p className="text-teal-400/70">+ Custom Text: +$20 trên tất cả biến thể</p>}
               </div>
 
-              {/* Auto-generated tags preview (read-only) */}
+              {/* Tags: auto-generated (read-only) + editable manual tags */}
               <div>
-                <Label className="text-white/70 text-xs mb-1 block">Tags (tự động tạo)</Label>
+                <Label className="text-white/70 text-xs mb-1 block">Tags (tự động + thêm)</Label>
                 <div className="rounded-md border border-white/10 bg-white/5 px-3 py-2 min-h-[40px] flex flex-wrap gap-1.5">
-                  {generatedTags.length ? (
-                    generatedTags.map((tag) => (
-                      <span key={tag} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-white/10 text-white/70 border border-white/15">
-                        {tag}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="text-xs text-white/30">Sẽ tạo từ mã, options và collections...</span>
-                  )}
+                  {generatedTags.length === 0 && manualTags.length === 0 && <span className="text-xs text-white/30">Sẽ tạo từ mã, options và collections...</span>}
+                  {generatedTags.map((tag) => (
+                    <span key={tag} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-white/10 text-white/70 border border-white/15">
+                      {tag}
+                    </span>
+                  ))}
+                  {/* Manual tags — removable chips */}
+                  {manualTags.map((tag) => (
+                    <span key={tag} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-blue-500/15 text-blue-200 border border-blue-400/30">
+                      {tag}
+                      <button type="button" onClick={() => removeManualTag(tag)} className="ml-0.5 rounded-full hover:text-white transition-colors">
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </span>
+                  ))}
                 </div>
+                <Input
+                  value={manualTagInput}
+                  onChange={(e) => setManualTagInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === ",") {
+                      e.preventDefault();
+                      addManualTag(manualTagInput);
+                    }
+                  }}
+                  placeholder="Thêm tag (Enter để thêm) — vd: test, sale..."
+                  className="bg-white/5 border-white/20 text-white placeholder:text-white/30 mt-2 h-8 text-sm"
+                />
               </div>
             </div>
           </Section>
@@ -1357,23 +1446,24 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                   value={description}
                   onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setDescription(e.target.value)}
                   placeholder="Mô tả chi tiết về thiết kế, chất liệu..."
-                  rows={descExpanded ? 18 : 5}
+                  rows={descExpanded ? 24 : 5}
                   className="w-full rounded-md border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-ring resize-y transition-all"
                 />
               </div>
 
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <Label className="text-white/70 text-xs block">Collections</Label>
+              <div className="rounded-lg border border-blue-400/30 bg-blue-500/5 p-3">
+                <div className="flex items-center justify-start mb-2 gap-2">
+                  <Label className="text-blue-200 text-sm font-semibold block">Collections</Label>
                   {/* + icon → dropdown of saved collections from the DB */}
                   <Popover open={collectionPickerOpen} onOpenChange={setCollectionPickerOpen}>
                     <PopoverTrigger asChild>
                       <button
                         type="button"
-                        className="flex h-6 w-6 items-center justify-center rounded-md border border-white/20 bg-white/5 text-white/60 hover:text-white hover:border-white/40 transition-colors"
+                        className="flex p-2 items-center justify-center rounded-md border border-white/20 bg-white/5 text-white/60 hover:text-white hover:border-white/40 transition-colors"
                         title="Chọn từ collections đã lưu"
                       >
-                        <Plus className="h-3.5 w-3.5" />
+                        <Plus className="h-3.5 w-3.5 mr-1" />
+                        Chọn danh mục
                       </button>
                     </PopoverTrigger>
                     <PopoverContent align="end" className="w-64 p-2 dark:bg-zinc-900 dark:border-white/10">
@@ -1528,11 +1618,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                 </div>
               )}
 
-              <Button
-                onClick={handleDeploy}
-                disabled={deployBusy || deleting}
-                className="w-full gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold py-6 text-base"
-              >
+              <Button onClick={handleDeploy} disabled={deployBusy || deleting} className="w-full gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold py-6 text-base">
                 {deployBusy ? (
                   <>
                     <Loader2 className="h-5 w-5 animate-spin" />

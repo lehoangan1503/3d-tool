@@ -191,6 +191,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
     { value: "all", label: "Tất Cả" },
     { value: "smooth", label: "Trơn" },
     { value: "leather", label: "Da" },
+    { value: "lizard", label: "Da kỳ đà" },
   ];
 
   const sortOptions: { value: "asc" | "desc"; label: string }[] = [

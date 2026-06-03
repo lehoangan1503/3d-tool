@@ -19,6 +19,7 @@ import {
 } from "./leather-material";
 import { createLeatherRoughnessMap } from "./leather-overlay";
 import type { ProductType, LeatherColor, LeatherTextureType } from "@/types/product";
+import { isLeatherLikeType } from "@/types/product";
 
 export interface SurfaceOptions {
   surfaceUrl?: string | null;
@@ -1213,7 +1214,7 @@ export class SceneManager {
     const { surfaceUrl, productType, leatherColor, leatherTexture, textureScale } = options;
 
     // Track product type and texture scale for material updates
-    this.isLeatherProduct = productType === "leather";
+    this.isLeatherProduct = isLeatherLikeType(productType);
     this.textureScale = textureScale || 1;
 
     // Clear old textures
@@ -1224,9 +1225,10 @@ export class SceneManager {
 
     let surfaceImage: HTMLImageElement;
 
-    if (productType === "leather") {
-      // v2 model: leather region is a separate cylinder mesh stacked above "outside"
-      // Load raw surface for body mesh — no color overlay needed
+    if (isLeatherLikeType(productType)) {
+      // Leather-like (leather/lizard) models: leather region is a separate
+      // cylinder mesh stacked above "outside". Load raw surface for body mesh —
+      // no color overlay needed.
       const [, , loadedImage] = await Promise.all([loadAllLogos(), loadLeatherNormal(leatherTexture || "crocodile"), this.loadImage(baseSurfaceUrl)]);
       surfaceImage = loadedImage;
     } else {
@@ -1254,7 +1256,7 @@ export class SceneManager {
 
     // Create material based on product type
     let textureMaps: LeatherTextureMaps | null = null;
-    if (productType === "leather") {
+    if (isLeatherLikeType(productType)) {
       textureMaps = createLeatherTextureMaps(TEXTURE_CANVAS_SIZE, TEXTURE_CANVAS_SIZE, this.bodyRoughness, this.textureScale);
       this.createdTextures.push(textureMaps.roughnessTexture, textureMaps.clearcoatTexture, textureMaps.normalTexture);
       // Store reference for dynamic updates

@@ -33,6 +33,7 @@ import {
   ClipboardPaste,
 } from "lucide-react";
 import type { ExtractorFrame, ExtractorReference, HdriLayer, CueFrame, CueSettings, ImageFrame, CueShadowConfig } from "@/types/extractor";
+import type { ProductType } from "@/types/product";
 import { createDefaultHdriLayer, isCueFrame, isImageFrame, STUDIO_WHITE_HDRI, DEFAULT_CUE_SHADOW } from "@/types/extractor";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
@@ -127,7 +128,11 @@ interface FrameControlsPanelProps {
   onScreenshotCapture?: (frameId: string, dataUrl: string) => void;
 
   /** Current product cue type — used to filter the surface product picker in shadow simulator */
-  productType?: "smooth" | "leather";
+  productType?: ProductType;
+
+  /** Current product's flat surface design URL — used for the dynamic-surface
+   *  image frame (button + live preview). */
+  productSurfaceUrl?: string | null;
 
   /** Canvas dimensions — used for proportional frame positioning */
   canvasWidth?: number;
@@ -204,6 +209,7 @@ export function FrameControlsPanel({
   extractorRef,
   onScreenshotCapture,
   productType,
+  productSurfaceUrl,
   canvasWidth = 2048,
   canvasHeight = 2048,
 }: FrameControlsPanelProps) {
@@ -998,7 +1004,13 @@ export function FrameControlsPanel({
         {isImageFrame(selectedFrame) && (
           <div className="space-y-3 pt-4 border-t">
             <Label className="text-sm font-medium">Điều khiển Ảnh</Label>
-            <ImageFrameControls frame={selectedFrame as ImageFrame} onFrameChange={onFrameChange} />
+            <ImageFrameControls
+              frame={selectedFrame as ImageFrame}
+              onFrameChange={onFrameChange}
+              productSurfaceUrl={productSurfaceUrl}
+              canvasWidth={canvasWidth}
+              canvasHeight={canvasHeight}
+            />
           </div>
         )}
 

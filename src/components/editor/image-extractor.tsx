@@ -18,6 +18,7 @@ import { createDefaultFrame, createDefaultImageFrame, DEFAULT_CUE_SHADOW, FRAME_
 import type { CueHdriConfig } from "@/types/video-studio";
 import { DEFAULT_CUE_HDRI } from "@/types/video-studio";
 import { resolveStorageUrl } from "@/lib/resolve-storage-url";
+import type { ProductType } from "@/types/product";
 import { useUndoable } from "@/hooks/use-undoable";
 import { forceWhiteWalls } from "@/lib/three/studio-helpers";
 import { invalidateReferenceListCache } from "@/hooks/use-reference-list";
@@ -150,6 +151,7 @@ export async function renderReferenceToBlob(
   model: ReturnType<SceneManager["getModelForClone"]>,
   reference: ExtractorReference,
   overrideSurfaceUrl?: string,
+  productSurfaceUrl?: string | null,
 ): Promise<Blob> {
   const canvasWidth  = reference.canvasWidth  ?? DEFAULT_CANVAS_WIDTH;
   const canvasHeight = reference.canvasHeight ?? DEFAULT_CANVAS_HEIGHT;
@@ -232,15 +234,25 @@ export async function renderReferenceToBlob(
           ctx.fillRect(-hw, -hh, frame.transform.width, frame.transform.height);
           ctx.globalAlpha = 1;
         }
-        if (frame.imageSettings.imageUrl) {
+        // Dynamic-surface frames draw the CURRENT product's flat surface design
+        // instead of a static uploaded image, so each product renders its own
+        // surface into this frame. Falls back to imageUrl when no surface.
+        const srcUrl = frame.imageSettings.dynamicSurface
+          ? productSurfaceUrl ?? null
+          : frame.imageSettings.imageUrl;
+        if (srcUrl) {
           const img = new Image();
           img.crossOrigin = "anonymous";
-          img.src = resolveStorageUrl(frame.imageSettings.imageUrl)!;
+          img.src = resolveStorageUrl(srcUrl)!;
           await new Promise((r) => { img.onload = r; img.onerror = r; });
           ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
           const blendMode = frame.imageSettings.blendMode === "normal" ? "source-over" : frame.imageSettings.blendMode;
           ctx.globalCompositeOperation = blendMode as GlobalCompositeOperation;
-          drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? "cover");
+          if (frame.imageSettings.dynamicSurface) {
+            drawSurfaceWithPan(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.surfacePan ?? { x: 0, y: 0, scale: 1 });
+          } else {
+            drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? "cover");
+          }
           ctx.globalAlpha = 1;
           ctx.globalCompositeOperation = "source-over";
         }
@@ -276,6 +288,47 @@ export function createCanvasGradient(ctx: CanvasRenderingContext2D, g: ImageGrad
 /**
  * The destination rect is centred on (0, 0) — caller must translate first.
  */
+/**
+ * Draws a dynamic-surface image into a fixed frame with pan/zoom.
+ *
+ * Matches the live `<img>` preview in StaticFrame exactly so what the user sees
+ * IS what exports. DEFAULT (scale=1, x=0, y=0):
+ *   - image WIDTH == frame width (fit by width, keep aspect — no distortion),
+ *   - image BOTTOM aligned to the frame BOTTOM.
+ * Then `scale` (≥0.1) zooms on top of that base, and `x`/`y` pan the image as a
+ * FRACTION of the frame size (resolution-independent → identical on the ~600px
+ * screen preview and the 2048px export). The context must be translated to the
+ * frame center before calling.
+ */
+export function drawSurfaceWithPan(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  destW: number,
+  destH: number,
+  pan: { x: number; y: number; scale: number },
+): void {
+  const iw = img.naturalWidth;
+  const ih = img.naturalHeight;
+  if (!iw || !ih) return;
+  // Base = fit by WIDTH (image width == frame width), then multiply by zoom.
+  const baseScale = destW / iw;
+  const scale = baseScale * Math.max(0.1, pan.scale);
+  const drawW = iw * scale;
+  const drawH = ih * scale;
+  // Pan is a fraction of the frame size.
+  const offsetX = pan.x * destW;
+  const offsetY = pan.y * destH;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(-destW / 2, -destH / 2, destW, destH); // clip to the fixed frame
+  ctx.clip();
+  // Horizontal: centered (+pan). Vertical: BOTTOM-anchored (+pan).
+  const x = -drawW / 2 + offsetX;
+  const y = destH / 2 - drawH + offsetY;
+  ctx.drawImage(img, x, y, drawW, drawH);
+  ctx.restore();
+}
+
 export function drawImageWithObjectFit(ctx: CanvasRenderingContext2D, img: HTMLImageElement, destW: number, destH: number, fit: string = "cover"): void {
   const iw = img.naturalWidth;
   const ih = img.naturalHeight;
@@ -303,12 +356,14 @@ export function drawImageWithObjectFit(ctx: CanvasRenderingContext2D, img: HTMLI
 interface ImageExtractorProps {
   sceneManager: SceneManager | null;
   productName: string;
-  productType: "smooth" | "leather";
+  productType: ProductType;
+  /** Current product's flat surface design URL — used by dynamic-surface frames. */
+  productSurfaceUrl?: string | null;
   onClose: () => void;
   open: boolean;
 }
 
-export function ImageExtractor({ sceneManager, productName, productType, onClose, open }: ImageExtractorProps) {
+export function ImageExtractor({ sceneManager, productName, productType, productSurfaceUrl, onClose, open }: ImageExtractorProps) {
   // Frames state with full undo/redo support
   const {
     value: frames,
@@ -1000,11 +1055,15 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
             ctx.globalAlpha = 1;
           }
 
-          // Draw image layer
-          if (frame.imageSettings.imageUrl) {
+          // Draw image layer. Dynamic-surface frames render the CURRENT product's
+          // flat surface (productSurfaceUrl) with pan/zoom; static frames use imageUrl.
+          const srcUrl = frame.imageSettings.dynamicSurface
+            ? productSurfaceUrl ?? null
+            : frame.imageSettings.imageUrl;
+          if (srcUrl) {
             const img = new Image();
             img.crossOrigin = "anonymous";
-            img.src = resolveStorageUrl(frame.imageSettings.imageUrl)!;
+            img.src = resolveStorageUrl(srcUrl)!;
             await new Promise((r) => {
               img.onload = r;
               img.onerror = r;
@@ -1012,7 +1071,11 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
             ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
             const blendMode = frame.imageSettings.blendMode === "normal" ? "source-over" : frame.imageSettings.blendMode;
             ctx.globalCompositeOperation = blendMode as GlobalCompositeOperation;
-            drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? "cover");
+            if (frame.imageSettings.dynamicSurface) {
+              drawSurfaceWithPan(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.surfacePan ?? { x: 0, y: 0, scale: 1 });
+            } else {
+              drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? "cover");
+            }
             ctx.globalAlpha = 1;
             ctx.globalCompositeOperation = "source-over";
           }
@@ -1157,11 +1220,15 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
               ctx.globalAlpha = 1;
             }
 
-            // Draw image layer
-            if (frame.imageSettings.imageUrl) {
+            // Draw image layer. Dynamic-surface frames render the CURRENT product's
+            // flat surface (productSurfaceUrl) with pan/zoom; static frames use imageUrl.
+            const srcUrl = frame.imageSettings.dynamicSurface
+              ? productSurfaceUrl ?? null
+              : frame.imageSettings.imageUrl;
+            if (srcUrl) {
               const img = new Image();
               img.crossOrigin = "anonymous";
-              img.src = resolveStorageUrl(frame.imageSettings.imageUrl)!;
+              img.src = resolveStorageUrl(srcUrl)!;
               await new Promise((r) => {
                 img.onload = r;
                 img.onerror = r;
@@ -1169,7 +1236,11 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
               ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
               const blendMode = frame.imageSettings.blendMode === "normal" ? "source-over" : frame.imageSettings.blendMode;
               ctx.globalCompositeOperation = blendMode as GlobalCompositeOperation;
-              drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? "cover");
+              if (frame.imageSettings.dynamicSurface) {
+                drawSurfaceWithPan(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.surfacePan ?? { x: 0, y: 0, scale: 1 });
+              } else {
+                drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? "cover");
+              }
               ctx.globalAlpha = 1;
               ctx.globalCompositeOperation = "source-over";
             }
@@ -1197,7 +1268,7 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
         }, "image/png");
       });
     },
-    [sceneManager]
+    [sceneManager, productSurfaceUrl]
   );
 
   /**
@@ -1491,6 +1562,7 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
                   previewMode={previewMode}
                   canvasWidth={canvasWidth}
                   canvasHeight={canvasHeight}
+                  productSurfaceUrl={productSurfaceUrl}
                 />
 
                 {/* Controls Panel */}
@@ -1522,6 +1594,7 @@ export function ImageExtractor({ sceneManager, productName, productType, onClose
                   extractorRef={extractorRef}
                   onScreenshotCapture={handleScreenshotCapture}
                   productType={productType}
+                  productSurfaceUrl={productSurfaceUrl}
                   canvasWidth={canvasWidth}
                   canvasHeight={canvasHeight}
                 />

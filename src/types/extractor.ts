@@ -363,6 +363,15 @@ export interface ImageGradient {
 /** Settings specific to image frames */
 export interface ImageSettings {
   imageUrl: string | null; // Blob/data URL while editing; storage URL after save
+  // When true, the frame ignores imageUrl and renders the CURRENT product's flat
+  // surface design (product.surface_url) at export time — so each product gets
+  // its own surface drawn into this frame. The frame is locked to the full canvas
+  // (2048×2048); the user pans/zooms the surface IMAGE inside it via surfacePan.
+  dynamicSurface?: boolean;
+  // Pan/zoom of the surface image inside a fixed dynamic-surface frame.
+  // x/y are normalized offsets (fraction of frame size, 0 = centered); scale is a
+  // multiplier on the base "cover" fit (1 = cover, >1 zoom in). Resolution-independent.
+  surfacePan?: { x: number; y: number; scale: number };
   backgroundType: "color" | "gradient"; // Which background mode is active
   backgroundColor: string; // Hex color (#ffffff)
   backgroundGradient?: ImageGradient; // Gradient preset + angle
@@ -388,6 +397,21 @@ export const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
   opacity: 1,
   blendMode: "normal",
 };
+
+/** Default pan/zoom for a dynamic-surface image inside its fixed frame. */
+export const DEFAULT_SURFACE_PAN = { x: 0, y: 0, scale: 1 };
+
+/**
+ * Transform for a dynamic-surface frame: locked to the full canvas (e.g.
+ * 2048×2048). The frame itself never resizes/moves — the user pans/zooms the
+ * surface image INSIDE it (see ImageSettings.surfacePan).
+ */
+export function surfaceFrameTransform(
+  canvasWidth: number = DEFAULT_CANVAS_WIDTH,
+  canvasHeight: number = DEFAULT_CANVAS_HEIGHT,
+): FrameTransform {
+  return { x: 0, y: 0, width: canvasWidth, height: canvasHeight, rotation: 0 };
+}
 
 /** Default gradient used when switching to gradient mode */
 export const DEFAULT_GRADIENT: ImageGradient = {

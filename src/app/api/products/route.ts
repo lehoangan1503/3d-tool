@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionRole } from "@/lib/auth/roles";
 import type { CreateProductInput, ShopifyDeploymentSummary } from "@/types/product";
-import { DEFAULT_SMOOTH_CONFIG, DEFAULT_LEATHER_CONFIG, configToSettingsJson } from "@/types/product";
+import { DEFAULT_CONFIG_BY_TYPE, configToSettingsJson, isLeatherLikeType } from "@/types/product";
+import type { ProductType } from "@/types/product";
+
+const VALID_PRODUCT_TYPES: ProductType[] = ["smooth", "leather", "lizard"];
 
 // GET /api/products - List ALL products (global) with pagination + search + type filter
 export async function GET(request: Request) {
@@ -29,7 +32,7 @@ export async function GET(request: Request) {
 
     if (owner === "me") query = query.eq("user_id", user.id);
     if (search) query = query.ilike("name", `%${search}%`);
-    if (type && ["smooth", "leather"].includes(type)) query = query.eq("type", type);
+    if (type && VALID_PRODUCT_TYPES.includes(type as ProductType)) query = query.eq("type", type);
     if (sort === "asc") query = query.order("name", { ascending: true });
     else if (sort === "desc") query = query.order("name", { ascending: false });
     else query = query.order("created_at", { ascending: false });
@@ -142,15 +145,15 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!["smooth", "leather"].includes(body.type)) {
+    if (!VALID_PRODUCT_TYPES.includes(body.type)) {
       return NextResponse.json(
-        { error: "Type must be 'smooth' or 'leather'" },
+        { error: "Type must be 'smooth', 'leather' or 'lizard'" },
         { status: 400 }
       );
     }
 
     // Create threejs_settings record with type-specific default config
-    const defaultConfig = body.type === "leather" ? DEFAULT_LEATHER_CONFIG : DEFAULT_SMOOTH_CONFIG;
+    const defaultConfig = DEFAULT_CONFIG_BY_TYPE[body.type] ?? DEFAULT_CONFIG_BY_TYPE.smooth;
     const settingsJson = configToSettingsJson(defaultConfig);
     const { data: settingsData, error: settingsError } = await supabase
       .from("threejs_settings")
@@ -174,8 +177,8 @@ export async function POST(request: Request) {
         name: body.name,
         type: body.type,
         surface_url: body.surface_url || null,
-        texture_type: body.type === "leather" ? (body.texture_type || "crocodile") : null,
-        color: body.type === "leather" ? (body.color || "black") : null,
+        texture_type: isLeatherLikeType(body.type) ? (body.texture_type || "crocodile") : null,
+        color: isLeatherLikeType(body.type) ? (body.color || "black") : null,
         threejs_settings_id: settingsData.id,
       })
       .select()

@@ -10,6 +10,63 @@ import { DEFAULT_CUE_HDRI } from "@/types/video-studio";
 import { StaticFrame } from "./static-frame";
 import { cn } from "@/lib/utils";
 import { RotateCw } from "lucide-react";
+import { resolveStorageUrl } from "@/lib/resolve-storage-url";
+
+/**
+ * Capture a deselected dynamic-surface frame to a small data-URL snapshot so the
+ * heavy live <img> can be unmounted (memory freed) while the frame is inactive.
+ * Draws at a bounded DISPLAY size (not the 2048px logical frame) using the SAME
+ * math as drawSurfaceWithPan (fit by width, bottom-anchored, then pan/zoom),
+ * kept in sync manually to avoid an import cycle with image-extractor.
+ */
+const SURFACE_SNAPSHOT_MAX = 512; // px on the long edge of the snapshot
+function captureSurfaceFrameSnapshot(
+  frame: ExtractorFrame,
+  surfaceUrl: string,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const fw = Math.max(1, Math.round(frame.transform.width));
+      const fh = Math.max(1, Math.round(frame.transform.height));
+      const factor = Math.min(1, SURFACE_SNAPSHOT_MAX / Math.max(fw, fh));
+      const cw = Math.max(1, Math.round(fw * factor));
+      const ch = Math.max(1, Math.round(fh * factor));
+      const canvas = document.createElement("canvas");
+      canvas.width = cw;
+      canvas.height = ch;
+      const ctx = canvas.getContext("2d");
+      if (!ctx || !isImageFrame(frame)) { resolve(null); return; }
+      const settings = frame.imageSettings;
+      // Background fill (matches the static preview / export).
+      if (settings.backgroundEnabled ?? true) {
+        ctx.globalAlpha = settings.backgroundOpacity ?? 1;
+        ctx.fillStyle = settings.backgroundColor || "#000";
+        ctx.fillRect(0, 0, cw, ch);
+        ctx.globalAlpha = 1;
+      }
+      const iw = img.naturalWidth, ih = img.naturalHeight;
+      if (iw && ih) {
+        const pan = settings.surfacePan ?? { x: 0, y: 0, scale: 1 };
+        const baseScale = cw / iw;                       // fit by width
+        const s = baseScale * Math.max(0.1, pan.scale);
+        const drawW = iw * s, drawH = ih * s;
+        const x = cw / 2 - drawW / 2 + pan.x * cw;        // center + pan
+        const y = ch - drawH + pan.y * ch;               // bottom-anchored + pan
+        ctx.globalAlpha = settings.imageOpacity ?? 1;
+        ctx.drawImage(img, x, y, drawW, drawH);
+        ctx.globalAlpha = 1;
+      }
+      // Release the decode immediately; we only keep the small data URL.
+      img.onload = null;
+      img.src = "";
+      try { resolve(canvas.toDataURL("image/png")); } catch { resolve(null); }
+    };
+    img.onerror = () => { img.onerror = null; img.src = ""; resolve(null); };
+    img.src = surfaceUrl;
+  });
+}
 
 /** Convert HdriLayer[] to CueHdriConfig for setCueHdri() */
 function hdriLayersToCueHdri(layers: HdriLayer[]): CueHdriConfig {
@@ -44,6 +101,8 @@ interface FrameCanvasProps {
   canvasWidth?: number;
   /** Canvas height in pixels (default 2048) */
   canvasHeight?: number;
+  /** Current product surface URL — previewed in dynamic-surface image frames. */
+  productSurfaceUrl?: string | null;
 }
 
 /** Exported so consumers can fall back to the default when no prop is given */
@@ -65,6 +124,7 @@ export function FrameCanvas({
   previewMode = false,
   canvasWidth = CANVAS_SIZE,
   canvasHeight = CANVAS_SIZE,
+  productSurfaceUrl,
 }: FrameCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const activeCanvasContainerRef = useRef<HTMLDivElement>(null);
@@ -96,7 +156,7 @@ export function FrameCanvas({
   }, []);
 
   const [isDragging, setIsDragging] = useState(false);
-  const [dragType, setDragType] = useState<'move' | 'resize' | 'rotate' | 'cue-3d' | 'cue-pan' | null>(null);
+  const [dragType, setDragType] = useState<'move' | 'resize' | 'rotate' | 'cue-3d' | 'cue-pan' | 'surface-pan' | null>(null);
   const [activeHandle, setActiveHandle] = useState<string | null>(null);
   const [axisConstraint, setAxisConstraint] = useState<'x' | 'y' | null>(null);
   const dragStartRef = useRef({
@@ -104,6 +164,7 @@ export function FrameCanvas({
     frameX: 0, frameY: 0, frameW: 0, frameH: 0, frameR: 0,
     centerX: 0, centerY: 0, startAngle: 0,
     cueSpinY: 0, cuePhi: 0, cueOffsetX: 0, cueOffsetY: 0,
+    surfacePanX: 0, surfacePanY: 0,
     frameId: '',
   });
   
@@ -246,10 +307,46 @@ export function FrameCanvas({
           const screenshot = extractorRef.current.captureFrame('png');
           onScreenshotCapture(prevId, screenshot);
         }
+      } else if (
+        prevFrame && isImageFrame(prevFrame) && prevFrame.imageSettings.dynamicSurface && productSurfaceUrl
+      ) {
+        // Deselected a dynamic-surface frame: snapshot its current position/config
+        // to a small data URL so StaticFrame can drop the heavy live <img> and
+        // show the lightweight capture instead (frees memory, stops the lag).
+        const resolved = resolveStorageUrl(productSurfaceUrl);
+        if (resolved) {
+          captureSurfaceFrameSnapshot(prevFrame, resolved).then((dataUrl) => {
+            if (dataUrl) onScreenshotCapture(prevId, dataUrl);
+          });
+        }
       }
     }
     previousSelectedIdRef.current = selectedFrameId;
-  }, [selectedFrameId, extractorRef, onScreenshotCapture, frames]);
+  }, [selectedFrameId, extractorRef, onScreenshotCapture, frames, productSurfaceUrl]);
+
+  // Pre-capture snapshots for dynamic-surface frames that have none yet and aren't
+  // currently selected — e.g. after loading a template. Without this they'd each
+  // mount the heavy live <img> until selected once. Guarded by a ref-set so each
+  // frame is captured at most once per (frame, surface) signature.
+  const surfaceSnapshotDoneRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!productSurfaceUrl) return;
+    const resolved = resolveStorageUrl(productSurfaceUrl);
+    if (!resolved) return;
+    for (const frame of frames) {
+      if (!isImageFrame(frame) || !frame.imageSettings.dynamicSurface) continue;
+      if (frame.id === selectedFrameId) continue;              // selected → live preview
+      if (frameScreenshots[frame.id]) continue;                // already has a snapshot
+      // Signature changes when the frame's transform/pan/surface changes, so an
+      // edited frame re-captures after its snapshot is cleared.
+      const sig = `${frame.id}|${resolved}|${frame.transform.width}x${frame.transform.height}|${JSON.stringify(frame.imageSettings.surfacePan ?? null)}`;
+      if (surfaceSnapshotDoneRef.current.has(sig)) continue;
+      surfaceSnapshotDoneRef.current.add(sig);
+      captureSurfaceFrameSnapshot(frame, resolved).then((dataUrl) => {
+        if (dataUrl) onScreenshotCapture(frame.id, dataUrl);
+      });
+    }
+  }, [frames, selectedFrameId, frameScreenshots, productSurfaceUrl, onScreenshotCapture]);
 
   // Attach/detach canvas to selected frame container
   useEffect(() => {
@@ -396,18 +493,30 @@ export function FrameCanvas({
 
   // Transform drag handlers (works for both CUE and IMAGE frames)
   const handleTransformStart = useCallback((
-    e: React.MouseEvent, 
-    type: 'move' | 'resize' | 'rotate', 
+    e: React.MouseEvent,
+    type: 'move' | 'resize' | 'rotate' | 'surface-pan',
     handle?: string,
     frame?: ExtractorFrame
   ) => {
     if (!frame) return;
-    
+
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(true);
     setDragType(type);
     setActiveHandle(handle || null);
+
+    // Surface-pan: capture the image's current pan so the drag is relative.
+    if (type === 'surface-pan' && isImageFrame(frame)) {
+      const pan = frame.imageSettings.surfacePan ?? { x: 0, y: 0, scale: 1 };
+      dragStartRef.current = {
+        ...dragStartRef.current,
+        x: e.clientX, y: e.clientY,
+        surfacePanX: pan.x, surfacePanY: pan.y,
+        frameId: frame.id,
+      };
+      return;
+    }
 
     let centerX = 0, centerY = 0;
     if (containerRef.current) {
@@ -437,6 +546,8 @@ export function FrameCanvas({
       cuePhi: cue?.phi ?? 0,
       cueOffsetX: cue?.offsetX ?? 0,
       cueOffsetY: cue?.offsetY ?? 0,
+      surfacePanX: 0,
+      surfacePanY: 0,
       frameId: frame.id,
     };
   }, []);
@@ -476,6 +587,7 @@ export function FrameCanvas({
 
     // cue-3d and cue-pan only apply to CUE frames
     if ((dragType === 'cue-3d' || dragType === 'cue-pan') && !isCueFrame(frame)) return;
+    if (dragType === 'surface-pan' && !isImageFrame(frame)) return;
 
     if (dragType === 'move') {
       // Apply axis constraint along frame's LOCAL axes (respects rotation)
@@ -573,6 +685,21 @@ export function FrameCanvas({
           offsetY: dragStartRef.current.cueOffsetY - dy * sensitivity,
         },
       });
+    } else if (dragType === 'surface-pan' && isImageFrame(frame)) {
+      // Drag the surface image inside the fixed frame. dx/dy are canvas px;
+      // pan.x/y are fractions of the frame size (matches drawSurfaceWithPan).
+      const pan = frame.imageSettings.surfacePan ?? { x: 0, y: 0, scale: 1 };
+      onFrameChange({
+        ...frame,
+        imageSettings: {
+          ...frame.imageSettings,
+          surfacePan: {
+            ...pan,
+            x: dragStartRef.current.surfacePanX + dx / (frame.transform.width || 1),
+            y: dragStartRef.current.surfacePanY + dy / (frame.transform.height || 1),
+          },
+        },
+      });
     }
   }, [isDragging, dragType, activeHandle, frames, onFrameChange, interactionScale, axisConstraint]);
 
@@ -594,6 +721,7 @@ export function FrameCanvas({
     const now = Date.now();
     if (now - lastWheelRef.current < 150) return; // throttle — prevents trackpad momentum inertia
     lastWheelRef.current = now;
+    // selectedFrame here is a CUE frame (image frames are handled in StaticFrame).
     const zoomDelta = e.deltaY > 0 ? -0.1 : 0.1;
     onFrameChange({
       ...selectedFrame,
@@ -690,6 +818,14 @@ export function FrameCanvas({
               scale={renderScale}
               onTransformStart={(e, type, handle) => handleTransformStart(e, type, handle, frame)}
               previewMode={previewMode}
+              productSurfaceUrl={productSurfaceUrl}
+              onSurfaceWheel={(deltaY) => {
+                if (!isImageFrame(frame)) return;
+                const pan = frame.imageSettings.surfacePan ?? { x: 0, y: 0, scale: 1 };
+                const next = Math.max(0.1, Math.min(10, pan.scale + (deltaY > 0 ? -0.1 : 0.1)));
+                onFrameChange({ ...frame, imageSettings: { ...frame.imageSettings, surfacePan: { ...pan, scale: next } } });
+                onDragEnd?.();
+              }}
             />
           ))}
 

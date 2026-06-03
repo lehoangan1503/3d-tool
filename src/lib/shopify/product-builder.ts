@@ -62,10 +62,140 @@ function slugify(text: string): string {
     .replace(/-+/g, "-");
 }
 
-function buildTitleTag(title: string): string {
-  const words = title.toLowerCase().split(/\s+/).filter(Boolean);
-  const stopWords = new Set(["a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "with", "by", "of", "from"]);
-  return words.filter((w) => !stopWords.has(w)).join("-");
+/** Strip a file extension from an image name → its stem (e.g. "Mockup-Web-1.png" → "Mockup-Web-1"). */
+function imageStem(name: string): string {
+  return name.replace(/\.[^.]+$/, "");
+}
+
+// ── Image classification (port of classify_attachments) ─────────────────────────
+
+/** A rendered image: a public URL plus its reference name (e.g. "Mockup-Web-1"). */
+export interface NamedImage {
+  url: string;
+  name: string;
+}
+
+/** A metafield image: which uploaded image (by gallery position) feeds which metafield key. */
+export interface ImageMetafieldRef {
+  position: number;
+  metafieldKey: string;
+}
+
+export interface ClassifiedImages {
+  /** Ordered gallery images (product images). */
+  galleryImages: NamedImage[];
+  /** Images uploaded to the gallery only so they get a Media GID, then moved to
+   *  a metafield and deleted from the gallery. */
+  metafieldImages: NamedImage[];
+}
+
+/**
+ * Classify named images into product (gallery) images vs metafield images,
+ * preserving a fixed gallery order regardless of input order.
+ *
+ * - Details-N[-Version]   → metafield custom.details_N[_version]
+ * - Mockup-Web-N          → gallery image (base, always)
+ * - Mockup-Web-N-Version  → gallery image selected by available versions
+ *                           (N=2,5 pick one by Pro>Premium>Standard)
+ * - Package-1-Standard    → metafield custom.package_product_standard
+ * - Package-1-Pro         → metafield custom.package_product_pro
+ * - Package-2             → metafield custom.package_box
+ * - anything else         → skipped
+ */
+export function classifyImages(images: NamedImage[], versions: string[]): ClassifiedImages {
+  const hasStandardOrPremium = versions.includes("Standard") || versions.includes("Premium");
+  const hasPremium = versions.includes("Premium");
+  const hasPro = versions.includes("Pro");
+
+  const galleryImages: NamedImage[] = [];
+  const metafieldImages: NamedImage[] = [];
+
+  // Collect Mockup-Web candidates first, then emit in a fixed gallery order.
+  const mockupCandidates = new Map<string, { base?: NamedImage; Standard?: NamedImage; Pro?: NamedImage }>();
+  const package1: { Standard?: NamedImage; Pro?: NamedImage } = {};
+  let package2: NamedImage | null = null;
+
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+
+  for (const img of images) {
+    const stem = imageStem(img.name);
+
+    // Details-N or Details-N-Version
+    let m = stem.match(/^Details-(\d+)(?:-(.+))?$/i);
+    if (m) {
+      const num = m[1];
+      const verSuffix = m[2];
+      if (verSuffix) {
+        const ver = cap(verSuffix.trim());
+        if (ver === "Standard" && versions.includes("Standard")) metafieldImages.push({ ...img, name: `details_${num}_standard` });
+        else if (ver === "Premium" && versions.includes("Premium")) metafieldImages.push({ ...img, name: `details_${num}_premium` });
+        else if (ver === "Pro" && versions.includes("Pro")) metafieldImages.push({ ...img, name: `details_${num}_pro` });
+        // version not in card versions → skip
+      } else {
+        metafieldImages.push({ ...img, name: `details_${num}` });
+      }
+      continue;
+    }
+
+    // Mockup-Web-N or Mockup-Web-N-Version
+    m = stem.match(/^Mockup-Web-(\d+)(?:-(.+))?$/i);
+    if (m) {
+      const num = m[1];
+      const verSuffix = m[2];
+      const entry = mockupCandidates.get(num) ?? {};
+      if (!verSuffix) {
+        if (!entry.base) entry.base = img;
+      } else {
+        const ver = cap(verSuffix.trim());
+        if ((ver === "Standard" || ver === "Pro") && !entry[ver]) entry[ver] = img;
+      }
+      mockupCandidates.set(num, entry);
+      continue;
+    }
+
+    // Package-N or Package-N-Version
+    m = stem.match(/^Package-(\d+)(?:-(.+))?$/i);
+    if (m) {
+      const num = m[1];
+      const verSuffix = m[2];
+      if (num === "1" && verSuffix) {
+        const ver = cap(verSuffix.trim());
+        if ((ver === "Standard" || ver === "Pro") && !package1[ver]) package1[ver] = img;
+      } else if (num === "2" && !verSuffix && package2 === null) {
+        package2 = img;
+      }
+      continue;
+    }
+    // Unclassified → skip
+  }
+
+  // Finalize Mockup-Web gallery images in fixed numeric order.
+  const sortedNums = [...mockupCandidates.keys()].sort((a, b) => Number(a) - Number(b));
+  for (const num of sortedNums) {
+    const c = mockupCandidates.get(num)!;
+    if (c.base) galleryImages.push(c.base);
+
+    if (num === "2" || num === "5") {
+      // Pick a single versioned image by priority Pro > Premium(Standard) > Standard.
+      let selected: NamedImage | undefined;
+      if (hasPro && c.Pro) selected = c.Pro;
+      else if (hasPremium && c.Standard) selected = c.Standard;
+      else if (versions.includes("Standard") && c.Standard) selected = c.Standard;
+      else if (c.Pro) selected = c.Pro;
+      else if (c.Standard) selected = c.Standard;
+      if (selected) galleryImages.push(selected);
+      continue;
+    }
+
+    if (hasStandardOrPremium && c.Standard) galleryImages.push(c.Standard);
+    if (hasPro && c.Pro) galleryImages.push(c.Pro);
+  }
+
+  if (package1.Standard) metafieldImages.push({ ...package1.Standard, name: "package_product_standard" });
+  if (package1.Pro) metafieldImages.push({ ...package1.Pro, name: "package_product_pro" });
+  if (package2) metafieldImages.push({ ...package2, name: "package_box" });
+
+  return { galleryImages, metafieldImages };
 }
 
 // ── Variant generation ────────────────────────────────────────────────────────
@@ -169,8 +299,10 @@ export interface ProductInput {
   collections: string | string[];
   /** Array of tag strings */
   manualTags: string[];
-  /** Image URLs for gallery */
+  /** Image URLs (parallel to imageNames). */
   imageUrls: string[];
+  /** Image reference names (parallel to imageUrls) used for classification. */
+  imageNames?: string[];
   versions: Array<"Standard" | "Premium" | "Pro">;
   wrapType: "wrap" | "wrapless";
   laserShaft: boolean;
@@ -197,6 +329,16 @@ export interface ShopifyProductPayload {
     images: Array<{ src: string; alt: string; position: number }>;
     metafields?: Array<{ namespace: string; key: string; type: string; value: string }>;
   };
+  /** Post-create instructions resolved by the API route (not sent to Shopify). */
+  _metadata: {
+    collections: string[];
+    /** Gallery position → custom metafield key (Details/Package images). */
+    imageMetafields: ImageMetafieldRef[];
+    /** Gallery position of the "Mockup-Web-1" image (laser shaft = No / default). */
+    laserShaftDefaultImagePosition: number | null;
+    /** Gallery position of the "Mockup-Web-5" image (laser shaft = Yes). */
+    laserShaftImagePosition: number | null;
+  };
 }
 
 export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload {
@@ -208,6 +350,7 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
     collections,
     manualTags,
     imageUrls,
+    imageNames = [],
     versions,
     wrapType,
     laserShaft,
@@ -221,10 +364,9 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
   const codeSlug = slugify(productCode);
   const handle = titleSlug.includes(codeSlug) ? titleSlug : `${titleSlug}-${codeSlug}`;
 
-  // Build tags
-  const tags = new Set<string>([wrapType, employeeCode]);
-  const titleTag = buildTitleTag(title);
-  if (titleTag) tags.add(titleTag);
+  // Build tags. No title/handle-derived tag (it produced a stray duplicate tag).
+  // Tag the full product code (nXX-YY) only — the employee code is implied by it.
+  const tags = new Set<string>([wrapType, productCode.toLowerCase()]);
   if (laserShaft) tags.add("laser shaft");
 
   // Custom_image label adds specific tags
@@ -275,12 +417,50 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
     baseSku: productCode,
   });
 
-  // Build images
-  const images = imageUrls.map((url, idx) => ({
-    src: url,
-    alt: title,
-    position: idx + 1,
+  // Classify images by name → gallery (product) images vs metafield images.
+  // Both are uploaded as gallery images (so Shopify mints a Media GID for each);
+  // the API route later moves the metafield images off the gallery.
+  const named: NamedImage[] = imageUrls.map((url, idx) => ({
+    url,
+    name: imageNames[idx] ?? `image-${idx + 1}`,
   }));
+  const classified = classifyImages(named, sortedVersions);
+  // Fallback: if no image followed the Mockup-Web/Details/Package naming
+  // convention, classification would drop everything. Keep the legacy behaviour
+  // (every rendered image becomes a gallery image, in order) so products are
+  // never created with an empty gallery.
+  const { galleryImages, metafieldImages } =
+    classified.galleryImages.length === 0 && classified.metafieldImages.length === 0
+      ? { galleryImages: named, metafieldImages: [] as NamedImage[] }
+      : classified;
+
+  const images: Array<{ src: string; alt: string; position: number }> = [];
+  const imageMetafields: ImageMetafieldRef[] = [];
+  let laserShaftDefaultImagePosition: number | null = null;
+  let laserShaftImagePosition: number | null = null;
+  let pos = 1;
+
+  // Gallery images first, tracking the laser-shaft default (Mockup-Web-1) and
+  // toggled (Mockup-Web-5) positions for later variant-image mapping.
+  for (const img of galleryImages) {
+    const stem = imageStem(img.name);
+    images.push({ src: img.url, alt: title, position: pos });
+    if (laserShaftDefaultImagePosition === null && /^Mockup-Web-1$/i.test(stem)) {
+      laserShaftDefaultImagePosition = pos;
+    }
+    if (laserShaftImagePosition === null && /^Mockup-Web-5(?:-.+)?$/i.test(stem)) {
+      laserShaftImagePosition = pos;
+    }
+    pos++;
+  }
+
+  // Metafield images appended at the end; the route promotes them to metafields
+  // (custom.details_N / package_*) and deletes them from the gallery.
+  for (const img of metafieldImages) {
+    images.push({ src: img.url, alt: title, position: pos });
+    imageMetafields.push({ position: pos, metafieldKey: img.name });
+    pos++;
+  }
 
   // Build product-level metafields for Custom_text
   const metafields: Array<{ namespace: string; key: string; type: string; value: string }> = [];
@@ -313,6 +493,12 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
       options,
       variants,
       images,
+    },
+    _metadata: {
+      collections: collectionList,
+      imageMetafields,
+      laserShaftDefaultImagePosition,
+      laserShaftImagePosition,
     },
   };
 

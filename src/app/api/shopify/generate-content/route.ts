@@ -17,18 +17,16 @@ const YESCALE_TOKEN = process.env.YESCALE_API_TOKEN ?? "";
 const DEFAULT_MODEL = "gpt-5.4-mini";
 
 // Vision-confirmed working models with 1080x1080 PNG (tested 2026-06-01)
-const FALLBACK_MODELS = [
-  "gpt-5.4-mini", "gpt-4o", "gpt-5.4-nano", "gpt-5.2", "gpt-4.1-mini", "gpt-4.1",
-];
+const FALLBACK_MODELS = ["gpt-5.4-mini", "gpt-4o", "gpt-5.4-nano", "gpt-5.2", "gpt-4.1-mini", "gpt-4.1"];
 
 // Available models exposed to the UI
 export const AVAILABLE_MODELS = [
-  { id: "gpt-5.4-mini",  label: "GPT-5.4 Mini (Recommended)" },
-  { id: "gpt-4o",        label: "GPT-4o (Quality)" },
-  { id: "gpt-5.4-nano",  label: "GPT-5.4 Nano (Lite)" },
-  { id: "gpt-5.2",       label: "GPT-5.2" },
-  { id: "gpt-4.1-mini",  label: "GPT-4.1 Mini (Balanced)" },
-  { id: "gpt-4.1",       label: "GPT-4.1" },
+  { id: "gpt-5.4-mini", label: "GPT-5.4 Mini (Recommended)" },
+  { id: "gpt-4o", label: "GPT-4o (Quality)" },
+  { id: "gpt-5.4-nano", label: "GPT-5.4 Nano (Lite)" },
+  { id: "gpt-5.2", label: "GPT-5.2" },
+  { id: "gpt-4.1-mini", label: "GPT-4.1 Mini (Balanced)" },
+  { id: "gpt-4.1", label: "GPT-4.1" },
 ];
 
 const SYSTEM_PROMPT = `You are a professional product copywriter for a premium pool cue shop called "Uni Cues".
@@ -67,10 +65,7 @@ const OUTPUT_FORMAT_CONTRACT = `IMPORTANT — output format rules (override any 
 - Each marker label sits on its own line, exactly as written.
 
 ENGLISH_TITLE: <concise product title, max 80 chars, no code>
-ENGLISH_DESCRIPTION: <full rich description — multiple paragraphs / bullet sections, markdown ok>
-VIETNAMESE_TITLE: <Vietnamese translation of the title>
-VIETNAMESE_DESCRIPTION: <Vietnamese translation of the full description, same richness>
-TAGS: <5-10 comma-separated tags>`;
+ENGLISH_DESCRIPTION: <full rich description — multiple paragraphs / bullet sections, markdown ok>`;
 
 function buildPromptWithAiHint(baseHint: string, withImage: boolean): string {
   const hint = baseHint.trim();
@@ -85,25 +80,17 @@ function buildPromptWithAiHint(baseHint: string, withImage: boolean): string {
     `- Main theme to target: ${hint}`,
     "- Keep this theme as the central direction for the whole copy.",
     "- Reflect it clearly in ENGLISH_TITLE and the first paragraph of ENGLISH_DESCRIPTION.",
-    ...(withImage
-      ? ["- Use image details to support this theme, not replace it."]
-      : ["- Create compelling copy based on this theme."]),
+    ...(withImage ? ["- Use image details to support this theme, not replace it."] : ["- Create compelling copy based on this theme."]),
     "- Avoid unrelated topics or style drift.",
     "",
-    withImage
-      ? "Please describe and write product copy for this custom pool cue."
-      : "Please write product copy for a custom pool cue.",
+    withImage ? "Please describe and write product copy for this custom pool cue." : "Please write product copy for a custom pool cue.",
     "",
     "FINAL PRIORITY REMINDER:",
     "- When conflicts happen, prioritize PRIMARY THEME direction first.",
   ].join("\n");
 }
 
-async function callOneHost(
-  host: string,
-  model: string,
-  messages: unknown[]
-): Promise<{ ok: boolean; content: string; status: number; error: string }> {
+async function callOneHost(host: string, model: string, messages: unknown[]): Promise<{ ok: boolean; content: string; status: number; error: string }> {
   try {
     const response = await fetch(yescaleUrl(host), {
       method: "POST",
@@ -115,7 +102,7 @@ async function callOneHost(
       signal: AbortSignal.timeout(90_000),
     });
     if (response.ok) {
-      const data = await response.json() as { choices: Array<{ message: { content: string } }> };
+      const data = (await response.json()) as { choices: Array<{ message: { content: string } }> };
       const content = data.choices?.[0]?.message?.content ?? "";
       return { ok: true, content, status: response.status, error: "" };
     }
@@ -127,11 +114,7 @@ async function callOneHost(
   }
 }
 
-async function callYesScale(
-  model: string,
-  messages: unknown[],
-  attempt: number
-): Promise<{ ok: boolean; content: string; status: number; error: string }> {
+async function callYesScale(model: string, messages: unknown[], attempt: number): Promise<{ ok: boolean; content: string; status: number; error: string }> {
   if (attempt > 0) await new Promise((r) => setTimeout(r, 1000 * attempt));
 
   let last = { ok: false, content: "", status: 0, error: "no hosts configured" };
@@ -164,12 +147,15 @@ function sse(event: Record<string, unknown>): string {
 
 export async function POST(request: Request) {
   const supabase = await createClient();
-  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
   if (userError || !user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await request.json() as {
+  const body = (await request.json()) as {
     imageUrl: string;
     hint?: string;
     model?: string;
@@ -212,10 +198,13 @@ export async function POST(request: Request) {
 
   const visionMessages = [
     { role: "system", content: visionSystem },
-    { role: "user", content: [
-      { type: "text", text: visionUserText },
-      { type: "image_url", image_url: { url: imageUrl, detail: "low" } },
-    ]},
+    {
+      role: "user",
+      content: [
+        { type: "text", text: visionUserText },
+        { type: "image_url", image_url: { url: imageUrl, detail: "low" } },
+      ],
+    },
   ];
 
   const stream = new ReadableStream({
@@ -309,12 +298,17 @@ export async function POST(request: Request) {
       const viTitle = cleanTitle(extract(content, "VIETNAMESE_TITLE"));
       const viDesc = extract(content, "VIETNAMESE_DESCRIPTION");
       const tagsRaw = extract(content, "TAGS");
-      const tags = tagsRaw.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+      const tags = tagsRaw
+        .split(",")
+        .map((t) => t.trim().toLowerCase())
+        .filter(Boolean);
 
-      console.log("[generate-content] PARSED →",
+      console.log(
+        "[generate-content] PARSED →",
         `enTitle=${enTitle ? `"${enTitle}"` : "(empty)"}`,
         `| enDesc=${enDesc ? `${enDesc.length} chars` : "(empty)"}`,
-        `| tags=${tags.length}`);
+        `| tags=${tags.length}`
+      );
 
       push({ type: "result", title: enTitle, description: enDesc, viTitle, viDescription: viDesc, tags, raw: content });
       controller.close();
@@ -325,7 +319,7 @@ export async function POST(request: Request) {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
+      Connection: "keep-alive",
     },
   });
 }

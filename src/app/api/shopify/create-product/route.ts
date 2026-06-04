@@ -10,7 +10,7 @@ import {
   isShopifyConfigured,
 } from "@/lib/shopify/client";
 import { runPostCreateSteps } from "@/lib/shopify/post-create";
-import type { ShopifyFormData } from "@/types/product";
+import { buildFormData, type ShopifyDeployRequest } from "@/lib/shopify/form-data";
 
 const PRODUCT_CODE_PATTERN = /^(n\d{2})-(\d{2})$/i;
 
@@ -37,26 +37,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = await request.json() as {
-      productId: string;
-      productCode: string;
-      title: string;
-      description: string;
-      collections: string;
-      imageUrls: string[];
-      imageNames?: string[];
-      videoUrl?: string | null;
-      versions: Array<"Standard" | "Premium" | "Pro">;
-      wrapType: "wrap" | "wrapless";
-      laserShaft: boolean;
-      customImage?: boolean;
-      customText?: { label: string; example: string } | null;
-      customTextPaid?: { label: string; example: string } | null;
-      aiHint?: string;
-      aiModel?: string;
-      manualTags?: string[];
-      skillIds?: string[];
-    };
+    const body = await request.json() as ShopifyDeployRequest;
 
     const {
       productId,
@@ -146,30 +127,13 @@ export async function POST(request: Request) {
     });
 
     // Build the full form snapshot to persist for later edit / re-deploy.
+    // Shared with the save-draft route via buildFormData() to avoid drift.
     const collectionList = (collections ?? "")
       .split(",")
       .map((c) => c.trim())
       .filter(Boolean);
 
-    const formData: ShopifyFormData = {
-      productCode: productCode.trim(),
-      title: title.trim(),
-      description: description ?? "",
-      aiHint,
-      aiModel,
-      versions,
-      wrapType,
-      laserShaft: Boolean(laserShaft),
-      customImage: Boolean(customImage),
-      customText: customText ?? null,
-      customTextPaid: customTextPaid ?? null,
-      collections: collectionList,
-      imageUrls,
-      imageNames,
-      videoUrl: videoUrl ?? null,
-      manualTags: tags,
-      skillIds,
-    };
+    const formData = buildFormData({ ...body, manualTags: tags });
 
     // Genuine service-role client (bypasses RLS) so admins can record
     // deployments on products they don't own; ownership/role enforced above.

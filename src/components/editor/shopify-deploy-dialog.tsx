@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { X, Sparkles, ShoppingBag, Loader2, Check, RefreshCw, Plus, Trash2, ExternalLink, Image as ImageIcon, Video, AlertCircle, XCircle, AlertTriangle } from "lucide-react";
+import { X, Sparkles, ShoppingBag, Loader2, Check, RefreshCw, Plus, Trash2, ExternalLink, Image as ImageIcon, Video, AlertCircle, XCircle, AlertTriangle, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -316,6 +316,9 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
   const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
   const [deployError, setDeployError] = useState("");
   const [deleting, setDeleting] = useState(false);
+  // ── Save draft (persist form_data without touching Shopify) ──
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
 
   // ── Load available AI models ──
   useEffect(() => {
@@ -556,6 +559,12 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
       setGenWarn("Hãy render ảnh mockup trước để AI phân tích ảnh sản phẩm.");
       return;
     }
+    // A skill is the system prompt — require one before generating.
+    if (selectedSkillIds.length === 0) {
+      setGenWarnType("warn");
+      setGenWarn("Hãy chọn 1 Skill trước khi tạo nội dung AI.");
+      return;
+    }
     setGenWarn("");
     setGeneratingContent(true);
     try {
@@ -639,7 +648,78 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     } finally {
       setGeneratingContent(false);
     }
-  }, [renderedImages, aiModel, aiHint, composeSkillPrompt]);
+  }, [renderedImages, aiModel, aiHint, composeSkillPrompt, selectedSkillIds]);
+
+  // Upload rendered images/video to storage and return their hosted URLs.
+  // Reused by both Deploy and Save so the gallery restores either way.
+  // Toggles `uploadingAssets` for the shared progress label.
+  const uploadAssets = useCallback(async (): Promise<{ imageUrls: string[]; videoUrl?: string }> => {
+    setUploadingAssets(true);
+    try {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Bạn cần đăng nhập.");
+
+      const ts = Date.now();
+      const imageUrls: string[] = [];
+      for (let i = 0; i < renderedImages.length; i++) {
+        const ri = renderedImages[i];
+        // Restored images already have a hosted URL — reuse it; only freshly
+        // rendered images (with a blob) need uploading.
+        if (!ri.blob) {
+          imageUrls.push(ri.url);
+          continue;
+        }
+        const path = `shopify-mockups/${product.id}/${ts}-img-${i}.png`;
+        imageUrls.push(await uploadBlobToStorage(ri.blob, path, "image/png"));
+      }
+
+      // Upload video if freshly rendered; otherwise reuse the saved video URL.
+      let videoUrl: string | undefined;
+      if (renderedVideoBlob) {
+        const videoPath = `shopify-mockups/${product.id}/${ts}-video.webm`;
+        videoUrl = await uploadBlobToStorage(renderedVideoBlob, videoPath, "video/webm");
+      } else if (renderedVideoUrl) {
+        videoUrl = renderedVideoUrl;
+      }
+      return { imageUrls, videoUrl };
+    } finally {
+      setUploadingAssets(false);
+    }
+  }, [product.id, renderedImages, renderedVideoBlob, renderedVideoUrl]);
+
+  // Build the form payload shared by Deploy and Save. customText/customTextPaid
+  // depend on the selected mode; the rest is the current form state verbatim.
+  const buildPayload = useCallback((imageUrls: string[], videoUrl?: string) => {
+    const customTextOn = customTextMode !== "none";
+    const customTextConfig = customTextOn
+      ? { label: customTextLabel.trim(), example: customTextExample.trim() }
+      : null;
+    return {
+      productId: product.id,
+      productCode: productCode.trim(),
+      title: title.trim(),
+      description,
+      collections: collectionList.join(", "),
+      imageUrls,
+      imageNames: renderedImages.map((ri) => ri.refName),
+      videoUrl,
+      versions,
+      wrapType,
+      laserShaft,
+      customImage,
+      customText: customTextMode === "free" ? customTextConfig : null,
+      customTextPaid: customTextMode === "paid" ? customTextConfig : null,
+      aiHint: aiHint.trim(),
+      aiModel,
+      manualTags,
+      skillIds: selectedSkillIds,
+    };
+  }, [
+    product.id, productCode, title, description, collectionList, renderedImages,
+    versions, wrapType, laserShaft, customImage, customTextMode, customTextLabel,
+    customTextExample, aiHint, aiModel, manualTags, selectedSkillIds,
+  ]);
 
   // ── Deploy ──
   const handleDeploy = useCallback(async () => {
@@ -672,68 +752,15 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     setDeploying(true);
     setDeployError("");
     setDeployResult(null);
+    setSaveMsg("");
 
     try {
-      // Upload rendered images to Supabase storage
-      setUploadingAssets(true);
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) throw new Error("Bạn cần đăng nhập để tạo sản phẩm.");
-
-      const ts = Date.now();
-      const uploadedImageUrls: string[] = [];
-
-      for (let i = 0; i < renderedImages.length; i++) {
-        const ri = renderedImages[i];
-        // Restored images already have a hosted URL — reuse it; only freshly
-        // rendered images (with a blob) need uploading.
-        if (!ri.blob) {
-          uploadedImageUrls.push(ri.url);
-          continue;
-        }
-        const path = `shopify-mockups/${product.id}/${ts}-img-${i}.png`;
-        const url = await uploadBlobToStorage(ri.blob, path, "image/png");
-        uploadedImageUrls.push(url);
-      }
-
-      // Upload video if freshly rendered; otherwise reuse the saved video URL.
-      let videoUrl: string | undefined;
-      if (renderedVideoBlob) {
-        const videoPath = `shopify-mockups/${product.id}/${ts}-video.webm`;
-        videoUrl = await uploadBlobToStorage(renderedVideoBlob, videoPath, "video/webm");
-      } else if (renderedVideoUrl) {
-        videoUrl = renderedVideoUrl;
-      }
-
-      setUploadingAssets(false);
-
-      const customTextConfig = customTextOn ? { label: customTextLabel.trim(), example: customTextExample.trim() } : null;
+      const { imageUrls, videoUrl } = await uploadAssets();
 
       const res = await fetch("/api/shopify/create-product", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productId: product.id,
-          productCode: productCode.trim(),
-          title: title.trim(),
-          description,
-          collections: collectionList.join(", "),
-          imageUrls: uploadedImageUrls,
-          imageNames: renderedImages.map((ri) => ri.refName),
-          videoUrl,
-          versions,
-          wrapType,
-          laserShaft,
-          customImage,
-          customText: customTextMode === "free" ? customTextConfig : null,
-          customTextPaid: customTextMode === "paid" ? customTextConfig : null,
-          aiHint: aiHint.trim(),
-          aiModel,
-          manualTags,
-          skillIds: selectedSkillIds,
-        }),
+        body: JSON.stringify(buildPayload(imageUrls, videoUrl)),
       });
       const data = (await res.json()) as DeployResult & { error?: string };
       if (!res.ok) throw new Error(data.error ?? "Tạo sản phẩm thất bại");
@@ -753,32 +780,58 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     } catch (err) {
       setDeployError(err instanceof Error ? err.message : "Lỗi không xác định");
     } finally {
-      setUploadingAssets(false);
       setDeploying(false);
     }
   }, [
-    product.id,
     productCode,
     versions,
     wrapType,
-    laserShaft,
-    customImage,
+    title,
     customTextMode,
     customTextLabel,
     customTextExample,
-    title,
-    description,
-    collectionList,
-    aiHint,
-    aiModel,
-    manualTags,
-    selectedSkillIds,
     renderedImages,
-    renderedVideoBlob,
-    renderedVideoUrl,
+    uploadAssets,
+    buildPayload,
     deployment,
     onDeploymentChange,
   ]);
+
+  // ── Save draft (persist form_data without touching Shopify) ──
+  const handleSaveDraft = useCallback(async () => {
+    setSaving(true);
+    setSaveMsg("");
+    setDeployError("");
+    try {
+      // Save the full snapshot incl. uploaded assets so the gallery restores.
+      const { imageUrls, videoUrl } = await uploadAssets();
+
+      const res = await fetch("/api/shopify/save-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildPayload(imageUrls, videoUrl)),
+      });
+      const data = (await res.json()) as { success?: boolean; formData?: ShopifyDeploymentSummary["form_data"]; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Lưu nháp thất bại");
+      setSaveMsg("Đã lưu nháp.");
+      // Update the editor's deployment state so reopening (without a reload)
+      // rehydrates from the saved draft. Keep it not-connected (no Shopify id).
+      onDeploymentChange?.({
+        shopify_product_id: null,
+        admin_url: null,
+        storefront_url: null,
+        title: data.formData?.title ?? null,
+        created_by: deployment?.created_by ?? null,
+        creator_nickname: deployment?.creator_nickname ?? null,
+        created_at: deployment?.created_at ?? new Date().toISOString(),
+        form_data: data.formData ?? null,
+      });
+    } catch (err) {
+      setDeployError(err instanceof Error ? err.message : "Lỗi không xác định");
+    } finally {
+      setSaving(false);
+    }
+  }, [uploadAssets, buildPayload, deployment, onDeploymentChange]);
 
   // ── Manual tag helpers ──
   const addManualTag = useCallback((value: string) => {
@@ -863,7 +916,9 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     Pro: 299.5 + baseImageAdd + textPaidAdd,
   };
 
-  const deployBusy = uploadingAssets || deploying;
+  // `uploadingAssets` is shared by Deploy and Save; scope the deploy button's
+  // busy state to an actual deploy (not a concurrent draft save).
+  const deployBusy = (uploadingAssets || deploying) && !saving;
   // No in-place update: re-deploying a connected product recreates it fresh
   // on Shopify (the old one is deleted server-side).
   // Button label is the actionable/progress state only — the success
@@ -910,7 +965,21 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
             )}
           </div>
         )}
-        <Button variant="ghost" size="icon" onClick={onClose} className="text-white/50 hover:text-white">
+        {/* Save the current form as a draft (no Shopify deploy). Sits next to
+            the close icon so the user can save before closing. Hidden once the
+            product is live — Deploy already re-saves form_data. */}
+        {!connected && (
+          <Button
+            variant="outline"
+            onClick={handleSaveDraft}
+            disabled={saving || deployBusy || deleting}
+            className="ml-auto gap-2 border-white/20 text-white/90 hover:bg-white/5 hover:text-white"
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {saving ? "Đang lưu..." : saveMsg ? "Đã lưu nháp" : "Lưu nháp"}
+          </Button>
+        )}
+        <Button variant="ghost" size="icon" onClick={onClose} className={connected ? "text-white/50 hover:text-white" : "ml-2 text-white/50 hover:text-white"}>
           <X className="h-5 w-5" />
         </Button>
       </div>
@@ -1339,7 +1408,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
             {/* Skills — reusable prompt templates prepended to the hint */}
             <div className="mt-3 space-y-2">
               <div className="flex items-center justify-between">
-                <Label className="text-white/70 text-xs">Skill (chọn 1)</Label>
+                <Label className="text-white/70 text-xs">Skill (chọn 1) <span className="text-red-400">*</span></Label>
                 <button
                   type="button"
                   onClick={() => {
@@ -1385,7 +1454,15 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                   })}
                 </div>
               )}
-              {selectedSkillIds.length > 0 && <p className="text-[11px] text-teal-300/70">Skill được chọn — gửi như system prompt (AI tuân thủ chặt chẽ).</p>}
+              {selectedSkillIds.length > 0 ? (
+                <p className="text-[11px] text-teal-300/70">Skill được chọn — gửi như system prompt (AI tuân thủ chặt chẽ).</p>
+              ) : (
+                skills.length > 0 && (
+                  <p className="text-[11px] text-amber-400/90 flex items-center gap-1">
+                    <AlertTriangle className="h-3 w-3 shrink-0" /> Bắt buộc chọn 1 Skill trước khi tạo nội dung AI.
+                  </p>
+                )
+              )}
             </div>
           </Section>
 
@@ -1618,7 +1695,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                 </div>
               )}
 
-              <Button onClick={handleDeploy} disabled={deployBusy || deleting} className="w-full gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold py-6 text-base">
+              <Button onClick={handleDeploy} disabled={deployBusy || deleting || saving} className="w-full gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold py-6 text-base">
                 {deployBusy ? (
                   <>
                     <Loader2 className="h-5 w-5 animate-spin" />

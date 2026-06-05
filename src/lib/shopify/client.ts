@@ -258,7 +258,7 @@ export async function addProductVideo(
   videoUrl: string,
   alt: string,
   contentType = "video/webm"
-): Promise<void> {
+): Promise<string | null> {
   // 1. Fetch the video bytes (from our own storage URL).
   const videoRes = await fetch(videoUrl);
   if (!videoRes.ok) throw new Error(`fetch video failed: ${videoRes.status}`);
@@ -293,13 +293,39 @@ export async function addProductVideo(
 
   // 4. Attach the staged video to the product.
   const data = await shopifyGraphQL<{
-    productCreateMedia: { mediaUserErrors: Array<{ message: string }> };
+    productCreateMedia: { media: Array<{ id: string }>; mediaUserErrors: Array<{ message: string }> };
   }>(CREATE_MEDIA_MUTATION, {
     productId: `gid://shopify/Product/${productId}`,
     media: [{ originalSource: target.resourceUrl, alt, mediaContentType: "VIDEO" }],
   });
   const errors = data.productCreateMedia.mediaUserErrors;
   if (errors?.length) throw new Error(`productCreateMedia: ${errors.map((e) => e.message).join("; ")}`);
+  // The created media GID lets the caller reposition the video in the gallery.
+  return data.productCreateMedia.media?.[0]?.id ?? null;
+}
+
+const REORDER_MEDIA_MUTATION = `
+mutation productReorderMedia($id: ID!, $moves: [MoveInput!]!) {
+  productReorderMedia(id: $id, moves: $moves) {
+    job { id }
+    mediaUserErrors { field message }
+  }
+}`;
+
+/**
+ * Move a single media item to a target index (0-based) in the product gallery.
+ * Shopify's reorder is a list of {id, newPosition} moves applied as a job; we
+ * only move the one item, leaving the rest to shift around it.
+ */
+export async function moveProductMedia(productId: number, mediaId: string, newPosition: number): Promise<void> {
+  const data = await shopifyGraphQL<{
+    productReorderMedia: { mediaUserErrors: Array<{ message: string }> };
+  }>(REORDER_MEDIA_MUTATION, {
+    id: `gid://shopify/Product/${productId}`,
+    moves: [{ id: mediaId, newPosition: String(newPosition) }],
+  });
+  const errors = data.productReorderMedia.mediaUserErrors;
+  if (errors?.length) throw new Error(`productReorderMedia: ${errors.map((e) => e.message).join("; ")}`);
 }
 
 // ── Collections ────────────────────────────────────────────────────────────────

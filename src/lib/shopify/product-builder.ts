@@ -399,7 +399,7 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
     { name: "Version", position: 1, values: versions },
   ];
   if (laserShaft) {
-    options.push({ name: "Laser Shaft", position: 2, values: ["No", "Yes"] });
+    options.push({ name: "Shaft Engraving", position: 2, values: ["No", "Yes"] });
   }
 
   // Build variants

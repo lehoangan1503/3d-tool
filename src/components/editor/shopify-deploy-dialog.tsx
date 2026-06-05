@@ -7,7 +7,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import type { Product, ShopifyDeploymentSummary, ShopifyCollection, ShopifySkill } from "@/types/product";
+import type { ShopifyLiveCollection } from "@/app/api/shopify/collections/shopify/route";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import type { ExtractorReference, ExtractorReferenceGroup } from "@/types/extractor";
 import type { VideoStudioConfig } from "@/types/video-studio";
@@ -38,6 +40,8 @@ interface RenderedImage {
   blob: Blob | null;
   /** True when this entry was restored from form_data (url is already hosted). */
   saved?: boolean;
+  /** MIME type of the blob (rendered = image/png; user uploads keep their own). */
+  mimeType?: string;
 }
 
 interface ContentResult {
@@ -80,6 +84,56 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function Divider() {
   return <div className="border-t border-white/10" />;
+}
+
+/** One rendered-image tile with hover actions to replace or remove it. */
+function EditableImageTile({
+  refName,
+  url,
+  expanded,
+  onReplace,
+  onRemove,
+}: {
+  refName: string;
+  url: string;
+  expanded: boolean;
+  onReplace: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div
+      className={`group relative rounded-lg overflow-hidden border border-blue-500/40 bg-white/5 ${
+        expanded ? "aspect-[2/3]" : "aspect-square w-20 shrink-0"
+      }`}
+    >
+      <img src={url} alt={refName} className="w-full h-full object-cover" />
+      <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
+        <p className="text-[10px] text-white/70 truncate">{refName}</p>
+      </div>
+      <div className="absolute top-1 right-1 h-4 w-4 rounded-full bg-green-500 flex items-center justify-center">
+        <Check className="h-2.5 w-2.5 text-white" />
+      </div>
+      {/* Hover actions */}
+      <div className="absolute inset-0 flex items-center justify-center gap-1.5 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          type="button"
+          onClick={onReplace}
+          title="Thay ảnh (giữ nguyên tên)"
+          className="flex h-7 w-7 items-center justify-center rounded-md bg-white/15 text-white hover:bg-white/30"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={onRemove}
+          title="Xóa ảnh"
+          className="flex h-7 w-7 items-center justify-center rounded-md bg-red-500/70 text-white hover:bg-red-500"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function ToggleBtn({ active, onClick, children, color = "green" }: { active: boolean; onClick: () => void; children: React.ReactNode; color?: string }) {
@@ -271,6 +325,15 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
   const cancelVideoRef = useRef(false);
   const activeEsmRef = useRef<ExtractorSceneManager | null>(null);
   const renderedImageUrlsRef = useRef<string[]>([]);
+  // ── Manual image editing (replace one / add new) ──
+  // Replacing: holds the refId being replaced; the hidden picker keeps the name.
+  const replaceTargetRef = useRef<string | null>(null);
+  const replaceInputRef = useRef<HTMLInputElement | null>(null);
+  // Adding: a small dialog collects a file + a name matching our naming scheme.
+  const [addImageOpen, setAddImageOpen] = useState(false);
+  const [addImageName, setAddImageName] = useState("");
+  const [addImageFile, setAddImageFile] = useState<File | null>(null);
+  const [addImageError, setAddImageError] = useState("");
 
   // ── Product config (prefilled from a saved deployment when present) ──
   const [productCode, setProductCode] = useState(prefill?.productCode ?? "");
@@ -303,6 +366,9 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
   // Collections is now a managed list of chips (persisted to DB for re-use).
   const [collectionList, setCollectionList] = useState<string[]>(prefill?.collections ?? []);
   const [savedCollections, setSavedCollections] = useState<ShopifyCollection[]>([]);
+  // Live collections pulled straight from the Shopify store (custom + smart).
+  const [shopifyCollections, setShopifyCollections] = useState<ShopifyLiveCollection[]>([]);
+  const [loadingShopifyCollections, setLoadingShopifyCollections] = useState(false);
   const [collectionInput, setCollectionInput] = useState("");
   const [collectionPickerOpen, setCollectionPickerOpen] = useState(false);
   const [generatingContent, setGeneratingContent] = useState(false);
@@ -319,6 +385,8 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
   // ── Save draft (persist form_data without touching Shopify) ──
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
+  // ── Close confirmation (draft has unsaved work) ──
+  const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
 
   // ── Load available AI models ──
   useEffect(() => {
@@ -340,6 +408,17 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
       .then((data) => {
         if (data?.items) setSavedCollections(data.items as ShopifyCollection[]);
       });
+  }, []);
+
+  // ── Load live collections from the Shopify store (custom + smart) ──
+  useEffect(() => {
+    setLoadingShopifyCollections(true);
+    fetch("/api/shopify/collections/shopify")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.items) setShopifyCollections(data.items as ShopifyLiveCollection[]);
+      })
+      .finally(() => setLoadingShopifyCollections(false));
   }, []);
 
   // ── Load AI skills ──
@@ -670,8 +749,11 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
           imageUrls.push(ri.url);
           continue;
         }
-        const path = `shopify-mockups/${product.id}/${ts}-img-${i}.png`;
-        imageUrls.push(await uploadBlobToStorage(ri.blob, path, "image/png"));
+        // Rendered images are PNG; user-uploaded ones keep their own type/ext.
+        const mime = ri.mimeType || ri.blob.type || "image/png";
+        const ext = mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : "png";
+        const path = `shopify-mockups/${product.id}/${ts}-img-${i}.${ext}`;
+        imageUrls.push(await uploadBlobToStorage(ri.blob, path, mime));
       }
 
       // Upload video if freshly rendered; otherwise reuse the saved video URL.
@@ -687,6 +769,61 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
       setUploadingAssets(false);
     }
   }, [product.id, renderedImages, renderedVideoBlob, renderedVideoUrl]);
+
+  // ── Replace one image (keep its name) ──
+  // Open the hidden picker for a specific entry; the chosen file replaces the
+  // image's url/blob but keeps refName so classification/ordering is unchanged.
+  const startReplaceImage = useCallback((refId: string) => {
+    replaceTargetRef.current = refId;
+    replaceInputRef.current?.click();
+  }, []);
+
+  const onReplaceFilePicked = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const targetId = replaceTargetRef.current;
+    e.target.value = ""; // allow re-picking the same file later
+    replaceTargetRef.current = null;
+    if (!file || !targetId) return;
+    const url = URL.createObjectURL(file);
+    setRenderedImages((prev) =>
+      prev.map((ri) =>
+        ri.refId === targetId ? { ...ri, url, blob: file, mimeType: file.type || "image/png", saved: false } : ri
+      )
+    );
+  }, []);
+
+  // ── Add a new image (user names it to match the sort scheme) ──
+  const confirmAddImage = useCallback(() => {
+    const name = addImageName.trim();
+    if (!addImageFile || !name) return;
+    // Names map 1:1 to gallery/metafield slots, and classification matches them
+    // case-insensitively — a duplicate would be silently dropped, so block it.
+    const dup = renderedImages.some((ri) => ri.refName.trim().toLowerCase() === name.toLowerCase());
+    if (dup) {
+      setAddImageError(`Đã có ảnh tên "${name}". Mỗi tên chỉ dùng một lần — đổi tên hoặc dùng "Thay ảnh".`);
+      return;
+    }
+    const url = URL.createObjectURL(addImageFile);
+    setRenderedImages((prev) => [
+      ...prev,
+      {
+        refId: `manual-${prev.length}-${name}`,
+        refName: name,
+        url,
+        blob: addImageFile,
+        mimeType: addImageFile.type || "image/png",
+        saved: false,
+      },
+    ]);
+    setAddImageOpen(false);
+    setAddImageName("");
+    setAddImageFile(null);
+    setAddImageError("");
+  }, [addImageFile, addImageName, renderedImages]);
+
+  const removeImage = useCallback((refId: string) => {
+    setRenderedImages((prev) => prev.filter((ri) => ri.refId !== refId));
+  }, []);
 
   // Build the form payload shared by Deploy and Save. customText/customTextPaid
   // depend on the selected mode; the rest is the current form state verbatim.
@@ -833,6 +970,31 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     }
   }, [uploadAssets, buildPayload, deployment, onDeploymentChange]);
 
+  // ── Close (ask to save the draft first) ──
+  // A connected product already persists its form_data on deploy, so closing it
+  // loses nothing — close straight away. While still a draft, clicking X risks
+  // discarding unsaved work, so confirm whether to save first.
+  const handleClose = useCallback(() => {
+    if (connected || saving || deploying) {
+      onClose();
+      return;
+    }
+    setConfirmCloseOpen(true);
+  }, [connected, saving, deploying, onClose]);
+
+  // "Lưu nháp rồi đóng" — save first, then close once the draft is persisted.
+  const handleSaveAndClose = useCallback(async () => {
+    await handleSaveDraft();
+    setConfirmCloseOpen(false);
+    onClose();
+  }, [handleSaveDraft, onClose]);
+
+  // "Đóng không lưu" — discard and close.
+  const handleDiscardAndClose = useCallback(() => {
+    setConfirmCloseOpen(false);
+    onClose();
+  }, [onClose]);
+
   // ── Manual tag helpers ──
   const addManualTag = useCallback((value: string) => {
     const v = value.trim().toLowerCase();
@@ -902,10 +1064,24 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     ...collectionList.map((c) => `col_${c.toLowerCase().replace(/\s+/g, "_")}`),
   ].filter(Boolean);
 
-  // Collections in the DB not already selected — offered in the + picker.
-  const collectionSuggestions = savedCollections
-    .filter((c) => !collectionList.some((sel) => sel.toLowerCase() === c.value.toLowerCase()))
-    .filter((c) => !collectionInput.trim() || c.value.toLowerCase().includes(collectionInput.trim().toLowerCase()));
+  // Picker suggestions = saved (DB) + live Shopify collections, merged and
+  // deduped by lowercased value. DB entries win so a name saved locally keeps
+  // its "db" source; Shopify-only names are tagged "shopify".
+  const collectionSuggestions = (() => {
+    const byValue = new Map<string, { id: string; value: string; source: "db" | "shopify" }>();
+    for (const c of savedCollections) {
+      byValue.set(c.value.toLowerCase(), { id: `db-${c.id}`, value: c.value, source: "db" });
+    }
+    for (const c of shopifyCollections) {
+      const lower = c.title.toLowerCase();
+      if (!byValue.has(lower)) byValue.set(lower, { id: `shopify-${c.id}`, value: c.title, source: "shopify" });
+    }
+    const q = collectionInput.trim().toLowerCase();
+    return [...byValue.values()]
+      .filter((c) => !collectionList.some((sel) => sel.toLowerCase() === c.value.toLowerCase()))
+      .filter((c) => !q || c.value.toLowerCase().includes(q))
+      .sort((a, b) => a.value.localeCompare(b.value));
+  })();
 
   // Prices preview
   const baseImageAdd = customImage ? 20 : 0;
@@ -979,7 +1155,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
             {saving ? "Đang lưu..." : saveMsg ? "Đã lưu nháp" : "Lưu nháp"}
           </Button>
         )}
-        <Button variant="ghost" size="icon" onClick={onClose} className={connected ? "text-white/50 hover:text-white" : "ml-2 text-white/50 hover:text-white"}>
+        <Button variant="ghost" size="icon" onClick={handleClose} className={connected ? "text-white/50 hover:text-white" : "ml-2 text-white/50 hover:text-white"}>
           <X className="h-5 w-5" />
         </Button>
       </div>
@@ -1049,26 +1225,25 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-white/40">{renderedImages.length} ảnh đã render</span>
-                        <button type="button" onClick={() => setImageGridExpanded((p) => !p)} className="text-xs text-blue-400 hover:text-blue-300">
-                          {imageGridExpanded ? "Thu nhỏ" : "Mở rộng"}
-                        </button>
+                        <div className="flex items-center gap-3">
+                          <button type="button" onClick={() => setAddImageOpen(true)} className="flex items-center gap-1 text-xs text-green-400 hover:text-green-300">
+                            <Plus className="h-3 w-3" /> Thêm ảnh
+                          </button>
+                          <button type="button" onClick={() => setImageGridExpanded((p) => !p)} className="text-xs text-blue-400 hover:text-blue-300">
+                            {imageGridExpanded ? "Thu nhỏ" : "Mở rộng"}
+                          </button>
+                        </div>
                       </div>
                       <div className={imageGridExpanded ? "grid grid-cols-3 sm:grid-cols-4 gap-2" : "flex gap-2 overflow-x-auto pb-1"}>
                         {renderedImages.map((ri) => (
-                          <div
+                          <EditableImageTile
                             key={ri.refId}
-                            className={`relative rounded-lg overflow-hidden border border-blue-500/40 bg-white/5 ${
-                              imageGridExpanded ? "aspect-[2/3]" : "aspect-square w-20 shrink-0"
-                            }`}
-                          >
-                            <img src={ri.url} alt={ri.refName} className="w-full h-full object-cover" />
-                            <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
-                              <p className="text-[10px] text-white/70 truncate">{ri.refName}</p>
-                            </div>
-                            <div className="absolute top-1 right-1 h-4 w-4 rounded-full bg-green-500 flex items-center justify-center">
-                              <Check className="h-2.5 w-2.5 text-white" />
-                            </div>
-                          </div>
+                            refName={ri.refName}
+                            url={ri.url}
+                            expanded={imageGridExpanded}
+                            onReplace={() => startReplaceImage(ri.refId)}
+                            onRemove={() => removeImage(ri.refId)}
+                          />
                         ))}
                         {/* Pending refs not yet rendered */}
                         {renderingImages &&
@@ -1119,26 +1294,25 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-white/40">{renderedImages.length} ảnh đã lưu (lần đăng trước)</span>
-                  <button type="button" onClick={() => setImageGridExpanded((p) => !p)} className="text-xs text-blue-400 hover:text-blue-300">
-                    {imageGridExpanded ? "Thu nhỏ" : "Mở rộng"}
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button type="button" onClick={() => setAddImageOpen(true)} className="flex items-center gap-1 text-xs text-green-400 hover:text-green-300">
+                      <Plus className="h-3 w-3" /> Thêm ảnh
+                    </button>
+                    <button type="button" onClick={() => setImageGridExpanded((p) => !p)} className="text-xs text-blue-400 hover:text-blue-300">
+                      {imageGridExpanded ? "Thu nhỏ" : "Mở rộng"}
+                    </button>
+                  </div>
                 </div>
                 <div className={imageGridExpanded ? "grid grid-cols-3 sm:grid-cols-4 gap-2" : "flex gap-2 overflow-x-auto pb-1"}>
                   {renderedImages.map((ri) => (
-                    <div
+                    <EditableImageTile
                       key={ri.refId}
-                      className={`relative rounded-lg overflow-hidden border border-blue-500/40 bg-white/5 ${
-                        imageGridExpanded ? "aspect-[2/3]" : "aspect-square w-20 shrink-0"
-                      }`}
-                    >
-                      <img src={ri.url} alt={ri.refName} className="w-full h-full object-cover" />
-                      <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
-                        <p className="text-[10px] text-white/70 truncate">{ri.refName}</p>
-                      </div>
-                      <div className="absolute top-1 right-1 h-4 w-4 rounded-full bg-green-500 flex items-center justify-center">
-                        <Check className="h-2.5 w-2.5 text-white" />
-                      </div>
-                    </div>
+                      refName={ri.refName}
+                      url={ri.url}
+                      expanded={imageGridExpanded}
+                      onReplace={() => startReplaceImage(ri.refId)}
+                      onRemove={() => removeImage(ri.refId)}
+                    />
                   ))}
                 </div>
                 <p className="text-[11px] text-white/40">Chọn nhóm ảnh ở trên để render lại, hoặc đăng lại ngay với ảnh đã lưu.</p>
@@ -1266,7 +1440,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                 <Label className="text-white/70 text-xs mb-2 block">Labels</Label>
                 <div className="flex gap-2 flex-wrap">
                   <ToggleBtn active={laserShaft} onClick={() => setLaserShaft((p) => !p)} color="purple">
-                    Laser Shaft (+$20)
+                    Shaft Engraving (+$20)
                   </ToggleBtn>
                   <ToggleBtn active={customImage} onClick={() => setCustomImage((p) => !p)} color="orange">
                     Custom Image (+$20)
@@ -1572,12 +1746,22 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                             key={c.id}
                             type="button"
                             onClick={() => addCollection(c.value)}
-                            className="px-2 py-1.5 rounded-md text-sm text-white/80 hover:bg-white/10 text-left"
+                            className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-sm text-white/80 hover:bg-white/10 text-left"
                           >
-                            {c.value}
+                            <span className="truncate">{c.value}</span>
+                            {c.source === "shopify" && (
+                              <span className="shrink-0 rounded px-1 py-0.5 text-[9px] uppercase tracking-wide bg-green-500/15 text-green-400">Shopify</span>
+                            )}
                           </button>
                         ))}
-                        {!collectionInput.trim() && collectionSuggestions.length === 0 && <p className="px-2 py-1.5 text-xs text-white/30">Chưa có collection nào được lưu.</p>}
+                        {loadingShopifyCollections && (
+                          <p className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-white/30">
+                            <Loader2 className="h-3 w-3 animate-spin" /> Đang tải từ Shopify...
+                          </p>
+                        )}
+                        {!collectionInput.trim() && collectionSuggestions.length === 0 && !loadingShopifyCollections && (
+                          <p className="px-2 py-1.5 text-xs text-white/30">Chưa có collection nào.</p>
+                        )}
                       </div>
                     </PopoverContent>
                   </Popover>
@@ -1756,6 +1940,115 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
           }}
         />
       )}
+
+      {/* Ask whether to save the draft before closing an unsaved product. */}
+      <Dialog open={confirmCloseOpen} onOpenChange={(open) => !saving && setConfirmCloseOpen(open)}>
+        <DialogContent className="sm:max-w-md border-white/10 bg-zinc-900 text-white">
+          <DialogHeader>
+            <DialogTitle>Lưu nháp trước khi đóng?</DialogTitle>
+            <DialogDescription className="text-white/60">
+              Bạn có thay đổi chưa lưu. Lưu nháp lại để lần sau mở lên còn nguyên, hoặc đóng mà không lưu.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button
+              variant="ghost"
+              onClick={() => setConfirmCloseOpen(false)}
+              disabled={saving}
+              className="text-white/70 hover:text-white"
+            >
+              Hủy
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleDiscardAndClose}
+              disabled={saving}
+              className="border-white/20 text-white/90 hover:bg-white/5 hover:text-white"
+            >
+              Đóng không lưu
+            </Button>
+            <Button
+              onClick={handleSaveAndClose}
+              disabled={saving}
+              className="gap-2 bg-green-600 hover:bg-green-700 text-white"
+            >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              {saving ? "Đang lưu..." : "Lưu nháp rồi đóng"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Hidden picker used by "Thay ảnh" — replaces the targeted image's bytes
+          while keeping its name (so classification/ordering is unchanged). */}
+      <input
+        ref={replaceInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        className="hidden"
+        onChange={onReplaceFilePicked}
+      />
+
+      {/* Add a brand-new image; the user names it to match the sort scheme. */}
+      <Dialog open={addImageOpen} onOpenChange={(open) => { setAddImageOpen(open); if (!open) setAddImageError(""); }}>
+        <DialogContent className="sm:max-w-md border-white/10 bg-zinc-900 text-white">
+          <DialogHeader>
+            <DialogTitle>Thêm ảnh</DialogTitle>
+            <DialogDescription className="text-white/60">
+              Chọn ảnh và đặt tên theo quy ước để khớp thuật toán sắp xếp.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label className="text-white/80">Ảnh</Label>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={(e) => setAddImageFile(e.target.files?.[0] ?? null)}
+                className="block w-full text-sm text-white/70 file:mr-3 file:rounded-md file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-white hover:file:bg-white/20"
+              />
+              {addImageFile && (
+                <img src={URL.createObjectURL(addImageFile)} alt="preview" className="mt-2 h-28 rounded-md object-contain border border-white/10" />
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-white/80">Tên ảnh</Label>
+              <Input
+                value={addImageName}
+                onChange={(e) => { setAddImageName(e.target.value); setAddImageError(""); }}
+                placeholder="vd: Mockup-Web-3"
+                className={`bg-white/5 text-white ${addImageError ? "border-red-500/60" : "border-white/20"}`}
+              />
+              {addImageError && (
+                <p className="flex items-start gap-1 text-[11px] text-red-400">
+                  <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" /> {addImageError}
+                </p>
+              )}
+              <div className="rounded-md bg-white/5 p-2 text-[11px] text-white/50 leading-relaxed">
+                <p className="text-white/70 mb-1">Quy ước tên (gallery & metafield):</p>
+                <ul className="space-y-0.5">
+                  <li><code className="text-blue-300">Mockup-Web-N</code> — ảnh gallery (N = số thứ tự)</li>
+                  <li><code className="text-blue-300">Mockup-Web-N-Standard</code> / <code className="text-blue-300">-Pro</code> — theo version</li>
+                  <li><code className="text-blue-300">Details-N</code> — metafield chi tiết</li>
+                  <li><code className="text-blue-300">Package-1-Standard</code> / <code className="text-blue-300">-Pro</code>, <code className="text-blue-300">Package-2</code> — ảnh đóng gói</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button variant="ghost" onClick={() => setAddImageOpen(false)} className="text-white/70 hover:text-white">
+              Hủy
+            </Button>
+            <Button
+              onClick={confirmAddImage}
+              disabled={!addImageFile || !addImageName.trim()}
+              className="gap-2 bg-green-600 hover:bg-green-700 text-white"
+            >
+              <Plus className="h-4 w-4" /> Thêm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

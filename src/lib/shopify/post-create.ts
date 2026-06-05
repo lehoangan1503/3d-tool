@@ -30,6 +30,7 @@ import {
   publishProductToAllChannels,
   publishCollectionToAllChannels,
   addProductVideo,
+  moveProductMedia,
   type ShopifyCollectionRecord,
 } from "./client";
 import type { ShopifyProductPayload } from "./product-builder";
@@ -91,7 +92,17 @@ export async function runPostCreateSteps({ product, metadata, videoUrl, title }:
   if (videoUrl) {
     const contentType = videoUrl.toLowerCase().includes(".mp4") ? "video/mp4" : "video/webm";
     try {
-      await addProductVideo(productId, videoUrl, title, contentType);
+      const videoMediaId = await addProductVideo(productId, videoUrl, title, contentType);
+      // Place the video second in the gallery (index 1 = after the first image),
+      // so it sits where the 2nd image would be. Best-effort: a reorder failure
+      // (e.g. video still processing) just leaves it appended at the end.
+      if (videoMediaId) {
+        try {
+          await moveProductMedia(productId, videoMediaId, 1);
+        } catch (err) {
+          console.warn("[post-create] move video to position 2:", err instanceof Error ? err.message : err);
+        }
+      }
     } catch (err) {
       console.warn("[post-create] add video:", err instanceof Error ? err.message : err);
     }
@@ -109,8 +120,8 @@ async function mapLaserShaftImages(product: ShopifyCreatedProduct, metadata: Pos
   const defaultImgId = laserShaftDefaultImagePosition ? posToImg.get(laserShaftDefaultImagePosition)?.id : undefined;
   if (!targetImgId) return;
 
-  // Find the Laser Shaft option's position so we read the right variant.optionN.
-  const laserOpt = product.options.find((o) => o.name.trim().toLowerCase() === "laser shaft");
+  // Find the Shaft Engraving option's position so we read the right variant.optionN.
+  const laserOpt = product.options.find((o) => o.name.trim().toLowerCase() === "shaft engraving");
   if (!laserOpt) return;
   const optKey = `option${laserOpt.position}` as "option1" | "option2";
 

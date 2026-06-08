@@ -56,9 +56,9 @@ function normalizeCollectionName(text: string): string {
     .toLowerCase();
 }
 
-/** The same col_ tag the builder writes onto the product (lowercase, underscores). */
+/** The same col_ tag the builder writes onto the product (prefix only, name kept as-is). */
 function collectionTag(name: string): string {
-  return `col_${name.toLowerCase().trim().replace(/\s+/g, "_")}`;
+  return `col_${name.trim()}`;
 }
 
 export async function runPostCreateSteps({ product, metadata, videoUrl, title }: PostCreateInput): Promise<void> {

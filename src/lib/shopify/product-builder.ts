@@ -391,7 +391,7 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
     : collections.split(",").map((c) => c.trim()).filter(Boolean);
 
   for (const col of collectionList) {
-    tags.add(`col_${col.toLowerCase().replace(/\s+/g, "_")}`);
+    tags.add(`col_${col.trim()}`);
   }
 
   // Build options

@@ -340,7 +340,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
   const [versions, setVersions] = useState<Version[]>(prefill?.versions ?? ["Standard", "Premium"]);
   // No default — the editor must pick wrap or wrapless.
   const [wrapType, setWrapType] = useState<WrapType | "">(prefill?.wrapType ?? "");
-  const [laserShaft, setLaserShaft] = useState(prefill?.laserShaft ?? false);
+  const [laserShaft, setLaserShaft] = useState(prefill?.laserShaft ?? true);
   const [customImage, setCustomImage] = useState(prefill?.customImage ?? false);
   // Custom text has two mutually-exclusive modes: "free" and "paid" (+$20).
   const [customTextMode, setCustomTextMode] = useState<"none" | "free" | "paid">(prefill?.customTextPaid ? "paid" : prefill?.customText ? "free" : "none");
@@ -1061,7 +1061,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     ...(laserShaft ? ["laser shaft"] : []),
     ...(customImage ? ["custom-upload", "custom-image"] : []),
     ...(customTextMode !== "none" ? ["custom-text"] : []),
-    ...collectionList.map((c) => `col_${c.toLowerCase().replace(/\s+/g, "_")}`),
+    ...collectionList.map((c) => `col_${c.trim()}`),
   ].filter(Boolean);
 
   // Picker suggestions = saved (DB) + live Shopify collections, merged and

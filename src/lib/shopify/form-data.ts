@@ -8,6 +8,8 @@ export interface ShopifyDeployRequest {
   title: string;
   description: string;
   collections: string;
+  /** The single collection shown in the storefront breadcrumb (one of `collections`). */
+  breadcrumbCollection?: string | null;
   imageUrls: string[];
   imageNames?: string[];
   videoUrl?: string | null;
@@ -32,6 +34,7 @@ export function buildFormData(body: ShopifyDeployRequest): ShopifyFormData {
     title,
     description,
     collections,
+    breadcrumbCollection = null,
     imageUrls = [],
     imageNames = [],
     videoUrl = null,
@@ -52,6 +55,13 @@ export function buildFormData(body: ShopifyDeployRequest): ShopifyFormData {
     .map((c) => c.trim())
     .filter(Boolean);
 
+  // Only keep the breadcrumb pick if it's still one of the picked collections;
+  // a value that was removed above falls back to null (not picked).
+  const breadcrumbPick = breadcrumbCollection?.trim() || null;
+  const breadcrumb = breadcrumbPick && collectionList.some((c) => c === breadcrumbPick)
+    ? breadcrumbPick
+    : null;
+
   return {
     productCode: (productCode ?? "").trim(),
     title: (title ?? "").trim(),
@@ -69,6 +79,7 @@ export function buildFormData(body: ShopifyDeployRequest): ShopifyFormData {
     customText: customText ?? null,
     customTextPaid: customTextPaid ?? null,
     collections: collectionList,
+    breadcrumbCollection: breadcrumb,
     imageUrls,
     imageNames,
     videoUrl: videoUrl ?? null,

@@ -78,11 +78,25 @@ export async function runPostCreateSteps({ product, metadata, videoUrl, title }:
   }
 
   // ── 4. Collections ──
+  // Keep the resolved name → collection-id map so the breadcrumb step (next)
+  // can turn the picked collection name into a GID without re-fetching.
+  let collectionIdsByName = new Map<string, number>();
   if (metadata.collections.length) {
     try {
-      await assignToCollections(metadata.collections, productId);
+      collectionIdsByName = await assignToCollections(metadata.collections, productId);
     } catch (err) {
       console.warn("[post-create] assign collections:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  // ── 4b. Breadcrumb collection metafield (custom.breadcrumb_collection) ──
+  // The user picked one of the collections above to drive the storefront
+  // breadcrumb. We write it as a collection_reference (GID). null = skip.
+  if (metadata.breadcrumbCollection) {
+    try {
+      await setBreadcrumbCollection(productId, metadata.breadcrumbCollection, collectionIdsByName);
+    } catch (err) {
+      console.warn("[post-create] breadcrumb collection:", err instanceof Error ? err.message : err);
     }
   }
 
@@ -203,7 +217,13 @@ async function setImageMetafields(
 
 // ── Collections ───────────────────────────────────────────────────────────────
 
-async function assignToCollections(collections: string[], productId: number): Promise<void> {
+/**
+ * Assign the product to each collection (custom/smart, creating smart ones as
+ * needed) and return a map of normalized collection name → collection id, so the
+ * caller can resolve a picked collection (e.g. the breadcrumb) to its GID.
+ */
+async function assignToCollections(collections: string[], productId: number): Promise<Map<string, number>> {
+  const resolvedIds = new Map<string, number>();
   const [custom, smart] = await Promise.all([getAllCustomCollections(), getAllSmartCollections()]);
 
   const byName = (list: ShopifyCollectionRecord[]) => {
@@ -256,9 +276,11 @@ async function assignToCollections(collections: string[], productId: number): Pr
         console.warn(`[post-create] add to custom collection '${name}':`, err instanceof Error ? err.message : err);
       }
       await ensurePublished(customCol.id);
+      resolvedIds.set(normName, customCol.id);
     } else if (smartCol) {
       // Smart collection already auto-matches the col_ tag; just ensure publish.
       await ensurePublished(smartCol.id);
+      resolvedIds.set(normName, smartCol.id);
     } else {
       // Create a new smart collection that matches the product's col_ tag.
       try {
@@ -268,9 +290,38 @@ async function assignToCollections(collections: string[], productId: number): Pr
         smartByName.set(normName, created);
         smartByTag.set(normTag, created);
         await ensurePublished(created.id);
+        resolvedIds.set(normName, created.id);
       } catch (err) {
         console.warn(`[post-create] create smart collection '${name}':`, err instanceof Error ? err.message : err);
       }
     }
   }
+
+  return resolvedIds;
+}
+
+/**
+ * Write the picked breadcrumb collection to custom.breadcrumb_collection as a
+ * collection_reference (GID). The collection id comes from assignToCollections'
+ * resolved map; if it isn't there (e.g. its assign step failed), we skip rather
+ * than write a dangling reference.
+ */
+async function setBreadcrumbCollection(
+  productId: number,
+  breadcrumbCollection: string,
+  collectionIdsByName: Map<string, number>,
+): Promise<void> {
+  const collectionId = collectionIdsByName.get(normalizeCollectionName(breadcrumbCollection));
+  if (!collectionId) {
+    console.warn(
+      `[post-create] breadcrumb collection '${breadcrumbCollection}' not resolved to an id; skipping metafield.`,
+    );
+    return;
+  }
+  await setProductMetafield(productId, {
+    namespace: "custom",
+    key: "breadcrumb_collection",
+    type: "collection_reference",
+    value: `gid://shopify/Collection/${collectionId}`,
+  });
 }

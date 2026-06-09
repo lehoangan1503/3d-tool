@@ -74,6 +74,10 @@ export interface ShopifyFormData {
   // Paid custom text (+$20) — requires extra design work.
   customTextPaid: ShopifyCustomText | null;
   collections: string[];
+  // The single collection (must be one of `collections`) shown in the storefront
+  // breadcrumb. Written to the custom.breadcrumb_collection metafield on deploy.
+  // null = not picked (storefront falls back to its default breadcrumb).
+  breadcrumbCollection: string | null;
   imageUrls: string[];
   // Names of the rendered images (parallel to imageUrls), used to classify
   // gallery vs metafield images (Mockup-Web-N, Details-N, Package-N) on deploy.

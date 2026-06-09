@@ -365,6 +365,9 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
   const [descExpanded, setDescExpanded] = useState(false);
   // Collections is now a managed list of chips (persisted to DB for re-use).
   const [collectionList, setCollectionList] = useState<string[]>(prefill?.collections ?? []);
+  // The single collection (one of collectionList) shown in the storefront
+  // breadcrumb. null = not picked → warning shown, no metafield written.
+  const [breadcrumbCollection, setBreadcrumbCollection] = useState<string | null>(prefill?.breadcrumbCollection ?? null);
   const [savedCollections, setSavedCollections] = useState<ShopifyCollection[]>([]);
   // Live collections pulled straight from the Shopify store (custom + smart).
   const [shopifyCollections, setShopifyCollections] = useState<ShopifyLiveCollection[]>([]);
@@ -838,6 +841,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
       title: title.trim(),
       description,
       collections: collectionList.join(", "),
+      breadcrumbCollection,
       imageUrls,
       imageNames: renderedImages.map((ri) => ri.refName),
       videoUrl,
@@ -853,7 +857,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
       skillIds: selectedSkillIds,
     };
   }, [
-    product.id, productCode, title, description, collectionList, renderedImages,
+    product.id, productCode, title, description, collectionList, breadcrumbCollection, renderedImages,
     versions, wrapType, laserShaft, customImage, customTextMode, customTextLabel,
     customTextExample, aiHint, aiModel, manualTags, selectedSkillIds,
   ]);
@@ -1046,6 +1050,8 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
 
   const removeCollection = useCallback((value: string) => {
     setCollectionList((prev) => prev.filter((c) => c !== value));
+    // If the removed collection was the breadcrumb pick, reset to "not picked".
+    setBreadcrumbCollection((prev) => (prev === value ? null : prev));
   }, []);
 
   const selectedGroup = groups.find((g) => g.id === selectedGroupId);
@@ -1791,6 +1797,59 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                       </span>
                     ))}
                   </div>
+                )}
+              </div>
+
+              {/* Breadcrumb collection — pick exactly one of the collections above.
+                  This value is written to custom.breadcrumb_collection on deploy so
+                  the storefront breadcrumb shows the chosen collection. Default: none. */}
+              <div className="rounded-lg border border-purple-400/30 bg-purple-500/5 p-3">
+                <div className="flex items-center justify-between mb-2 gap-2">
+                  <Label className="text-purple-200 text-sm font-semibold block">Breadcrumb collection</Label>
+                  {breadcrumbCollection && (
+                    <button
+                      type="button"
+                      onClick={() => setBreadcrumbCollection(null)}
+                      className="text-[11px] text-white/40 hover:text-white/80 transition-colors"
+                    >
+                      Bỏ chọn
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-white/40 mb-2">
+                  Chọn 1 collection bên trên để hiển thị trong breadcrumb của sản phẩm.
+                </p>
+
+                {collectionList.length === 0 ? (
+                  <p className="text-xs text-white/30">Hãy thêm collection ở trên trước.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1">
+                    {collectionList.map((c) => {
+                      const active = breadcrumbCollection === c;
+                      return (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() => setBreadcrumbCollection(active ? null : c)}
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                            active
+                              ? "bg-purple-500/25 text-purple-100 border-purple-400/60"
+                              : "bg-white/5 text-white/60 border-white/15 hover:border-white/35"
+                          }`}
+                        >
+                          {active && <Check className="h-3 w-3" />}
+                          {c}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {collectionList.length > 0 && !breadcrumbCollection && (
+                  <p className="mt-2 flex items-center gap-1.5 text-[11px] text-amber-300/90">
+                    <AlertTriangle className="h-3 w-3 shrink-0" />
+                    Chưa chọn breadcrumb collection — mặc định không cập nhật custom.breadcrumb_collection.
+                  </p>
                 )}
               </div>
             </div>

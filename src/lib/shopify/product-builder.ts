@@ -297,6 +297,8 @@ export interface ProductInput {
   descriptionHtml: string;
   /** Comma-separated or array */
   collections: string | string[];
+  /** The single collection shown in the storefront breadcrumb (one of `collections`). */
+  breadcrumbCollection?: string | null;
   /** Array of tag strings */
   manualTags: string[];
   /** Image URLs (parallel to imageNames). */
@@ -332,6 +334,8 @@ export interface ShopifyProductPayload {
   /** Post-create instructions resolved by the API route (not sent to Shopify). */
   _metadata: {
     collections: string[];
+    /** The single collection written to custom.breadcrumb_collection (null = skip). */
+    breadcrumbCollection: string | null;
     /** Gallery position → custom metafield key (Details/Package images). */
     imageMetafields: ImageMetafieldRef[];
     /** Gallery position of the "Mockup-Web-1" image (laser shaft = No / default). */
@@ -348,6 +352,7 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
     title,
     descriptionHtml,
     collections,
+    breadcrumbCollection = null,
     manualTags,
     imageUrls,
     imageNames = [],
@@ -496,6 +501,9 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
     },
     _metadata: {
       collections: collectionList,
+      breadcrumbCollection: breadcrumbCollection?.trim() && collectionList.includes(breadcrumbCollection.trim())
+        ? breadcrumbCollection.trim()
+        : null,
       imageMetafields,
       laserShaftDefaultImagePosition,
       laserShaftImagePosition,

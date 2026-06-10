@@ -670,6 +670,9 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
           hint: aiHint.trim() || undefined,
           skillPrompt: skillPrompt || undefined,
           model: aiModel,
+          // Picked product version(s) — silently steered into the prompt head
+          // so the AI writes content "based on the version" (Dựa trên version gậy).
+          versions: versions.length ? versions : undefined,
         }),
       });
 
@@ -730,7 +733,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     } finally {
       setGeneratingContent(false);
     }
-  }, [renderedImages, aiModel, aiHint, composeSkillPrompt, selectedSkillIds]);
+  }, [renderedImages, aiModel, aiHint, composeSkillPrompt, selectedSkillIds, versions]);
 
   // Upload rendered images/video to storage and return their hosted URLs.
   // Reused by both Deploy and Save so the gallery restores either way.

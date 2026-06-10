@@ -67,16 +67,26 @@ const OUTPUT_FORMAT_CONTRACT = `IMPORTANT — output format rules (override any 
 ENGLISH_TITLE: <concise product title, max 80 chars, no code>
 ENGLISH_DESCRIPTION: <full rich description — multiple paragraphs / bullet sections, markdown ok>`;
 
-function buildPromptWithAiHint(baseHint: string, withImage: boolean): string {
+// The picked product version(s) steer the copy quietly: a single `Version:`
+// line at the very top of the user prompt. The model writes "based on the
+// version" (Dựa trên version gậy) without ever surfacing the label in output.
+function versionHead(versions?: string[]): string {
+  const picked = (versions ?? []).map((v) => v.trim()).filter(Boolean);
+  if (!picked.length) return "";
+  return `Version: ${picked.join(", ")}\n\n`;
+}
+
+function buildPromptWithAiHint(baseHint: string, withImage: boolean, versions?: string[]): string {
+  const head = versionHead(versions);
   const hint = baseHint.trim();
   if (!hint && withImage) {
-    return "Please describe and write product copy for this custom pool cue.";
+    return `${head}Please describe and write product copy for this custom pool cue.`;
   }
   if (!hint) {
-    return "Please write product copy for a custom pool cue. Make it elegant and appealing.";
+    return `${head}Please write product copy for a custom pool cue. Make it elegant and appealing.`;
   }
   return [
-    "PRIMARY THEME REQUIREMENT (HIGH PRIORITY):",
+    head + "PRIMARY THEME REQUIREMENT (HIGH PRIORITY):",
     `- Main theme to target: ${hint}`,
     "- Keep this theme as the central direction for the whole copy.",
     "- Reflect it clearly in ENGLISH_TITLE and the first paragraph of ENGLISH_DESCRIPTION.",
@@ -162,8 +172,10 @@ export async function POST(request: Request) {
     // Combined text of the user-selected skills, applied as a system prompt
     // for strict adherence (separate from the theme hint).
     skillPrompt?: string;
+    // Picked product version(s) — prepended silently to the prompt head.
+    versions?: string[];
   };
-  const { imageUrl, hint, model: requestedModel, skillPrompt } = body;
+  const { imageUrl, hint, model: requestedModel, skillPrompt, versions } = body;
 
   if (!imageUrl) return NextResponse.json({ error: "imageUrl is required" }, { status: 400 });
   if (!YESCALE_TOKEN) return NextResponse.json({ error: "YESCALE_API_TOKEN is not configured" }, { status: 500 });
@@ -180,7 +192,7 @@ export async function POST(request: Request) {
   const primaryModel = requestedModel ?? DEFAULT_MODEL;
   const modelsToTry = [primaryModel, ...FALLBACK_MODELS.filter((m) => m !== primaryModel)];
 
-  const visionUserText = buildPromptWithAiHint(hint ?? "", true);
+  const visionUserText = buildPromptWithAiHint(hint ?? "", true, versions);
 
   // ── DEBUG: log the exact final payload sent to the LLM ──────────────────
   // Server-side only — visible in the terminal running `npm run dev`, NOT in
@@ -189,6 +201,7 @@ export async function POST(request: Request) {
   console.log("\n========== [generate-content] FINAL PAYLOAD TO LLM ==========");
   console.log(`[skill received] ${skill ? `YES (${skill.length} chars)` : "NO — none ticked / empty"}`);
   console.log(`[ai hint]        ${hint?.trim() ? hint.trim() : "(none)"}`);
+  console.log(`[versions]       ${versions?.length ? versions.join(", ") : "(none)"}`);
   console.log(`[model]          ${primaryModel}`);
   console.log("---------- SYSTEM (vision) ----------");
   console.log(visionSystem);
@@ -262,7 +275,7 @@ export async function POST(request: Request) {
         push({ type: "fallback", phase: "text-only" });
         const textMessages = [
           { role: "system", content: textSystem },
-          { role: "user", content: buildPromptWithAiHint(hint ?? "", false) },
+          { role: "user", content: buildPromptWithAiHint(hint ?? "", false, versions) },
         ];
         outer2: for (const model of modelsToTry) {
           push({ type: "trying", model, phase: "text-only" });

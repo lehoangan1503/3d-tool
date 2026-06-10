@@ -1,7 +1,23 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { X, Sparkles, ShoppingBag, Loader2, Check, RefreshCw, Plus, Trash2, ExternalLink, Image as ImageIcon, Video, AlertCircle, XCircle, AlertTriangle, Save } from "lucide-react";
+import {
+  X,
+  Sparkles,
+  ShoppingBag,
+  Loader2,
+  Check,
+  RefreshCw,
+  Plus,
+  Trash2,
+  ExternalLink,
+  Image as ImageIcon,
+  Video,
+  AlertCircle,
+  XCircle,
+  AlertTriangle,
+  Save,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -87,25 +103,9 @@ function Divider() {
 }
 
 /** One rendered-image tile with hover actions to replace or remove it. */
-function EditableImageTile({
-  refName,
-  url,
-  expanded,
-  onReplace,
-  onRemove,
-}: {
-  refName: string;
-  url: string;
-  expanded: boolean;
-  onReplace: () => void;
-  onRemove: () => void;
-}) {
+function EditableImageTile({ refName, url, expanded, onReplace, onRemove }: { refName: string; url: string; expanded: boolean; onReplace: () => void; onRemove: () => void }) {
   return (
-    <div
-      className={`group relative rounded-lg overflow-hidden border border-blue-500/40 bg-white/5 ${
-        expanded ? "aspect-[2/3]" : "aspect-square w-20 shrink-0"
-      }`}
-    >
+    <div className={`group relative rounded-lg overflow-hidden border border-blue-500/40 bg-white/5 ${expanded ? "aspect-[2/3]" : "aspect-square w-20 shrink-0"}`}>
       <img src={url} alt={refName} className="w-full h-full object-cover" />
       <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
         <p className="text-[10px] text-white/70 truncate">{refName}</p>
@@ -123,12 +123,7 @@ function EditableImageTile({
         >
           <RefreshCw className="h-3.5 w-3.5" />
         </button>
-        <button
-          type="button"
-          onClick={onRemove}
-          title="Xóa ảnh"
-          className="flex h-7 w-7 items-center justify-center rounded-md bg-red-500/70 text-white hover:bg-red-500"
-        >
+        <button type="button" onClick={onRemove} title="Xóa ảnh" className="flex h-7 w-7 items-center justify-center rounded-md bg-red-500/70 text-white hover:bg-red-500">
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
@@ -742,7 +737,9 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     setUploadingAssets(true);
     try {
       const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (!user) throw new Error("Bạn cần đăng nhập.");
 
       const ts = Date.now();
@@ -791,11 +788,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     replaceTargetRef.current = null;
     if (!file || !targetId) return;
     const url = URL.createObjectURL(file);
-    setRenderedImages((prev) =>
-      prev.map((ri) =>
-        ri.refId === targetId ? { ...ri, url, blob: file, mimeType: file.type || "image/png", saved: false } : ri
-      )
-    );
+    setRenderedImages((prev) => prev.map((ri) => (ri.refId === targetId ? { ...ri, url, blob: file, mimeType: file.type || "image/png", saved: false } : ri)));
   }, []);
 
   // ── Add a new image (user names it to match the sort scheme) ──
@@ -833,37 +826,53 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
 
   // Build the form payload shared by Deploy and Save. customText/customTextPaid
   // depend on the selected mode; the rest is the current form state verbatim.
-  const buildPayload = useCallback((imageUrls: string[], videoUrl?: string) => {
-    const customTextOn = customTextMode !== "none";
-    const customTextConfig = customTextOn
-      ? { label: customTextLabel.trim(), example: customTextExample.trim() }
-      : null;
-    return {
-      productId: product.id,
-      productCode: productCode.trim(),
-      title: title.trim(),
+  const buildPayload = useCallback(
+    (imageUrls: string[], videoUrl?: string) => {
+      const customTextOn = customTextMode !== "none";
+      const customTextConfig = customTextOn ? { label: customTextLabel.trim(), example: customTextExample.trim() } : null;
+      return {
+        productId: product.id,
+        productCode: productCode.trim(),
+        title: title.trim(),
+        description,
+        collections: collectionList.join(", "),
+        breadcrumbCollection,
+        imageUrls,
+        imageNames: renderedImages.map((ri) => ri.refName),
+        videoUrl,
+        versions,
+        wrapType,
+        laserShaft,
+        customImage,
+        customText: customTextMode === "free" ? customTextConfig : null,
+        customTextPaid: customTextMode === "paid" ? customTextConfig : null,
+        aiHint: aiHint.trim(),
+        aiModel,
+        manualTags,
+        skillIds: selectedSkillIds,
+      };
+    },
+    [
+      product.id,
+      productCode,
+      title,
       description,
-      collections: collectionList.join(", "),
+      collectionList,
       breadcrumbCollection,
-      imageUrls,
-      imageNames: renderedImages.map((ri) => ri.refName),
-      videoUrl,
+      renderedImages,
       versions,
       wrapType,
       laserShaft,
       customImage,
-      customText: customTextMode === "free" ? customTextConfig : null,
-      customTextPaid: customTextMode === "paid" ? customTextConfig : null,
-      aiHint: aiHint.trim(),
+      customTextMode,
+      customTextLabel,
+      customTextExample,
+      aiHint,
       aiModel,
       manualTags,
-      skillIds: selectedSkillIds,
-    };
-  }, [
-    product.id, productCode, title, description, collectionList, breadcrumbCollection, renderedImages,
-    versions, wrapType, laserShaft, customImage, customTextMode, customTextLabel,
-    customTextExample, aiHint, aiModel, manualTags, selectedSkillIds,
-  ]);
+      selectedSkillIds,
+    ]
+  );
 
   // ── Deploy ──
   const handleDeploy = useCallback(async () => {
@@ -926,20 +935,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     } finally {
       setDeploying(false);
     }
-  }, [
-    productCode,
-    versions,
-    wrapType,
-    title,
-    customTextMode,
-    customTextLabel,
-    customTextExample,
-    renderedImages,
-    uploadAssets,
-    buildPayload,
-    deployment,
-    onDeploymentChange,
-  ]);
+  }, [productCode, versions, wrapType, title, customTextMode, customTextLabel, customTextExample, renderedImages, uploadAssets, buildPayload, deployment, onDeploymentChange]);
 
   // ── Save draft (persist form_data without touching Shopify) ──
   const handleSaveDraft = useCallback(async () => {
@@ -1591,7 +1587,9 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
             {/* Skills — reusable prompt templates prepended to the hint */}
             <div className="mt-3 space-y-2">
               <div className="flex items-center justify-between">
-                <Label className="text-white/70 text-xs">Skill (chọn 1) <span className="text-red-400">*</span></Label>
+                <Label className="text-white/70 text-xs">
+                  Skill (chọn 1) <span className="text-red-400">*</span>
+                </Label>
                 <button
                   type="button"
                   onClick={() => {
@@ -1810,18 +1808,12 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                 <div className="flex items-center justify-between mb-2 gap-2">
                   <Label className="text-purple-200 text-sm font-semibold block">Breadcrumb collection</Label>
                   {breadcrumbCollection && (
-                    <button
-                      type="button"
-                      onClick={() => setBreadcrumbCollection(null)}
-                      className="text-[11px] text-white/40 hover:text-white/80 transition-colors"
-                    >
+                    <button type="button" onClick={() => setBreadcrumbCollection(null)} className="text-[11px] text-white/40 hover:text-white/80 transition-colors">
                       Bỏ chọn
                     </button>
                   )}
                 </div>
-                <p className="text-[11px] text-white/40 mb-2">
-                  Chọn 1 collection bên trên để hiển thị trong breadcrumb của sản phẩm.
-                </p>
+                <p className="text-[11px] text-white/40 mb-2">Chọn 1 collection bên trên để hiển thị trong breadcrumb của sản phẩm.</p>
 
                 {collectionList.length === 0 ? (
                   <p className="text-xs text-white/30">Hãy thêm collection ở trên trước.</p>
@@ -1835,9 +1827,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                           type="button"
                           onClick={() => setBreadcrumbCollection(active ? null : c)}
                           className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs border transition-colors ${
-                            active
-                              ? "bg-purple-500/25 text-purple-100 border-purple-400/60"
-                              : "bg-white/5 text-white/60 border-white/15 hover:border-white/35"
+                            active ? "bg-purple-500/25 text-purple-100 border-purple-400/60" : "bg-white/5 text-white/60 border-white/15 hover:border-white/35"
                           }`}
                         >
                           {active && <Check className="h-3 w-3" />}
@@ -1941,7 +1931,11 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                 </div>
               )}
 
-              <Button onClick={handleDeploy} disabled={deployBusy || deleting || saving} className="w-full gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold py-6 text-base">
+              <Button
+                onClick={handleDeploy}
+                disabled={deployBusy || deleting || saving}
+                className="w-full gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold py-6 text-base"
+              >
                 {deployBusy ? (
                   <>
                     <Loader2 className="h-5 w-5 animate-spin" />
@@ -1955,7 +1949,10 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                 )}
               </Button>
 
-              {/* Delete the live Shopify product (keeps saved data to re-deploy) */}
+              {/* Delete the live Shopify product (keeps saved data to re-deploy).
+                  Temporarily hidden: deploys now update in place (no delete) so
+                  ordered products keep their Shopify ID. `false &&` disables the
+                  button without removing the wiring. */}
               {connected && canDelete && (
                 <Button
                   variant="outline"
@@ -2008,32 +2005,16 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
         <DialogContent className="sm:max-w-md border-white/10 bg-zinc-900 text-white">
           <DialogHeader>
             <DialogTitle>Lưu nháp trước khi đóng?</DialogTitle>
-            <DialogDescription className="text-white/60">
-              Bạn có thay đổi chưa lưu. Lưu nháp lại để lần sau mở lên còn nguyên, hoặc đóng mà không lưu.
-            </DialogDescription>
+            <DialogDescription className="text-white/60">Bạn có thay đổi chưa lưu. Lưu nháp lại để lần sau mở lên còn nguyên, hoặc đóng mà không lưu.</DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:gap-2">
-            <Button
-              variant="ghost"
-              onClick={() => setConfirmCloseOpen(false)}
-              disabled={saving}
-              className="text-white/70 hover:text-white"
-            >
+            <Button variant="ghost" onClick={() => setConfirmCloseOpen(false)} disabled={saving} className="text-white/70 hover:text-white">
               Hủy
             </Button>
-            <Button
-              variant="outline"
-              onClick={handleDiscardAndClose}
-              disabled={saving}
-              className="border-white/20 text-white/90 hover:bg-white/5 hover:text-white"
-            >
+            <Button variant="outline" onClick={handleDiscardAndClose} disabled={saving} className="border-white/20 text-white/90 hover:bg-white/5 hover:text-white">
               Đóng không lưu
             </Button>
-            <Button
-              onClick={handleSaveAndClose}
-              disabled={saving}
-              className="gap-2 bg-green-600 hover:bg-green-700 text-white"
-            >
+            <Button onClick={handleSaveAndClose} disabled={saving} className="gap-2 bg-green-600 hover:bg-green-700 text-white">
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               {saving ? "Đang lưu..." : "Lưu nháp rồi đóng"}
             </Button>
@@ -2043,22 +2024,20 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
 
       {/* Hidden picker used by "Thay ảnh" — replaces the targeted image's bytes
           while keeping its name (so classification/ordering is unchanged). */}
-      <input
-        ref={replaceInputRef}
-        type="file"
-        accept="image/png,image/jpeg,image/webp"
-        className="hidden"
-        onChange={onReplaceFilePicked}
-      />
+      <input ref={replaceInputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={onReplaceFilePicked} />
 
       {/* Add a brand-new image; the user names it to match the sort scheme. */}
-      <Dialog open={addImageOpen} onOpenChange={(open) => { setAddImageOpen(open); if (!open) setAddImageError(""); }}>
+      <Dialog
+        open={addImageOpen}
+        onOpenChange={(open) => {
+          setAddImageOpen(open);
+          if (!open) setAddImageError("");
+        }}
+      >
         <DialogContent className="sm:max-w-md border-white/10 bg-zinc-900 text-white">
           <DialogHeader>
             <DialogTitle>Thêm ảnh</DialogTitle>
-            <DialogDescription className="text-white/60">
-              Chọn ảnh và đặt tên theo quy ước để khớp thuật toán sắp xếp.
-            </DialogDescription>
+            <DialogDescription className="text-white/60">Chọn ảnh và đặt tên theo quy ước để khớp thuật toán sắp xếp.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
@@ -2069,15 +2048,16 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
                 onChange={(e) => setAddImageFile(e.target.files?.[0] ?? null)}
                 className="block w-full text-sm text-white/70 file:mr-3 file:rounded-md file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-white hover:file:bg-white/20"
               />
-              {addImageFile && (
-                <img src={URL.createObjectURL(addImageFile)} alt="preview" className="mt-2 h-28 rounded-md object-contain border border-white/10" />
-              )}
+              {addImageFile && <img src={URL.createObjectURL(addImageFile)} alt="preview" className="mt-2 h-28 rounded-md object-contain border border-white/10" />}
             </div>
             <div className="space-y-1.5">
               <Label className="text-white/80">Tên ảnh</Label>
               <Input
                 value={addImageName}
-                onChange={(e) => { setAddImageName(e.target.value); setAddImageError(""); }}
+                onChange={(e) => {
+                  setAddImageName(e.target.value);
+                  setAddImageError("");
+                }}
                 placeholder="vd: Mockup-Web-3"
                 className={`bg-white/5 text-white ${addImageError ? "border-red-500/60" : "border-white/20"}`}
               />
@@ -2089,10 +2069,19 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
               <div className="rounded-md bg-white/5 p-2 text-[11px] text-white/50 leading-relaxed">
                 <p className="text-white/70 mb-1">Quy ước tên (gallery & metafield):</p>
                 <ul className="space-y-0.5">
-                  <li><code className="text-blue-300">Mockup-Web-N</code> — ảnh gallery (N = số thứ tự)</li>
-                  <li><code className="text-blue-300">Mockup-Web-N-Standard</code> / <code className="text-blue-300">-Pro</code> — theo version</li>
-                  <li><code className="text-blue-300">Details-N</code> — metafield chi tiết</li>
-                  <li><code className="text-blue-300">Package-1-Standard</code> / <code className="text-blue-300">-Pro</code>, <code className="text-blue-300">Package-2</code> — ảnh đóng gói</li>
+                  <li>
+                    <code className="text-blue-300">Mockup-Web-N</code> — ảnh gallery (N = số thứ tự)
+                  </li>
+                  <li>
+                    <code className="text-blue-300">Mockup-Web-N-Standard</code> / <code className="text-blue-300">-Pro</code> — theo version
+                  </li>
+                  <li>
+                    <code className="text-blue-300">Details-N</code> — metafield chi tiết
+                  </li>
+                  <li>
+                    <code className="text-blue-300">Package-1-Standard</code> / <code className="text-blue-300">-Pro</code>, <code className="text-blue-300">Package-2</code> — ảnh
+                    đóng gói
+                  </li>
                 </ul>
               </div>
             </div>
@@ -2101,11 +2090,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
             <Button variant="ghost" onClick={() => setAddImageOpen(false)} className="text-white/70 hover:text-white">
               Hủy
             </Button>
-            <Button
-              onClick={confirmAddImage}
-              disabled={!addImageFile || !addImageName.trim()}
-              className="gap-2 bg-green-600 hover:bg-green-700 text-white"
-            >
+            <Button onClick={confirmAddImage} disabled={!addImageFile || !addImageName.trim()} className="gap-2 bg-green-600 hover:bg-green-700 text-white">
               <Plus className="h-4 w-4" /> Thêm
             </Button>
           </DialogFooter>

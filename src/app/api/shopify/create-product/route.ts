@@ -9,6 +9,7 @@ import {
   shopifyProductStorefrontUrl,
   isShopifyConfigured,
 } from "@/lib/shopify/client";
+import { updateShopifyProductInPlace } from "@/lib/shopify/update-in-place";
 import { runPostCreateSteps } from "@/lib/shopify/post-create";
 import { buildFormData, type ShopifyDeployRequest } from "@/lib/shopify/form-data";
 
@@ -139,10 +140,14 @@ export async function POST(request: Request) {
     // deployments on products they don't own; ownership/role enforced above.
     const service = createAdminServiceClient();
 
-    // We NEVER update a Shopify product in place — Shopify's product PUT
-    // appends images rather than replacing them. Instead, if a live product
-    // already exists, delete it and create a fresh one. Our DB row persists
-    // (form_data is the source of truth); only the Shopify side is recreated.
+    // Re-deploy updates the live product IN PLACE so it keeps its Shopify
+    // product id (and order history) — we never delete it, because deleting
+    // loses the id of products that have already been ordered.
+    //
+    // Shopify's product PUT appends images rather than replacing them and may
+    // recreate variant rows, so updateShopifyProductInPlace reconciles each
+    // resource explicitly (images diffed by url, variants matched by SKU,
+    // video old-deleted then re-added). First-time deploys still create fresh.
     const { data: existing } = await service
       .from("shopify_deployments")
       .select("id, shopify_product_id")
@@ -151,19 +156,12 @@ export async function POST(request: Request) {
 
     const hadLiveProduct = Boolean(existing?.shopify_product_id);
 
-    // Delete the previous Shopify product first (best-effort; ignore 404).
-    if (hadLiveProduct) {
-      try {
-        await deleteShopifyProduct(existing!.shopify_product_id as number);
-      } catch (err) {
-        const m = err instanceof Error ? err.message : String(err);
-        if (!m.includes("404")) {
-          console.error("Failed to delete previous Shopify product before recreate:", m);
-        }
-      }
-    }
-
-    const result = await createShopifyProduct(payload);
+    const result = hadLiveProduct
+      ? await updateShopifyProductInPlace({
+          shopifyProductId: existing!.shopify_product_id as number,
+          payload,
+        })
+      : await createShopifyProduct(payload);
     const isUpdate = hadLiveProduct; // reported to the UI as a re-deploy
 
     // Post-create: image metafields (Details/Package), laser-shaft variant

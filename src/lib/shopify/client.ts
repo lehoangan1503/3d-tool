@@ -75,6 +75,7 @@ export interface ShopifyCreatedVariant {
   title: string;
   option1: string;
   option2?: string;
+  sku?: string;
 }
 
 export interface ShopifyCreatedOption {
@@ -220,6 +221,87 @@ export async function getProductMediaGids(productId: number): Promise<Map<string
 
 export async function deleteProductImage(productId: number, imageId: number): Promise<void> {
   await shopifyRequest("DELETE", `/products/${productId}/images/${imageId}.json`);
+}
+
+// ── In-place update helpers (images / variants / video) ─────────────────────────
+
+/** List a product's gallery images (REST) with id, src and position. */
+export async function getProductImages(productId: number): Promise<ShopifyCreatedImage[]> {
+  const data = await shopifyRequest<{ images: ShopifyCreatedImage[] }>(
+    "GET",
+    `/products/${productId}/images.json?limit=250`
+  );
+  return data.images ?? [];
+}
+
+export interface ShopifyImageInput {
+  src: string;
+  alt: string;
+  position: number;
+}
+
+/** Add a single gallery image to an existing product → returns the created image. */
+export async function addProductImage(
+  productId: number,
+  image: ShopifyImageInput
+): Promise<ShopifyCreatedImage> {
+  const data = await shopifyRequest<{ image: ShopifyCreatedImage }>(
+    "POST",
+    `/products/${productId}/images.json`,
+    { image }
+  );
+  return data.image;
+}
+
+/** List a product's variants (REST) — id + sku for matching on re-deploy. */
+export async function getProductVariants(productId: number): Promise<ShopifyCreatedVariant[]> {
+  const data = await shopifyRequest<{ variants: ShopifyCreatedVariant[] }>(
+    "GET",
+    `/products/${productId}/variants.json?limit=250`
+  );
+  return data.variants ?? [];
+}
+
+/** A media node on a product (used to locate VIDEO media for replacement). */
+export interface ShopifyMediaNode {
+  id: string;
+  mediaContentType: string;
+}
+
+/** List ALL media on a product (image + video + 3d) with their GIDs and types. */
+export async function getProductMediaList(productId: number): Promise<ShopifyMediaNode[]> {
+  const data = await shopifyGraphQL<{
+    product: { media: { nodes: ShopifyMediaNode[] } } | null;
+  }>(
+    `query($id: ID!) {
+      product(id: $id) {
+        media(first: 100) { nodes { id mediaContentType } }
+      }
+    }`,
+    { id: `gid://shopify/Product/${productId}` }
+  );
+  return data.product?.media.nodes ?? [];
+}
+
+const DELETE_MEDIA_MUTATION = `
+mutation productDeleteMedia($productId: ID!, $mediaIds: [ID!]!) {
+  productDeleteMedia(productId: $productId, mediaIds: $mediaIds) {
+    deletedMediaIds
+    mediaUserErrors { field message }
+  }
+}`;
+
+/** Delete media (by GID) from a product — used to remove old video before re-adding. */
+export async function deleteProductMedia(productId: number, mediaIds: string[]): Promise<void> {
+  if (!mediaIds.length) return;
+  const data = await shopifyGraphQL<{
+    productDeleteMedia: { mediaUserErrors: Array<{ message: string }> };
+  }>(DELETE_MEDIA_MUTATION, {
+    productId: `gid://shopify/Product/${productId}`,
+    mediaIds,
+  });
+  const errors = data.productDeleteMedia.mediaUserErrors;
+  if (errors?.length) throw new Error(`productDeleteMedia: ${errors.map((e) => e.message).join("; ")}`);
 }
 
 // ── Video media ─────────────────────────────────────────────────────────────

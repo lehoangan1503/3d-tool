@@ -9,11 +9,8 @@ import JSZip from "jszip";
 import type { Product, LeatherColor, LeatherTextureType, ProductConfig, ThreeJSSettingsJson } from "@/types/product";
 import { MODEL_PATHS, settingsJsonToConfig } from "@/types/product";
 import type { ExtractorReference, ExtractorReferenceGroup } from "@/types/extractor";
-import { isCueFrame, isImageFrame, DEFAULT_CUE_SHADOW, DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT } from "@/types/extractor";
 import { SceneManager } from "@/lib/three/scene-manager";
-import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
-import { renderCueFrameViaStudio, hdriLayersToCueHdri, createCanvasGradient, drawImageWithObjectFit, drawSurfaceWithPan } from "@/components/editor/image-extractor";
-import { resolveStorageUrl } from "@/lib/resolve-storage-url";
+import { renderReferenceToBlob } from "@/components/editor/image-extractor";
 
 type ItemStatus = "pending" | "in_progress" | "done" | "failed";
 
@@ -28,120 +25,16 @@ interface Props {
   products: Product[];
 }
 
-/** Mirrors handleRenderReference in image-extractor exactly, but applies
- *  overrideSurfaceUrl to every cue instance so each product gets its own surface. */
-async function renderRefForProduct(
+/** Render one reference for a product, applying the product's surface to both the
+ *  cue 3D instances (overrideSurfaceUrl) and any dynamic-surface image frames
+ *  (productSurfaceUrl). Delegates to the shared renderReferenceToBlob so bulk export
+ *  and the editor stay in lock-step. */
+function renderRefForProduct(
   model: ReturnType<SceneManager["getModelForClone"]>,
   reference: ExtractorReference,
   overrideSurfaceUrl?: string,
 ): Promise<Blob> {
-  const canvasWidth  = reference.canvasWidth  ?? DEFAULT_CANVAS_WIDTH;
-  const canvasHeight = reference.canvasHeight ?? DEFAULT_CANVAS_HEIGHT;
-
-  const canvas = document.createElement("canvas");
-  canvas.width  = canvasWidth;
-  canvas.height = canvasHeight;
-  const ctx = canvas.getContext("2d")!;
-  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-
-  // Fresh studioEsm per reference — same pattern as handleRenderReference in image-extractor
-  const studioEsm = new ExtractorSceneManager(2048, 2048);
-  let legacyEsm: ExtractorSceneManager | null = null;
-
-  try {
-    for (const frame of reference.frames) {
-      if (isCueFrame(frame)) {
-        const shadow = frame.cue.studioShadow ?? DEFAULT_CUE_SHADOW;
-        let frameDataUrl: string;
-
-        if (shadow.studioConfigSnapshot) {
-          frameDataUrl = await renderCueFrameViaStudio(
-            model,
-            shadow.studioConfigSnapshot,
-            Math.round(frame.transform.width),
-            Math.round(frame.transform.height),
-            studioEsm,
-            shadow.wallsTransparent,
-            overrideSurfaceUrl,
-          );
-        } else {
-          if (!legacyEsm) {
-            legacyEsm = new ExtractorSceneManager(canvasWidth, canvasHeight);
-            await legacyEsm.loadHDRI(`/hdri/${encodeURIComponent("bloem_train_track_clear_2k.hdr")}`);
-            legacyEsm.setTransparentBackground(true);
-            if (model) legacyEsm.setModel(model);
-          }
-          legacyEsm.resize(Math.round(frame.transform.width), Math.round(frame.transform.height));
-          legacyEsm.setModelRotation(frame.cue.spinY);
-          legacyEsm.setCameraPhi(frame.cue.phi, 2);
-          legacyEsm.setCameraZoom(frame.cue.zoom);
-          legacyEsm.setModelOffset(frame.cue.offsetX, frame.cue.offsetY);
-          if (frame.cue.hdriLayers && frame.cue.hdriLayers.length > 0) {
-            await legacyEsm.setHdriLayers(frame.cue.hdriLayers, { applyCueEnv: true });
-            await legacyEsm.setCueHdri(hdriLayersToCueHdri(frame.cue.hdriLayers));
-          } else if (frame.cue.lightAngle !== undefined) {
-            legacyEsm.setHdriRotation(frame.cue.lightAngle);
-          }
-          legacyEsm.setFrameShadow(shadow);
-          legacyEsm.setFrameShadowQuality(4096);
-          legacyEsm.render();
-          frameDataUrl = legacyEsm.captureFrame("png");
-        }
-
-        const img = new Image();
-        img.src = frameDataUrl;
-        await new Promise<void>((r) => { img.onload = () => r(); });
-        ctx.save();
-        ctx.translate(frame.transform.x + frame.transform.width / 2, frame.transform.y + frame.transform.height / 2);
-        ctx.rotate((frame.transform.rotation * Math.PI) / 180);
-        ctx.drawImage(img, -frame.transform.width / 2, -frame.transform.height / 2, frame.transform.width, frame.transform.height);
-        ctx.restore();
-      } else if (isImageFrame(frame)) {
-        ctx.save();
-        ctx.translate(frame.transform.x + frame.transform.width / 2, frame.transform.y + frame.transform.height / 2);
-        ctx.rotate((frame.transform.rotation * Math.PI) / 180);
-        const hw = frame.transform.width / 2;
-        const hh = frame.transform.height / 2;
-        if (frame.imageSettings.backgroundEnabled) {
-          ctx.globalAlpha = frame.imageSettings.backgroundOpacity ?? 1;
-          if (frame.imageSettings.backgroundType === "gradient" && frame.imageSettings.backgroundGradient) {
-            ctx.fillStyle = createCanvasGradient(ctx, frame.imageSettings.backgroundGradient, frame.transform.width, frame.transform.height);
-          } else {
-            ctx.fillStyle = frame.imageSettings.backgroundColor;
-          }
-          ctx.fillRect(-hw, -hh, frame.transform.width, frame.transform.height);
-          ctx.globalAlpha = 1;
-        }
-        // Dynamic-surface frames draw this product's flat surface (overrideSurfaceUrl).
-        const srcUrl = frame.imageSettings.dynamicSurface
-          ? overrideSurfaceUrl ?? null
-          : frame.imageSettings.imageUrl;
-        if (srcUrl) {
-          const img = new Image();
-          img.crossOrigin = "anonymous";
-          img.src = resolveStorageUrl(srcUrl)!;
-          await new Promise<void>((r) => { img.onload = () => r(); img.onerror = () => r(); });
-          ctx.globalAlpha = frame.imageSettings.imageOpacity ?? 1;
-          ctx.globalCompositeOperation = (frame.imageSettings.blendMode === "normal" ? "source-over" : frame.imageSettings.blendMode) as GlobalCompositeOperation;
-          if (frame.imageSettings.dynamicSurface) {
-            drawSurfaceWithPan(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.surfacePan ?? { x: 0, y: 0, scale: 1 });
-          } else {
-            drawImageWithObjectFit(ctx, img, frame.transform.width, frame.transform.height, frame.imageSettings.objectFit ?? "cover");
-          }
-          ctx.globalAlpha = 1;
-          ctx.globalCompositeOperation = "source-over";
-        }
-        ctx.restore();
-      }
-    }
-  } finally {
-    studioEsm.dispose();
-    legacyEsm?.dispose();
-  }
-
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("blob failed")), "image/png");
-  });
+  return renderReferenceToBlob(model, reference, overrideSurfaceUrl, overrideSurfaceUrl ?? null);
 }
 
 async function fetchProductConfig(productId: string): Promise<ProductConfig | null> {

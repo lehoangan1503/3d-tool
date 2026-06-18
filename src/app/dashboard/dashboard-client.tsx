@@ -8,7 +8,7 @@ import { ProductsGrid } from "@/components/products/products-grid";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UserDropdown } from "@/components/user-dropdown";
 import { FirstLoginDialog } from "@/components/first-login-dialog";
-import { LogOut, ShieldCheck } from "lucide-react";
+import { LogOut, ShieldCheck, Rocket } from "lucide-react";
 import type { UserProfile } from "@/types/product";
 
 interface DashboardClientProps {
@@ -36,6 +36,14 @@ export function DashboardClient({ profile: initialProfile, showFirstLoginDialog,
           <div className="flex items-center justify-between h-18">
             <h1 className="text-xl font-semibold text-foreground">Cue Customizer</h1>
             <div className="flex items-center gap-2">
+              {isAdmin && (
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/auto-deploy">
+                    <Rocket className="h-4 w-4" />
+                    <span className="hidden sm:inline">Triển khai tự động</span>
+                  </Link>
+                </Button>
+              )}
               {isAdmin && (
                 <Button variant="outline" size="sm" asChild>
                   <Link href="/admin/dashboard">

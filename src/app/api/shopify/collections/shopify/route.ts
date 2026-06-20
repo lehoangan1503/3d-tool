@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getAllCustomCollections, getAllSmartCollections } from "@/lib/shopify/client";
+import { withStore } from "@/lib/shopify/store-context";
 
 /** A live collection fetched from the Shopify store (for the picker). */
 export interface ShopifyLiveCollection {
@@ -10,8 +11,8 @@ export interface ShopifyLiveCollection {
 
 // GET /api/shopify/collections/shopify — list collections live from the Shopify
 // store (custom + smart, deduped by title) so the editor can pick existing ones
-// without having to save them to the DB first.
-export async function GET() {
+// without having to save them to the DB first. Pass ?storeId= to target a store.
+export async function GET(request: Request) {
   try {
     const supabase = await createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -19,10 +20,10 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const [custom, smart] = await Promise.all([
-      getAllCustomCollections(),
-      getAllSmartCollections(),
-    ]);
+    const storeId = new URL(request.url).searchParams.get("storeId");
+    const [custom, smart] = await withStore(storeId, () =>
+      Promise.all([getAllCustomCollections(), getAllSmartCollections()]),
+    );
 
     // Dedup by lowercased title, keeping the first occurrence; sort by title.
     const seen = new Set<string>();

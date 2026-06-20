@@ -33,6 +33,7 @@ import { ensureFullConfig, computeVideoDuration, isCameraFixed } from "@/types/v
 import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import { renderReferenceToBlob } from "@/components/editor/image-extractor";
 import { uploadBlobToStorage } from "@/lib/supabase/upload";
+import { StoreSwitcher, useStore } from "@/components/shopify/store-switcher";
 import { createClient } from "@/lib/supabase/client";
 import { parseProductTitle } from "@/lib/shopify/parse-title";
 
@@ -74,6 +75,8 @@ interface DeployResult {
   storefrontUrl: string;
   title: string;
   isUpdate?: boolean;
+  /** Display name of the store this was deployed to. */
+  storeName?: string | null;
 }
 
 interface Props {
@@ -274,13 +277,35 @@ function SkillModal({ skill, onClose, onSaved, onDeleted }: { skill: ShopifySkil
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
-export function ShopifyDeployDialog({ product, sceneManager, deployment = null, canDelete = false, onDeploymentChange, onClose }: Props) {
+export function ShopifyDeployDialog({ product, sceneManager, deployment: initialDeployment = null, canDelete = false, onDeploymentChange, onClose }: Props) {
+  const { storeId, stores } = useStore();
+  const activeStoreName = stores.find((s) => s.id === storeId)?.name ?? null;
+  // The deployment shown reflects the CURRENTLY-SELECTED store. Starts from the
+  // server-provided default-store row, then re-fetched whenever the store changes.
+  const [deployment, setDeployment] = useState<ShopifyDeploymentSummary | null>(initialDeployment);
   const prefill = deployment?.form_data ?? null;
-  // "Connected" = a live Shopify product exists. A deployment row may persist
-  // after delete (keeps form_data) with a null id — that's NOT connected.
+  // "Connected" = a live Shopify product exists on the selected store. A row may
+  // persist after delete (keeps form_data) with a null id — that's NOT connected.
   const isConnected = Boolean(deployment?.shopify_product_id);
   const [connected, setConnected] = useState(isConnected);
   const isUpdateMode = connected;
+
+  // When the selected store changes, load THIS product's deployment on that store
+  // (or null → shows as not deployed for this store).
+  useEffect(() => {
+    if (!storeId) return;
+    let active = true;
+    fetch(`/api/shopify/deployment?productId=${product.id}&storeId=${encodeURIComponent(storeId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (!active) return;
+        const dep = (json?.deployment ?? null) as ShopifyDeploymentSummary | null;
+        setDeployment(dep);
+        setConnected(Boolean(dep?.shopify_product_id));
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [storeId, product.id]);
   // ── Data lists ──
   const [groups, setGroups] = useState<ExtractorReferenceGroup[]>([]);
   const [templates, setTemplates] = useState<VideoTemplateItem[]>([]);
@@ -408,16 +433,17 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
       });
   }, []);
 
-  // ── Load live collections from the Shopify store (custom + smart) ──
+  // ── Load live collections from the selected Shopify store (custom + smart) ──
   useEffect(() => {
     setLoadingShopifyCollections(true);
-    fetch("/api/shopify/collections/shopify")
+    const qs = storeId ? `?storeId=${encodeURIComponent(storeId)}` : "";
+    fetch(`/api/shopify/collections/shopify${qs}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data?.items) setShopifyCollections(data.items as ShopifyLiveCollection[]);
       })
       .finally(() => setLoadingShopifyCollections(false));
-  }, []);
+  }, [storeId]);
 
   // ── Load AI skills ──
   const loadSkills = useCallback(() => {
@@ -832,6 +858,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
       const customTextConfig = customTextOn ? { label: customTextLabel.trim(), example: customTextExample.trim() } : null;
       return {
         productId: product.id,
+        storeId: storeId ?? undefined,
         productCode: productCode.trim(),
         title: title.trim(),
         description,
@@ -854,6 +881,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     },
     [
       product.id,
+      storeId,
       productCode,
       title,
       description,
@@ -917,7 +945,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
       });
       const data = (await res.json()) as DeployResult & { error?: string };
       if (!res.ok) throw new Error(data.error ?? "Tạo sản phẩm thất bại");
-      setDeployResult(data);
+      setDeployResult({ ...data, storeName: activeStoreName });
       setConnected(true);
       // Notify the editor so its badge / button / links update immediately.
       onDeploymentChange?.({
@@ -935,7 +963,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
     } finally {
       setDeploying(false);
     }
-  }, [productCode, versions, wrapType, title, customTextMode, customTextLabel, customTextExample, renderedImages, uploadAssets, buildPayload, deployment, onDeploymentChange]);
+  }, [productCode, versions, wrapType, title, customTextMode, customTextLabel, customTextExample, renderedImages, uploadAssets, buildPayload, deployment, onDeploymentChange, activeStoreName]);
 
   // ── Save draft (persist form_data without touching Shopify) ──
   const handleSaveDraft = useCallback(async () => {
@@ -1129,11 +1157,17 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
             <h1 className="text-base font-semibold text-white truncate">{isUpdateMode ? "Đăng lại Shopify" : "Triển khai Shopify"}</h1>
             <p className="text-xs text-white/50 truncate">{product.name}</p>
           </div>
+          <div className="ml-2 shrink-0">
+            <StoreSwitcher />
+          </div>
         </div>
 
-        {/* When connected, show the live Shopify links in the header. */}
+        {/* When connected, show which store + the live Shopify links in the header. */}
         {connected && deployment && (
           <div className="hidden sm:flex items-center gap-3 ml-auto mr-2">
+            {activeStoreName && (
+              <span className="text-xs text-green-400 font-medium">Đã kết nối {activeStoreName}</span>
+            )}
             {deployment.admin_url && (
               <a href={deployment.admin_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300">
                 <ExternalLink className="h-3 w-3" /> Shopify Admin
@@ -1907,7 +1941,11 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment = null, 
               {deployResult && (
                 <div className="rounded-lg border border-green-500/30 bg-green-500/10 p-4 space-y-2">
                   <p className="text-sm font-semibold text-green-400 flex items-center gap-2">
-                    <Check className="h-4 w-4" /> {deployResult.isUpdate ? "Sản phẩm đã được đăng lại thành công!" : "Sản phẩm đã được tạo thành công!"}
+                    <Check className="h-4 w-4" />
+                    {deployResult.isUpdate ? "Sản phẩm đã được đăng lại thành công!" : "Sản phẩm đã được tạo thành công!"}
+                    {deployResult.storeName && (
+                      <span className="font-normal text-green-300/90">→ {deployResult.storeName}</span>
+                    )}
                   </p>
                   <p className="text-xs text-white/60">{deployResult.title}</p>
                   <div className="flex gap-2 flex-wrap">

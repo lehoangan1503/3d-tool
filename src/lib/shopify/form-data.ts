@@ -4,6 +4,8 @@ import type { ShopifyFormData } from "@/types/product";
 // Save-draft tolerates partial/incomplete values; deploy validates them.
 export interface ShopifyDeployRequest {
   productId: string;
+  /** Which Shopify store to deploy to. Omitted → the default store. */
+  storeId?: string;
   productCode: string;
   title: string;
   description: string;

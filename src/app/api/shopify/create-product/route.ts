@@ -12,6 +12,8 @@ import {
 import { updateShopifyProductInPlace } from "@/lib/shopify/update-in-place";
 import { runPostCreateSteps } from "@/lib/shopify/post-create";
 import { buildFormData, type ShopifyDeployRequest } from "@/lib/shopify/form-data";
+import { withStore, activeStore } from "@/lib/shopify/store-context";
+import { getStore } from "@/lib/shopify/stores";
 
 const PRODUCT_CODE_PATTERN = /^(n\d{2})-(\d{2})$/i;
 
@@ -39,6 +41,10 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json() as ShopifyDeployRequest;
+
+    // All Shopify API calls below run against the store selected in the request
+    // (defaults to the configured default store when storeId is omitted).
+    return await withStore(body.storeId, async () => {
 
     const {
       productId,
@@ -148,10 +154,12 @@ export async function POST(request: Request) {
     // recreate variant rows, so updateShopifyProductInPlace reconciles each
     // resource explicitly (images diffed by url, variants matched by SKU,
     // video old-deleted then re-added). First-time deploys still create fresh.
+    const deployStoreId = activeStore().id;
     const { data: existing } = await service
       .from("shopify_deployments")
       .select("id, shopify_product_id")
       .eq("product_id", productId)
+      .eq("store_id", deployStoreId)
       .maybeSingle();
 
     const hadLiveProduct = Boolean(existing?.shopify_product_id);
@@ -182,7 +190,7 @@ export async function POST(request: Request) {
     const storefrontUrl = shopifyProductStorefrontUrl(result.handle);
 
     if (existing) {
-      // Row exists (re-deploy) → point it at the freshly created product.
+      // Row exists (re-deploy) → point this store's row at the fresh product.
       const { error: updateError } = await service
         .from("shopify_deployments")
         .update({
@@ -191,7 +199,6 @@ export async function POST(request: Request) {
           admin_url: adminUrl,
           storefront_url: storefrontUrl,
           title: result.title,
-          form_data: formData,
         })
         .eq("id", existing.id);
       if (updateError) console.error("Failed to update shopify_deployment:", updateError.message);
@@ -200,12 +207,12 @@ export async function POST(request: Request) {
         .from("shopify_deployments")
         .insert({
           product_id: productId,
+          store_id: deployStoreId,
           shopify_product_id: result.id,
           shopify_handle: result.handle,
           admin_url: adminUrl,
           storefront_url: storefrontUrl,
           title: result.title,
-          form_data: formData,
           created_by: user.id,
         });
       if (insertError) {
@@ -214,6 +221,16 @@ export async function POST(request: Request) {
         console.error("Failed to record shopify_deployment:", insertError.message);
       }
     }
+
+    // Persist the SHARED draft (one per product, store-independent) so the form
+    // reopens prefilled regardless of which store is selected next time.
+    const { error: draftError } = await service
+      .from("shopify_drafts")
+      .upsert(
+        { product_id: productId, form_data: formData, title: formData.title || null, updated_by: user.id },
+        { onConflict: "product_id" },
+      );
+    if (draftError) console.error("Failed to save shared draft:", draftError.message);
 
     // Persist any new collections for the picker (best-effort).
     if (collectionList.length) {
@@ -240,6 +257,7 @@ export async function POST(request: Request) {
       storefrontUrl,
       title: result.title,
     });
+    });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Internal server error";
     console.error("POST /api/shopify/create-product error:", error);
@@ -263,7 +281,7 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const { productId } = await request.json() as { productId: string };
+    const { productId, storeId } = await request.json() as { productId: string; storeId?: string };
     if (!productId) {
       return NextResponse.json({ error: "productId is required" }, { status: 400 });
     }
@@ -284,11 +302,13 @@ export async function DELETE(request: Request) {
       );
     }
 
+    const targetStoreId = getStore(storeId)?.id ?? "main";
     const service = createAdminServiceClient();
     const { data: existing } = await service
       .from("shopify_deployments")
       .select("id, shopify_product_id")
       .eq("product_id", productId)
+      .eq("store_id", targetStoreId)
       .maybeSingle();
 
     if (!existing) {
@@ -298,7 +318,7 @@ export async function DELETE(request: Request) {
     // Delete from Shopify (ignore if it was already gone).
     if (existing.shopify_product_id) {
       try {
-        await deleteShopifyProduct(existing.shopify_product_id as number);
+        await withStore(storeId, () => deleteShopifyProduct(existing.shopify_product_id as number));
       } catch (err) {
         const m = err instanceof Error ? err.message : String(err);
         // 404 = already deleted on Shopify; treat as success and clear our link.

@@ -1,50 +1,50 @@
 /**
- * Shopify OAuth token manager — TypeScript port of shopify_refresh_token.py
- * Uses client_credentials grant to get a fresh access_token (~24h TTL).
- * Caches in memory; auto-refreshes 1 hour before expiry.
+ * Shopify token resolver — multi-store aware.
+ *
+ * Every store has its OWN OAuth app (clientId + clientSecret). We exchange them
+ * via the client_credentials grant for a short-lived Admin API access_token
+ * (~24h) and cache it per store domain, auto-refreshing before expiry.
  */
 
-const SHOPIFY_STORE    = process.env.SHOPIFY_STORE ?? "";
-const CLIENT_ID        = process.env.SHOPIFY_CLIENT_ID ?? "";
-const CLIENT_SECRET    = process.env.SHOPIFY_CLIENT_SECRET ?? "";
+import { activeStore } from "./store-context";
+import type { ShopifyStore } from "./stores";
 
-const BUFFER_MS = 60 * 60 * 1000; // refresh 1h before expiry
+// access_token cache keyed by store domain.
+const _cache = new Map<string, { token: string; expiresAt: number }>();
 
-let _cache: { token: string; expiresAt: number } | null = null;
+async function fetchOAuthToken(store: ShopifyStore): Promise<string> {
+  const cached = _cache.get(store.storeDomain);
+  if (cached && Date.now() < cached.expiresAt) return cached.token;
 
-export async function getShopifyToken(): Promise<string> {
-  if (_cache && Date.now() < _cache.expiresAt) return _cache.token;
+  if (!store.clientId || !store.clientSecret) {
+    throw new Error(`Store "${store.id}" is missing clientId/clientSecret`);
+  }
 
-  const shopName = SHOPIFY_STORE.replace(/\.myshopify\.com$/, "");
-  const url = `https://${shopName}.myshopify.com/admin/oauth/access_token`;
-
+  const url = `https://${store.storeDomain}/admin/oauth/access_token`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "client_credentials",
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
+      client_id: store.clientId,
+      client_secret: store.clientSecret,
     }).toString(),
     signal: AbortSignal.timeout(30_000),
   });
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Shopify token request failed (${res.status}): ${text}`);
+    throw new Error(`Shopify token request failed for ${store.storeDomain} (${res.status}): ${text}`);
   }
 
-  const data = await res.json() as { access_token: string; expires_in?: number; scope?: string };
-  if (data.scope) console.log(`[shopify-token] scopes: ${data.scope}`);
-
+  const data = (await res.json()) as { access_token: string; expires_in?: number };
   const expiresIn = data.expires_in ?? 86400;
-  _cache = { token: data.access_token, expiresAt: Date.now() + (expiresIn - 3600) * 1000 };
-  console.log(`[shopify-token] fetched new token (expires in ${expiresIn}s)`);
-  return _cache.token;
+  _cache.set(store.storeDomain, { token: data.access_token, expiresAt: Date.now() + (expiresIn - 3600) * 1000 });
+  console.log(`[shopify-token] fetched token for ${store.storeDomain} (expires in ${expiresIn}s)`);
+  return data.access_token;
 }
 
-export function isOAuthConfigured(): boolean {
-  return Boolean(CLIENT_ID && CLIENT_SECRET);
+/** Resolve the Admin API token for the currently-active store. */
+export async function getShopifyToken(): Promise<string> {
+  return fetchOAuthToken(activeStore());
 }
-
-

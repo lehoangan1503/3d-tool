@@ -78,11 +78,22 @@ export default async function ProductEditorPage({ params }: PageProps) {
   // see it (admin: always; mode: own product).
   let deployment: ShopifyDeploymentSummary | null = null;
   if (isAdmin || (isMode && isOwner)) {
-    const { data: dep } = await supabase
-      .from("shopify_deployments")
-      .select("shopify_product_id, admin_url, storefront_url, title, form_data, created_by, created_at")
-      .eq("product_id", id)
-      .maybeSingle();
+    // Initial deployment for the default store + the SHARED draft (form_data,
+    // store-independent). The dialog re-fetches per selected store client-side.
+    const [{ data: dep }, { data: draft }] = await Promise.all([
+      supabase
+        .from("shopify_deployments")
+        .select("shopify_product_id, admin_url, storefront_url, title, created_by, created_at")
+        .eq("product_id", id)
+        .eq("store_id", "main")
+        .maybeSingle(),
+      supabase
+        .from("shopify_drafts")
+        .select("form_data")
+        .eq("product_id", id)
+        .maybeSingle(),
+    ]);
+    const sharedFormData = (draft?.form_data as ShopifyDeploymentSummary["form_data"]) ?? null;
 
     if (dep) {
       let creatorNickname: string | null = null;
@@ -99,10 +110,23 @@ export default async function ProductEditorPage({ params }: PageProps) {
         admin_url: dep.admin_url,
         storefront_url: dep.storefront_url,
         title: dep.title,
-        form_data: (dep.form_data as ShopifyDeploymentSummary["form_data"]) ?? null,
+        form_data: sharedFormData,
         created_by: dep.created_by,
         creator_nickname: creatorNickname,
         created_at: dep.created_at,
+      };
+    } else if (sharedFormData) {
+      // Shared draft exists but not deployed to the default store — surface the
+      // draft (no live links) so the form prefills.
+      deployment = {
+        shopify_product_id: null,
+        admin_url: null,
+        storefront_url: null,
+        title: null,
+        form_data: sharedFormData,
+        created_by: null,
+        creator_nickname: null,
+        created_at: null,
       };
     }
   }

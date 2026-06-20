@@ -10,6 +10,7 @@ import { RunProgress } from "@/components/auto-deploy/run-progress";
 import { emptyRunConfig, isRunConfigValid, type AutoDeployConfig } from "@/lib/auto-deploy/types";
 import { canDeployProduct } from "@/lib/auto-deploy/group-products";
 import { useRunDriver } from "@/lib/auto-deploy/use-run-driver";
+import { StoreSwitcher, useStore } from "@/components/shopify/store-switcher";
 
 type Step = "select" | "config" | "run";
 
@@ -72,6 +73,8 @@ export function AutoDeployClient() {
   }, [load]);
 
   const driver = useRunDriver();
+  const { storeId, stores } = useStore();
+  const activeStoreName = stores.find((s) => s.id === storeId)?.name ?? null;
 
   // Resolve the selected ids into products that can actually be deployed
   // (no-code products are unselectable, but guard anyway).
@@ -83,22 +86,26 @@ export function AutoDeployClient() {
   const selectedCount = selectedIds.size;
   const configValid = isRunConfigValid(config);
 
+  // The active store is injected into the config at run time.
   const handleRun = useCallback(() => {
     setStep("run");
-    void driver.start(selectedProducts, config);
-  }, [driver, selectedProducts, config]);
+    void driver.start(selectedProducts, { ...config, storeId });
+  }, [driver, selectedProducts, config, storeId]);
 
   const handleRetry = useCallback(() => {
-    void driver.retryFailed(config);
-  }, [driver, config]);
+    void driver.retryFailed({ ...config, storeId });
+  }, [driver, config, storeId]);
 
   return (
     <div className="flex flex-col gap-6 max-w-6xl mx-auto px-4 py-8">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold">Triển khai tự động</h1>
-        <p className="text-sm text-muted-foreground">
-          Chọn sản phẩm, chọn nhóm khung &amp; cấu hình Shopify, rồi chạy tự động: render → tạo nội dung AI → tạo sản phẩm Shopify.
-        </p>
+      <header className="flex items-start justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-bold">Triển khai tự động</h1>
+          <p className="text-sm text-muted-foreground">
+            Chọn sản phẩm, chọn nhóm khung &amp; cấu hình Shopify, rồi chạy tự động: render → tạo nội dung AI → tạo sản phẩm Shopify.
+          </p>
+        </div>
+        <StoreSwitcher />
       </header>
 
       {step === "select" && (
@@ -178,6 +185,7 @@ export function AutoDeployClient() {
               items={driver.items}
               running={driver.running}
               finished={driver.finished}
+              storeName={activeStoreName}
               onRetryFailed={handleRetry}
             />
           </section>

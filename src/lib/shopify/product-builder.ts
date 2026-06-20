@@ -3,22 +3,10 @@
  * and parts of shopify_product_builder.py from the up_web_python tool.
  */
 
-// ── Base config ──────────────────────────────────────────────────────────────
+import { activeStore } from "./store-context";
+import type { SpecMetafieldMap } from "./stores";
 
-const SPEC_METAFIELDS: Record<string, Record<string, string>> = {
-  Standard: {
-    wrap: "gid://shopify/Metaobject/170152984713",
-    wrapless: "gid://shopify/Metaobject/181394309257",
-  },
-  Premium: {
-    wrap: "gid://shopify/Metaobject/170153181321",
-    wrapless: "gid://shopify/Metaobject/181394342025",
-  },
-  Pro: {
-    wrap: "gid://shopify/Metaobject/181394374793",
-    wrapless: "gid://shopify/Metaobject/181394833545",
-  },
-};
+// ── Base config ──────────────────────────────────────────────────────────────
 
 const BASE_VERSIONS: Record<string, { price: number; discount_percent: number }> = {
   Standard: { price: 154.5, discount_percent: 15 },
@@ -208,6 +196,12 @@ export interface VariantInput {
   /** Paid custom text adds a flat surcharge to every variant. */
   customTextPaid: boolean;
   baseSku: string;
+  /**
+   * The active store's cue_spec_variants metaobject GIDs. Store-specific — a
+   * missing version/wrap entry means that store has no metaobject for it, so we
+   * omit the metafield rather than reference a non-existent resource.
+   */
+  specMetafields: SpecMetafieldMap;
 }
 
 export interface ShopifyVariant {
@@ -225,7 +219,7 @@ export interface ShopifyVariant {
 }
 
 function generateVariants(input: VariantInput): ShopifyVariant[] {
-  const { versions, wrapType, laserShaft, customImage, customTextPaid, baseSku } = input;
+  const { versions, wrapType, laserShaft, customImage, customTextPaid, baseSku, specMetafields } = input;
   const variants: ShopifyVariant[] = [];
 
   for (const version of versions) {
@@ -245,7 +239,7 @@ function generateVariants(input: VariantInput): ShopifyVariant[] {
         sku += `-${slugify(laserOpt)}`;
       }
 
-      const metafieldGid = SPEC_METAFIELDS[version]?.[wrapType];
+      const metafieldGid = specMetafields[version]?.[wrapType];
 
       const variant: ShopifyVariant = {
         option1: version,
@@ -420,6 +414,9 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
     customImage,
     customTextPaid,
     baseSku: productCode,
+    // Resolved from the store active for this request (set via withStore() in
+    // the deploy route). Empty for stores that haven't configured their GIDs.
+    specMetafields: activeStore().specMetafields,
   });
 
   // Classify images by name → gallery (product) images vs metafield images.

@@ -8,9 +8,12 @@ import { CreateProductDialog } from "@/components/products/create-product-dialog
 import { ProductCard } from "@/components/products/product-card";
 import { BulkExportDialog } from "@/components/products/bulk-export-dialog";
 import type { Product, ProductType } from "@/types/product";
+import { productPrefix, NO_CODE_GROUP } from "@/lib/auto-deploy/group-products";
+import { useStore } from "@/components/shopify/store-switcher";
 
 type FilterType = "all" | ProductType;
 type SortOrder = "asc" | "desc" | null;
+const PREFIX_ALL = "__all__";
 
 const PAGE_SIZE = 20;
 
@@ -34,7 +37,13 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
   const [sortOrder, setSortOrder] = useState<SortOrder>(null);
   const [myOnly, setMyOnly] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // nXX tag filter, applied client-side over loaded products. Persists across searches.
+  const [prefixFilter, setPrefixFilter] = useState<string>(PREFIX_ALL);
+  const { storeId } = useStore();
   const offsetRef = useRef(0);
+  // Remembers that the user pressed "Load All" so a store switch re-loads ALL
+  // pages (not just page 1). Reset when search/filter/sort/myOnly change.
+  const loadedAllRef = useRef(false);
   const observerRef = useRef<IntersectionObserver | null>(null);
 
   // Debounce search
@@ -52,6 +61,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
       if (currentType !== "all") params.set("type", currentType);
       if (currentSort) params.set("sort", currentSort);
       if (currentMyOnly) params.set("owner", "me");
+      if (storeId) params.set("storeId", storeId);
 
       const res = await fetch(`/api/products?${params}`);
       if (!res.ok) throw new Error("Failed");
@@ -66,15 +76,77 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
       setIsLoading(false);
       setIsFetchingMore(false);
     }
-  }, []);
+  }, [storeId]);
 
-  // Reset + refetch when search/filter/sort/myOnly changes
+  // Walk every page for the current filters/store, starting at `fromOffset` with
+  // `seed` already-loaded items. Returns the full accumulated list.
+  const loadAllPages = useCallback(async (seed: Product[], fromOffset: number): Promise<Product[]> => {
+    let accumulated = [...seed];
+    let currentOffset = fromOffset;
+    let knownTotal = total;
+    while (true) {
+      const params = new URLSearchParams({ limit: "50", offset: String(currentOffset) });
+      if (debouncedSearch) params.set("search", debouncedSearch);
+      if (typeFilter !== "all") params.set("type", typeFilter);
+      if (sortOrder) params.set("sort", sortOrder);
+      if (myOnly) params.set("owner", "me");
+      if (storeId) params.set("storeId", storeId);
+
+      const res = await fetch(`/api/products?${params}`);
+      if (!res.ok) break;
+      const { items, total: t }: { items: Product[]; total: number } = await res.json();
+      knownTotal = t;
+      if (items.length === 0) break;
+      accumulated = [...accumulated, ...items];
+      currentOffset += items.length;
+      if (accumulated.length >= knownTotal) break;
+    }
+    setTotal(knownTotal);
+    return accumulated;
+  }, [total, debouncedSearch, typeFilter, sortOrder, myOnly, storeId]);
+
+  // Reset + refetch when search/filter/sort/myOnly change. A filter change is a
+  // fresh start, so the "loaded all" memory is cleared (back to paginated).
+  // Selection is intentionally NOT cleared so picks persist across searches/filters.
   useEffect(() => {
     offsetRef.current = 0;
+    loadedAllRef.current = false;
     setProducts([]);
-    setSelectedIds(new Set());
     fetchPage(0, debouncedSearch, typeFilter, sortOrder, myOnly, false);
-  }, [debouncedSearch, typeFilter, sortOrder, myOnly, fetchPage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch, typeFilter, sortOrder, myOnly]);
+
+  // When the STORE changes, reload — but if the user had pressed "Load All",
+  // re-load ALL pages so the full list persists across the switch (don't make
+  // them click Load All again). Otherwise just reload page 0.
+  const prevStoreRef = useRef<string | null>(null);
+  useEffect(() => {
+    // Ignore the initial resolution (null → first store id): the filter effect
+    // already did the startup load. Only react to switches between real stores.
+    if (!storeId) return;
+    if (prevStoreRef.current === null) {
+      prevStoreRef.current = storeId;
+      return;
+    }
+    if (prevStoreRef.current === storeId) return;
+    prevStoreRef.current = storeId;
+
+    offsetRef.current = 0;
+    setProducts([]);
+    if (loadedAllRef.current) {
+      setIsLoadingAll(true);
+      loadAllPages([], 0)
+        .then((all) => {
+          setProducts(all);
+          offsetRef.current = all.length;
+        })
+        .catch((e) => console.error("Failed to reload all on store switch:", e))
+        .finally(() => setIsLoadingAll(false));
+    } else {
+      fetchPage(0, debouncedSearch, typeFilter, sortOrder, myOnly, false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId]);
 
   const hasMore = products.length < total;
 
@@ -119,41 +191,34 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
     });
   }, []);
 
-  const selectAll = useCallback(() => {
-    setSelectedIds(new Set(products.map((p) => p.id)));
-  }, [products]);
-
-  const deselectAll = useCallback(() => {
-    setSelectedIds(new Set());
+  // Add/remove only the currently-visible (prefix-filtered) products, leaving
+  // selections made under other tags untouched.
+  const selectAll = useCallback((visible: Product[]) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const p of visible) next.add(p.id);
+      return next;
+    });
   }, []);
 
-  // Load all remaining pages, then optionally select all
+  const deselectAll = useCallback((visible: Product[]) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const p of visible) next.delete(p.id);
+      return next;
+    });
+  }, []);
+
+  // Walk every page for the current filters/store, starting at `fromOffset`
+  // with `seed` already-loaded items. Returns the full accumulated list.
+  // Load all remaining pages, then optionally select all.
   const handleLoadAll = useCallback(async (andSelectAll = false) => {
     setIsLoadingAll(true);
+    loadedAllRef.current = true; // remember across store switches
     try {
-      let accumulated = [...products];
-      let currentOffset = products.length;
-      const knownTotal = total;
-
-      while (currentOffset < knownTotal) {
-        const params = new URLSearchParams({ limit: "50", offset: String(currentOffset) });
-        if (debouncedSearch) params.set("search", debouncedSearch);
-        if (typeFilter !== "all") params.set("type", typeFilter);
-        if (sortOrder) params.set("sort", sortOrder);
-        if (myOnly) params.set("owner", "me");
-
-        const res = await fetch(`/api/products?${params}`);
-        if (!res.ok) break;
-        const { items }: { items: Product[] } = await res.json();
-        if (items.length === 0) break;
-
-        accumulated = [...accumulated, ...items];
-        currentOffset += items.length;
-      }
-
+      const accumulated = await loadAllPages(products, products.length);
       setProducts(accumulated);
       offsetRef.current = accumulated.length;
-
       if (andSelectAll) {
         setSelectedIds(new Set(accumulated.map((p) => p.id)));
       }
@@ -162,7 +227,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
     } finally {
       setIsLoadingAll(false);
     }
-  }, [products, total, debouncedSearch, typeFilter, sortOrder, myOnly]);
+  }, [products, loadAllPages]);
 
   // Clone all selected products sequentially
   const handleCloneSelected = useCallback(async () => {
@@ -199,8 +264,26 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
     { value: "desc", label: "Z-A" },
   ];
 
-  const hasActiveFilter = debouncedSearch || typeFilter !== "all" || myOnly;
-  const allLoadedSelected = products.length > 0 && selectedIds.size === products.length;
+  // nXX tags derived from loaded products (sorted; uncoded bucket last).
+  const prefixTags = (() => {
+    const set = new Set<string>();
+    for (const p of products) set.add(productPrefix(p) ?? NO_CODE_GROUP);
+    const coded = [...set].filter((k) => k !== NO_CODE_GROUP).sort((a, b) => a.localeCompare(b));
+    if (set.has(NO_CODE_GROUP)) coded.push(NO_CODE_GROUP);
+    return coded;
+  })();
+
+  const visibleProducts =
+    prefixFilter === PREFIX_ALL
+      ? products
+      : products.filter((p) => (productPrefix(p) ?? NO_CODE_GROUP) === prefixFilter);
+
+  const hasActiveFilter = debouncedSearch || typeFilter !== "all" || myOnly || prefixFilter !== PREFIX_ALL;
+  // Select-all now targets the currently-visible (prefix-filtered) set so other
+  // tabs' selections survive.
+  const selectableVisible = visibleProducts;
+  const selectedVisibleCount = selectableVisible.filter((p) => selectedIds.has(p.id)).length;
+  const allLoadedSelected = selectableVisible.length > 0 && selectedVisibleCount === selectableVisible.length;
 
   return (
     <div>
@@ -260,8 +343,8 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
             <Button
               variant={allLoadedSelected ? "default" : "outline"}
               size="sm"
-              onClick={allLoadedSelected ? deselectAll : selectAll}
-              disabled={products.length === 0}
+              onClick={() => (allLoadedSelected ? deselectAll(selectableVisible) : selectAll(selectableVisible))}
+              disabled={selectableVisible.length === 0}
               className="gap-1.5"
             >
               {allLoadedSelected ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
@@ -303,6 +386,83 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
             ))}
           </div>
         </div>
+
+        {/* nXX code tags — filter loaded products by their nXX prefix (client-side).
+            Each tag shows its total count plus a selected-count badge (when > 0),
+            mirroring the /auto-deploy product selector. */}
+        {prefixTags.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap mt-3">
+            {(() => {
+              const allSelectedInLoaded = products.filter((p) => selectedIds.has(p.id)).length;
+              return (
+                <Button
+                  variant={prefixFilter === PREFIX_ALL ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setPrefixFilter(PREFIX_ALL)}
+                >
+                  Tất cả mã
+                  <span className="ml-1 opacity-70">({products.length})</span>
+                  {allSelectedInLoaded > 0 && (
+                    <span className="ml-1 inline-flex items-center justify-center rounded-full bg-background/30 px-1.5 text-[10px]">
+                      {allSelectedInLoaded}
+                    </span>
+                  )}
+                </Button>
+              );
+            })()}
+            {prefixTags.map((tag) => {
+              const inTag = products.filter((p) => (productPrefix(p) ?? NO_CODE_GROUP) === tag);
+              const count = inTag.length;
+              const selectedInTag = inTag.filter((p) => selectedIds.has(p.id)).length;
+              return (
+                <Button
+                  key={tag}
+                  variant={prefixFilter === tag ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setPrefixFilter(tag)}
+                  className={tag === NO_CODE_GROUP ? "italic" : ""}
+                >
+                  {tag === NO_CODE_GROUP ? "Chưa có mã" : tag.toUpperCase()}
+                  <span className="ml-1 opacity-70">({count})</span>
+                  {selectedInTag > 0 && (
+                    <span className="ml-1 inline-flex items-center justify-center rounded-full bg-background/30 px-1.5 text-[10px]">
+                      {selectedInTag}
+                    </span>
+                  )}
+                </Button>
+              );
+            })}
+
+            {/* Choose-all / unchoose-all for the currently-visible (filtered) set. */}
+            <div className="w-px bg-border self-stretch mx-1" />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => selectAll(selectableVisible)}
+              disabled={selectableVisible.length === 0 || allLoadedSelected}
+              className="gap-1.5"
+            >
+              <CheckSquare className="h-3.5 w-3.5" />
+              Chọn tất cả
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => deselectAll(selectableVisible)}
+              disabled={selectedVisibleCount === 0}
+              className="gap-1.5"
+            >
+              <Square className="h-3.5 w-3.5" />
+              Bỏ chọn
+            </Button>
+
+            {hasMore && (
+              <span className="text-[11px] text-muted-foreground ml-1">
+                (Tải tất cả để thấy đủ mã)
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Grid */}
@@ -317,7 +477,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
         <div className="flex justify-center py-20">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
-      ) : products.length === 0 ? (
+      ) : visibleProducts.length === 0 ? (
         hasActiveFilter ? (
           <div className="text-center py-16 bg-card rounded-xl border">
             <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 rounded-full bg-muted">
@@ -339,7 +499,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
       ) : (
         <>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {products.map((product) => (
+            {visibleProducts.map((product) => (
               <ProductCard
                 key={product.id}
                 product={product}
@@ -351,8 +511,9 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
             ))}
           </div>
 
-          {/* Infinite scroll sentinel */}
-          {hasMore && !isLoadingAll && (
+          {/* Infinite scroll sentinel — disabled while a prefix tag is active so
+              the client-side filter shows a complete, stable set. */}
+          {hasMore && !isLoadingAll && prefixFilter === PREFIX_ALL && (
             <div ref={sentinelRef} className="py-8 flex justify-center">
               {isFetchingMore && <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />}
             </div>

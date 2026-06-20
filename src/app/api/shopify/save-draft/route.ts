@@ -57,35 +57,20 @@ export async function POST(request: Request) {
     // they don't own; ownership/role already enforced above.
     const service = createAdminServiceClient();
 
-    const { data: existing } = await service
-      .from("shopify_deployments")
-      .select("id")
-      .eq("product_id", productId)
-      .maybeSingle();
-
-    if (existing) {
-      // Update ONLY the draft snapshot — never touch shopify_product_id / urls
-      // so an already-live product is left untouched if this is ever called.
-      const { error: updateError } = await service
-        .from("shopify_deployments")
-        .update({ form_data: formData, title: formData.title || null })
-        .eq("id", existing.id);
-      if (updateError) {
-        return NextResponse.json({ error: updateError.message }, { status: 500 });
-      }
-    } else {
-      const { error: insertError } = await service
-        .from("shopify_deployments")
-        .insert({
+    // The draft is SHARED across stores — one row per product in shopify_drafts.
+    const { error: upsertError } = await service
+      .from("shopify_drafts")
+      .upsert(
+        {
           product_id: productId,
-          shopify_product_id: null,
           form_data: formData,
           title: formData.title || null,
-          created_by: user.id,
-        });
-      if (insertError) {
-        return NextResponse.json({ error: insertError.message }, { status: 500 });
-      }
+          updated_by: user.id,
+        },
+        { onConflict: "product_id" },
+      );
+    if (upsertError) {
+      return NextResponse.json({ error: upsertError.message }, { status: 500 });
     }
 
     // Persist any new collections for the picker (best-effort) — same as deploy.

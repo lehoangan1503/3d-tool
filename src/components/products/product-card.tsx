@@ -11,6 +11,7 @@ import { Trash2, ArrowRight, ImageOff, ShoppingBag } from "lucide-react";
 import type { Product } from "@/types/product";
 import { LEATHER_COLORS, isLeatherLikeType } from "@/types/product";
 import { ProductPreviewDialog } from "./product-preview-dialog";
+import { useStoreOptional } from "@/components/shopify/store-switcher";
 
 interface ProductCardProps {
   product: Product;
@@ -28,6 +29,10 @@ export function ProductCard({ product, currentUserId, onDeleted, selected, onTog
   const isOwner = product.user_id === currentUserId;
   const ownerDisplay = product.owner_nickname || product.owner_email || "";
   const deployment = product.shopify_deployment ?? null;
+  // The badge reflects the currently-selected store (the API returns only that
+  // store's deployment). Show the store name so it's clear WHERE it's connected.
+  const storeCtx = useStoreOptional();
+  const storeName = storeCtx?.stores.find((s) => s.id === storeCtx.storeId)?.name ?? null;
 
   async function handleDelete(e: React.MouseEvent) {
     e.preventDefault();
@@ -110,7 +115,7 @@ export function ProductCard({ product, currentUserId, onDeleted, selected, onTog
           {deployment && (
             <Badge variant="success" className="w-fit mt-0.5">
               <ShoppingBag className="h-3 w-3" />
-              Đã kết nối Shopify
+              {storeName ? `Đã kết nối ${storeName}` : "Đã kết nối Shopify"}
             </Badge>
           )}
           {deployment?.creator_nickname && (

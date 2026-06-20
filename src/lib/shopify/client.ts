@@ -4,21 +4,17 @@
  * Token is cached in token.ts and auto-refreshed when expired.
  */
 
-import { getShopifyToken, isOAuthConfigured } from "./token";
-
-const SHOPIFY_STORE = process.env.SHOPIFY_STORE ?? "";
-const SHOPIFY_STATIC_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN ?? "";
-const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION ?? "2025-10";
-
-console.log(`[shopify-client] store: ${SHOPIFY_STORE} | oauth: ${isOAuthConfigured()}`);
+import { getShopifyToken } from "./token";
+import { activeStore } from "./store-context";
+import { getStores } from "./stores";
 
 function shopifyUrl(path: string): string {
-  return `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}${path}`;
+  const store = activeStore();
+  return `https://${store.storeDomain}/admin/api/${store.apiVersion}${path}`;
 }
 
 async function getToken(): Promise<string> {
-  if (isOAuthConfigured()) return getShopifyToken();
-  return SHOPIFY_STATIC_TOKEN;
+  return getShopifyToken();
 }
 
 async function shopifyRequest<T>(
@@ -488,13 +484,14 @@ export const publishCollectionToAllChannels = (collectionId: number) =>
   publishToAllChannels(`gid://shopify/Collection/${collectionId}`);
 
 export function shopifyProductAdminUrl(productId: number): string {
-  return `https://${SHOPIFY_STORE}/admin/products/${productId}`;
+  return `https://${activeStore().storeDomain}/admin/products/${productId}`;
 }
 
 export function shopifyProductStorefrontUrl(handle: string): string {
-  return `https://${SHOPIFY_STORE}/products/${handle}`;
+  return `https://${activeStore().storeDomain}/products/${handle}`;
 }
 
 export function isShopifyConfigured(): boolean {
-  return Boolean(SHOPIFY_STORE && (isOAuthConfigured() || SHOPIFY_STATIC_TOKEN));
+  // Configured when at least one store has usable OAuth credentials.
+  return getStores().some((s) => s.clientId && s.clientSecret);
 }

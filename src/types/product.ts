@@ -93,6 +93,8 @@ export interface ShopifyFormData {
 export interface ShopifyDeployment {
   id: string;
   product_id: string;
+  /** Which Shopify store this deployment row belongs to. */
+  store_id?: string;
   shopify_product_id: number | null;
   shopify_handle: string | null;
   admin_url: string | null;
@@ -112,7 +114,8 @@ export interface ShopifyDeploymentSummary {
   title: string | null;
   created_by: string | null;
   creator_nickname: string | null;
-  created_at: string;
+  /** Null when only a shared draft exists (not yet deployed to this store). */
+  created_at: string | null;
   form_data: ShopifyFormData | null;
 }
 

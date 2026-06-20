@@ -30,15 +30,22 @@ interface RunProgressProps {
   items: RunItem[];
   running: boolean;
   finished: boolean;
+  /** Display name of the store this run deploys to. */
+  storeName?: string | null;
   onRetryFailed?: () => void;
 }
 
-export function RunProgress({ items, running, finished, onRetryFailed }: RunProgressProps) {
+export function RunProgress({ items, running, finished, storeName, onRetryFailed }: RunProgressProps) {
   const doneCount = items.filter((i) => i.status === "done").length;
   const failedCount = items.filter((i) => i.status === "failed").length;
 
   return (
     <div className="flex flex-col gap-3">
+      {storeName && (
+        <p className="text-sm text-muted-foreground">
+          Triển khai đến store: <span className="font-medium text-foreground">{storeName}</span>
+        </p>
+      )}
       <div className="flex items-center justify-between">
         <span className="text-sm text-muted-foreground">
           {running && (
@@ -50,6 +57,7 @@ export function RunProgress({ items, running, finished, onRetryFailed }: RunProg
             <span>
               Hoàn thành: <span className="text-green-500">{doneCount} thành công</span>
               {failedCount > 0 && <span className="text-destructive"> · {failedCount} thất bại</span>}
+              {storeName && <span className="text-muted-foreground"> → {storeName}</span>}
             </span>
           )}
         </span>

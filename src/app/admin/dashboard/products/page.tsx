@@ -1,18 +1,9 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Package, ExternalLink } from "lucide-react";
+import { Package } from "lucide-react";
 import type { ShopifyDeployment } from "@/types/product";
-
-interface DeployedProductRow {
-  deployment: ShopifyDeployment;
-  productName: string;
-  productUserId: string | null;
-  creatorNickname: string | null;
-  creatorEmail: string | null;
-}
+import { DeployedProductsTable, type DeployedProductRow } from "./deployed-products-table";
 
 async function getDeployedProducts(): Promise<DeployedProductRow[]> {
   const supabase = await createServiceClient();
@@ -72,82 +63,10 @@ export default async function AdminProductsPage() {
         <CardTitle className="flex items-center gap-2 text-lg">
           <Package className="h-5 w-5" />
           Sản phẩm Shopify
-          <span className="ml-auto text-sm font-normal text-muted-foreground">
-            {rows.length} sản phẩm
-          </span>
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {rows.length === 0 ? (
-          <p className="text-sm text-muted-foreground py-4 text-center">
-            Chưa có sản phẩm nào được triển khai lên Shopify.
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left py-3 px-2 font-medium text-muted-foreground">Sản phẩm</th>
-                  <th className="text-left py-3 px-2 font-medium text-muted-foreground">Tiêu đề Shopify</th>
-                  <th className="text-left py-3 px-2 font-medium text-muted-foreground">Người tạo</th>
-                  <th className="text-left py-3 px-2 font-medium text-muted-foreground">Cập nhật</th>
-                  <th className="text-left py-3 px-2 font-medium text-muted-foreground">Liên kết</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.deployment.id} className="border-b last:border-0 hover:bg-muted/50">
-                    <td className="py-3 px-2">
-                      <Link
-                        href={`/dashboard/products/${r.deployment.product_id}`}
-                        className="text-primary hover:underline"
-                      >
-                        {r.productName}
-                      </Link>
-                    </td>
-                    <td className="py-3 px-2 text-muted-foreground">{r.deployment.title ?? "—"}</td>
-                    <td className="py-3 px-2">
-                      <Badge variant="outline">
-                        {r.creatorNickname || r.creatorEmail || "—"}
-                      </Badge>
-                    </td>
-                    <td className="py-3 px-2 text-muted-foreground">
-                      {new Date(r.deployment.updated_at).toLocaleDateString("vi-VN", {
-                        day: "2-digit",
-                        month: "2-digit",
-                        year: "numeric",
-                      })}
-                    </td>
-                    <td className="py-3 px-2">
-                      <div className="flex items-center gap-3">
-                        {r.deployment.admin_url && (
-                          <a
-                            href={r.deployment.admin_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                          >
-                            Admin <ExternalLink className="h-3 w-3" />
-                          </a>
-                        )}
-                        {r.deployment.storefront_url && (
-                          <a
-                            href={r.deployment.storefront_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                          >
-                            Store <ExternalLink className="h-3 w-3" />
-                          </a>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <DeployedProductsTable rows={rows} />
       </CardContent>
     </Card>
   );

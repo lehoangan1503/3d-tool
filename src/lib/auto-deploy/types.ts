@@ -33,6 +33,8 @@ export interface AutoDeployConfig {
   manualTags: string[];
   /** When set, render + upload a video per product and attach its URL. */
   videoTemplateId: string | null;
+  /** Target Shopify store id (from the store switcher); null → default store. */
+  storeId?: string | null;
 }
 
 export function emptyRunConfig(): AutoDeployConfig {

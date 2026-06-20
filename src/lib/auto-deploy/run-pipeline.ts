@@ -320,6 +320,7 @@ export async function runProductDeploy(
       : null;
   const payload: ShopifyDeployRequest = {
     productId: product.id,
+    storeId: config.storeId ?? undefined,
     productCode,
     title: content.title,
     description: content.description,

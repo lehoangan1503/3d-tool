@@ -175,11 +175,19 @@ export function BulkImageTab({ products }: Props) {
 
   const handleDownloadAll = useCallback(async () => {
     const zip = new JSZip();
+    const usedFolders = new Set<string>();
     for (const item of items) {
-      if (item.blobs) {
-        for (const { name, blob } of item.blobs) {
-          zip.file(name, blob);
-        }
+      if (!item.blobs || item.blobs.length === 0) continue;
+      // Each product gets its own folder, named after the product.
+      const baseFolder = (item.product.name ?? item.product.id).replace(/[^a-zA-Z0-9-_]/g, "_") || item.product.id;
+      let folderName = baseFolder;
+      let dup = 1;
+      while (usedFolders.has(folderName)) folderName = `${baseFolder}_${++dup}`;
+      usedFolders.add(folderName);
+      const folder = zip.folder(folderName);
+      if (!folder) continue;
+      for (const { name, blob } of item.blobs) {
+        folder.file(name, blob);
       }
     }
     const zipBlob = await zip.generateAsync({ type: "blob" });

@@ -324,12 +324,18 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
 
   const handleDownloadAll = useCallback(async () => {
     const zip = new JSZip();
+    const folders = new Map<string, JSZip>();
     for (const item of items) {
-      if (item.blob) {
-        const safeName = (item.product.name ?? item.product.id).replace(/[^a-zA-Z0-9-_]/g, "_");
-        const safeTpl = item.template.name.replace(/[^a-zA-Z0-9-_]/g, "_");
-        zip.file(`${safeName}_${safeTpl}.webm`, item.blob);
+      if (!item.blob) continue;
+      const safeName = (item.product.name ?? item.product.id).replace(/[^a-zA-Z0-9-_]/g, "_") || item.product.id;
+      // Each product gets its own folder; multiple templates land inside it.
+      let folder = folders.get(safeName);
+      if (!folder) {
+        folder = zip.folder(safeName) ?? zip;
+        folders.set(safeName, folder);
       }
+      const safeTpl = item.template.name.replace(/[^a-zA-Z0-9-_]/g, "_");
+      folder.file(`${safeName}_${safeTpl}.webm`, item.blob);
     }
     const zipBlob = await zip.generateAsync({ type: "blob" });
     const url = URL.createObjectURL(zipBlob);

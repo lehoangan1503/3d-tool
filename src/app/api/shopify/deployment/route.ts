@@ -36,7 +36,7 @@ export async function GET(request: Request) {
   const [{ data: dep }, { data: draft }] = await Promise.all([
     supabase
       .from("shopify_deployments")
-      .select("shopify_product_id, admin_url, storefront_url, title, created_by, created_at")
+      .select("shopify_product_id, admin_url, storefront_url, title, created_by, created_at, form_data")
       .eq("product_id", productId)
       .eq("store_id", storeId)
       .maybeSingle(),
@@ -47,7 +47,14 @@ export async function GET(request: Request) {
       .maybeSingle(),
   ]);
 
-  const formData = (draft?.form_data as ShopifyDeploymentSummary["form_data"]) ?? null;
+  // Prefer the shared draft, but fall back to the per-store deployment row's
+  // own form_data. Older deployments (and store2 rows) saved form_data on the
+  // deployment row and never wrote a shopify_drafts row, so a drafts-only read
+  // returns null → the form renders empty even though the data exists.
+  const formData =
+    (draft?.form_data as ShopifyDeploymentSummary["form_data"]) ??
+    (dep?.form_data as ShopifyDeploymentSummary["form_data"]) ??
+    null;
 
   // No live deployment on this store: still return the shared draft so the editor
   // can edit/deploy. shopify_product_id stays null → shows as "not deployed here".

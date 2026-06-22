@@ -83,7 +83,7 @@ export default async function ProductEditorPage({ params }: PageProps) {
     const [{ data: dep }, { data: draft }] = await Promise.all([
       supabase
         .from("shopify_deployments")
-        .select("shopify_product_id, admin_url, storefront_url, title, created_by, created_at")
+        .select("shopify_product_id, admin_url, storefront_url, title, created_by, created_at, form_data")
         .eq("product_id", id)
         .eq("store_id", "main")
         .maybeSingle(),
@@ -93,7 +93,12 @@ export default async function ProductEditorPage({ params }: PageProps) {
         .eq("product_id", id)
         .maybeSingle(),
     ]);
-    const sharedFormData = (draft?.form_data as ShopifyDeploymentSummary["form_data"]) ?? null;
+    // Prefer the shared draft, falling back to the deployment row's own
+    // form_data (older deploys never wrote a drafts row — see the deployment API).
+    const sharedFormData =
+      (draft?.form_data as ShopifyDeploymentSummary["form_data"]) ??
+      (dep?.form_data as ShopifyDeploymentSummary["form_data"]) ??
+      null;
 
     if (dep) {
       let creatorNickname: string | null = null;

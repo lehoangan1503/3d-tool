@@ -43,6 +43,7 @@ import type { Product, ProductConfig, LeatherColor, LeatherTextureType, ShopifyD
 import { DEFAULT_PRODUCT_CONFIG, configToSettingsJson, isLeatherLikeType } from "@/types/product";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { uploadToStorage } from "@/lib/supabase/upload";
+import { useStoreOptional } from "@/components/shopify/store-switcher";
 
 interface EditorClientProps {
   product: Product;
@@ -75,7 +76,61 @@ export function EditorClient({
   const [product, setProduct] = useState(initialProduct);
   // Held in state so the badge / button / header links update immediately after
   // a deploy or delete, without needing a page reload.
+  //
+  // initialDeployment is the SSR value for the "main" store — the server can't
+  // know the client's localStorage-persisted store at render time. When the
+  // active store is something else, that seed is wrong (e.g. shows "Cập nhật
+  // Shopify" for a product only deployed on main), so we reconcile below.
   const [deployment, setDeployment] = useState<ShopifyDeploymentSummary | null>(initialDeployment);
+  const storeCtx = useStoreOptional();
+  const activeStoreId = storeCtx?.storeId ?? null;
+  const storeResolving = storeCtx?.loading ?? false;
+
+  // Reconcile the deploy state with the ACTIVE store once the store context
+  // resolves. The SSR seed assumes "main"; for any other active store re-fetch
+  // this product's row so the button/badge reflect the right store from the
+  // first paint the user can act on — no flash between undeployed↔deployed.
+  // The store id whose deployment `deployment` is known-good for. The SSR seed
+  // is correct only for "main"; for any other store this stays null until the
+  // re-fetch lands, so the UI shows neutral state instead of flashing stale
+  // main-store data → resolved store data.
+  const [readyStoreId, setReadyStoreId] = useState<string | null>("main");
+  useEffect(() => {
+    if (storeResolving || !activeStoreId) return;
+    // The SSR value already reflects main; no round-trip needed.
+    if (activeStoreId === "main") { setReadyStoreId("main"); return; }
+    // Already reconciled for this store — nothing to do. (Checked here rather
+    // than via a ref so React Strict Mode's double-invoke doesn't permanently
+    // skip the fetch on the second run and leave the button stuck loading.)
+    if (readyStoreId === activeStoreId) return;
+    let active = true;
+    fetch(`/api/shopify/deployment?productId=${product.id}&storeId=${encodeURIComponent(activeStoreId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (!active) return;
+        setDeployment((json?.deployment ?? null) as ShopifyDeploymentSummary | null);
+        setReadyStoreId(activeStoreId);
+      })
+      .catch(() => { if (active) setReadyStoreId(activeStoreId); });
+    return () => { active = false; };
+  }, [activeStoreId, storeResolving, product.id, readyStoreId]);
+
+  // The deploy badge/button reflect the active store only once reconciled for it.
+  // While the store context is still resolving we DON'T trust the SSR seed (it's
+  // main-only) — otherwise a product deployed solely to another store flashes
+  // "Triển khai" → "Cập nhật". Once resolved, main needs no round-trip; any other
+  // store is ready only after its re-fetch lands (readyStoreId === activeStoreId).
+  //
+  // Once the context has finished resolving (storeResolving === false) we must
+  // ALWAYS end up ready — even if it resolved to a null store id (no provider /
+  // no stores configured), in which case the SSR main seed is the best we have.
+  // Otherwise the button would spin forever.
+  const deployStateReady =
+    !storeResolving &&
+    (activeStoreId === null ||
+      activeStoreId === "main" ||
+      readyStoreId === activeStoreId);
+  const shownDeployment = deployStateReady ? deployment : null;
   const [config, setConfig] = useState<ProductConfig>(initialConfig || DEFAULT_PRODUCT_CONFIG);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -422,8 +477,8 @@ export function EditorClient({
               ) : (
                 <p className="font-semibold text-base sm:text-lg truncate">{product.name}</p>
               )}
-              {deployment?.shopify_product_id && (
-                <a href={deployment.admin_url ?? "#"} target="_blank" rel="noopener noreferrer" className="shrink-0" title={deployment.title ?? "Sản phẩm Shopify"}>
+              {shownDeployment?.shopify_product_id && (
+                <a href={shownDeployment.admin_url ?? "#"} target="_blank" rel="noopener noreferrer" className="shrink-0" title={shownDeployment.title ?? "Sản phẩm Shopify"}>
                   <Badge variant="success">
                     <ShoppingBag className="h-3 w-3" />
                     Đã kết nối Shopify
@@ -467,11 +522,28 @@ export function EditorClient({
               variant="ghost"
               size="sm"
               onClick={() => setShowShopifyDeploy(true)}
-              title={deployment?.shopify_product_id ? "Cập nhật Shopify" : "Triển khai Shopify"}
+              disabled={!deployStateReady}
+              title={
+                !deployStateReady
+                  ? "Đang tải trạng thái Shopify..."
+                  : shownDeployment?.shopify_product_id
+                    ? "Cập nhật Shopify"
+                    : "Triển khai Shopify"
+              }
               className="h-8 sm:h-10 px-2 sm:px-3 text-xs sm:text-sm gap-1.5 text-green-400 hover:text-green-300 hover:bg-green-500/10"
             >
-              <ShoppingBag className="h-4 w-4 sm:h-5 sm:w-5" />
-              <span className="hidden sm:inline">{deployment?.shopify_product_id ? "Cập nhật Shopify" : "Triển khai Shopify"}</span>
+              {!deployStateReady ? (
+                <Loader2 className="h-4 w-4 sm:h-5 sm:w-5 animate-spin" />
+              ) : (
+                <ShoppingBag className="h-4 w-4 sm:h-5 sm:w-5" />
+              )}
+              <span className="hidden sm:inline">
+                {!deployStateReady
+                  ? "Đang tải..."
+                  : shownDeployment?.shopify_product_id
+                    ? "Cập nhật Shopify"
+                    : "Triển khai Shopify"}
+              </span>
             </Button>
           )}
           {isOwner ? (

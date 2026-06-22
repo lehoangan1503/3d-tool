@@ -39,7 +39,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // nXX tag filter, applied client-side over loaded products. Persists across searches.
   const [prefixFilter, setPrefixFilter] = useState<string>(PREFIX_ALL);
-  const { storeId } = useStore();
+  const { storeId, loading: storeLoading } = useStore();
   const offsetRef = useRef(0);
   // Remembers that the user pressed "Load All" so a store switch re-loads ALL
   // pages (not just page 1). Reset when search/filter/sort/myOnly change.
@@ -108,23 +108,35 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
   // Reset + refetch when search/filter/sort/myOnly change. A filter change is a
   // fresh start, so the "loaded all" memory is cleared (back to paginated).
   // Selection is intentionally NOT cleared so picks persist across searches/filters.
+  //
+  // Gate on the store context being resolved: storeId is null until
+  // /api/shopify/stores returns the persisted selection. Fetching before that
+  // would send no storeId → the API falls back to "main", so deployment badges
+  // (and per-store draft/saved data) load for the WRONG store and only correct
+  // after a manual switch. Waiting for storeLoading=false makes the very first
+  // fetch carry the right store, so badges persist across reload.
   useEffect(() => {
+    if (storeLoading) return;
     offsetRef.current = 0;
     loadedAllRef.current = false;
     setProducts([]);
     fetchPage(0, debouncedSearch, typeFilter, sortOrder, myOnly, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, typeFilter, sortOrder, myOnly]);
+  }, [debouncedSearch, typeFilter, sortOrder, myOnly, storeLoading]);
 
   // When the STORE changes, reload — but if the user had pressed "Load All",
   // re-load ALL pages so the full list persists across the switch (don't make
   // them click Load All again). Otherwise just reload page 0.
+  //
+  // prevStoreRef seeds to the first resolved storeId WITHOUT fetching: the
+  // filter effect above already does the startup load once storeLoading clears.
+  // This effect then fires only on genuine store-to-store switches.
   const prevStoreRef = useRef<string | null>(null);
   useEffect(() => {
-    // Ignore the initial resolution (null → first store id): the filter effect
-    // already did the startup load. Only react to switches between real stores.
-    if (!storeId) return;
+    if (storeLoading || !storeId) return;
     if (prevStoreRef.current === null) {
+      // Record the resolved store so the startup fetch (filter effect) isn't
+      // duplicated, but don't refetch here.
       prevStoreRef.current = storeId;
       return;
     }
@@ -146,7 +158,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
       fetchPage(0, debouncedSearch, typeFilter, sortOrder, myOnly, false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storeId]);
+  }, [storeId, storeLoading]);
 
   const hasMore = products.length < total;
 

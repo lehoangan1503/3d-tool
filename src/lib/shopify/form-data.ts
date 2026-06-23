@@ -1,4 +1,4 @@
-import type { ShopifyFormData } from "@/types/product";
+import type { ShopifyFormData, ShopifyVersionName } from "@/types/product";
 
 // The shared request body for both deploy (create-product) and save-draft.
 // Save-draft tolerates partial/incomplete values; deploy validates them.
@@ -15,7 +15,7 @@ export interface ShopifyDeployRequest {
   imageUrls: string[];
   imageNames?: string[];
   videoUrl?: string | null;
-  versions: Array<"Standard" | "Premium" | "Pro">;
+  versions: Array<ShopifyVersionName>;
   wrapType: "wrap" | "wrapless" | "";
   laserShaft: boolean;
   customImage?: boolean;

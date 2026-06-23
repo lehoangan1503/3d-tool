@@ -1,6 +1,6 @@
 import type { ShopifyWrapType } from "@/types/product";
 
-export type AutoDeployVersion = "Standard" | "Premium" | "Pro";
+export type AutoDeployVersion = "Standard" | "Premium" | "Pro" | "Lux";
 
 /** Custom-text label mode: off, free (no extra cost), or paid (+$20). */
 export type CustomTextMode = "none" | "free" | "paid";

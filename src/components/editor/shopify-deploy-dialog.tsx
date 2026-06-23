@@ -45,7 +45,7 @@ interface VideoTemplateItem {
   config: VideoStudioConfig;
 }
 
-type Version = "Standard" | "Premium" | "Pro";
+type Version = "Standard" | "Premium" | "Pro" | "Lux";
 type WrapType = "wrap" | "wrapless";
 
 interface RenderedImage {
@@ -1123,6 +1123,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     Standard: 154.5 + baseImageAdd + textPaidAdd,
     Premium: 229.5 + baseImageAdd + textPaidAdd,
     Pro: 299.5 + baseImageAdd + textPaidAdd,
+    Lux: 399.5 + baseImageAdd + textPaidAdd,
   };
 
   // `uploadingAssets` is shared by Deploy and Save; scope the deploy button's
@@ -1454,7 +1455,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
               <div>
                 <Label className="text-white/70 text-xs mb-2 block">Phiên bản</Label>
                 <div className="flex gap-2 flex-wrap">
-                  {(["Standard", "Premium", "Pro"] as Version[]).map((v) => (
+                  {(["Standard", "Premium", "Pro", "Lux"] as Version[]).map((v) => (
                     <ToggleBtn key={v} active={versions.includes(v)} onClick={() => toggleVersion(v)}>
                       {v}
                     </ToggleBtn>
@@ -1529,7 +1530,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
               <div className="rounded-lg bg-white/5 border border-white/10 p-3 text-xs text-white/50 space-y-1">
                 <p className="text-white/30 font-medium mb-2">Biến thể sẽ được tạo:</p>
                 {versions.length === 0 && <p className="text-yellow-400/60">Chưa chọn phiên bản</p>}
-                {(["Standard", "Premium", "Pro"] as Version[])
+                {(["Standard", "Premium", "Pro", "Lux"] as Version[])
                   .filter((v) => versions.includes(v))
                   .map((v) => {
                     const base = PRICES[v];

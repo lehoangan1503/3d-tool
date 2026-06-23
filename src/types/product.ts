@@ -49,7 +49,7 @@ export interface UserProfile {
 }
 
 // Shopify product versions / wrap options.
-export type ShopifyVersionName = "Standard" | "Premium" | "Pro";
+export type ShopifyVersionName = "Standard" | "Premium" | "Pro" | "Lux";
 export type ShopifyWrapType = "wrap" | "wrapless";
 
 export interface ShopifyCustomText {

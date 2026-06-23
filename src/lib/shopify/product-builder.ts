@@ -5,6 +5,7 @@
 
 import { activeStore } from "./store-context";
 import type { SpecMetafieldMap } from "./stores";
+import type { ShopifyVersionName } from "@/types/product";
 
 // ── Base config ──────────────────────────────────────────────────────────────
 
@@ -12,6 +13,9 @@ const BASE_VERSIONS: Record<string, { price: number; discount_percent: number }>
   Standard: { price: 154.5, discount_percent: 15 },
   Premium: { price: 229.5, discount_percent: 20 },
   Pro: { price: 299.5, discount_percent: 20 },
+  // Lux: matches the existing live Lux variants on Shopify ($399.50 final,
+  // compare-at $499.38 = 20% off; +$20 laser shaft as with other tiers).
+  Lux: { price: 399.5, discount_percent: 20 },
 };
 
 const PRICE_MODIFIER_LASER_SHAFT = 20;
@@ -189,7 +193,7 @@ export function classifyImages(images: NamedImage[], versions: string[]): Classi
 // ── Variant generation ────────────────────────────────────────────────────────
 
 export interface VariantInput {
-  versions: Array<"Standard" | "Premium" | "Pro">;
+  versions: Array<ShopifyVersionName>;
   wrapType: "wrap" | "wrapless";
   laserShaft: boolean;
   customImage: boolean;
@@ -299,7 +303,7 @@ export interface ProductInput {
   imageUrls: string[];
   /** Image reference names (parallel to imageUrls) used for classification. */
   imageNames?: string[];
-  versions: Array<"Standard" | "Premium" | "Pro">;
+  versions: Array<ShopifyVersionName>;
   wrapType: "wrap" | "wrapless";
   laserShaft: boolean;
   /** Custom_image label: price +$20, adds custom-upload tags, sets template_suffix */
@@ -402,7 +406,7 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
   }
 
   // Build variants
-  const TIER_ORDER = ["Standard", "Premium", "Pro"] as const;
+  const TIER_ORDER = ["Standard", "Premium", "Pro", "Lux"] as const;
   const sortedVersions = [...versions].sort(
     (a, b) => TIER_ORDER.indexOf(a) - TIER_ORDER.indexOf(b)
   );

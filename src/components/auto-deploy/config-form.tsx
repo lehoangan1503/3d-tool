@@ -27,7 +27,7 @@ interface AutoDeployConfigFormProps {
   onChange: (next: AutoDeployConfig) => void;
 }
 
-const ALL_VERSIONS: AutoDeployVersion[] = ["Standard", "Premium", "Pro"];
+const ALL_VERSIONS: AutoDeployVersion[] = ["Standard", "Premium", "Pro", "Lux"];
 const WRAP_OPTIONS: ShopifyWrapType[] = ["wrap", "wrapless"];
 
 export function AutoDeployConfigForm({ value, onChange }: AutoDeployConfigFormProps) {

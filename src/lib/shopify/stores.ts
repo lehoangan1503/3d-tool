@@ -18,7 +18,7 @@
  * which case the builder skips the cue_spec_variants metafield for the missing
  * version/wrap combination rather than referencing a non-existent resource).
  *
- * Shape: { Standard: { wrap, wrapless }, Premium: {...}, Pro: {...} }.
+ * Shape: { Standard: { wrap, wrapless }, Premium: {...}, Pro: {...}, Lux: {...} }.
  */
 export type SpecMetafieldMap = Record<string, Partial<Record<"wrap" | "wrapless", string>>>;
 
@@ -77,7 +77,7 @@ function normalizeDomain(domain: string): string {
   return d.endsWith(".myshopify.com") ? d : `${d}.myshopify.com`;
 }
 
-const SPEC_VERSIONS = ["Standard", "Premium", "Pro"] as const;
+const SPEC_VERSIONS = ["Standard", "Premium", "Pro", "Lux"] as const;
 const WRAP_KEYS = ["wrap", "wrapless"] as const;
 
 /**

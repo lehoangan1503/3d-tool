@@ -73,28 +73,28 @@ export function AutoDeployClient() {
   }, [load]);
 
   const driver = useRunDriver();
-  const { storeId, stores } = useStore();
+  const { storeId, stores, codeFormat } = useStore();
   const activeStoreName = stores.find((s) => s.id === storeId)?.name ?? null;
 
   // Resolve the selected ids into products that can actually be deployed
   // (no-code products are unselectable, but guard anyway).
   const selectedProducts = useMemo(
-    () => products.filter((p) => selectedIds.has(p.id) && canDeployProduct(p)),
-    [products, selectedIds],
+    () => products.filter((p) => selectedIds.has(p.id) && canDeployProduct(p, codeFormat)),
+    [products, selectedIds, codeFormat],
   );
 
   const selectedCount = selectedIds.size;
   const configValid = isRunConfigValid(config);
 
-  // The active store is injected into the config at run time.
+  // The active store (id + its product-code format) is injected at run time.
   const handleRun = useCallback(() => {
     setStep("run");
-    void driver.start(selectedProducts, { ...config, storeId });
-  }, [driver, selectedProducts, config, storeId]);
+    void driver.start(selectedProducts, { ...config, storeId, codeFormat });
+  }, [driver, selectedProducts, config, storeId, codeFormat]);
 
   const handleRetry = useCallback(() => {
-    void driver.retryFailed({ ...config, storeId });
-  }, [driver, config, storeId]);
+    void driver.retryFailed({ ...config, storeId, codeFormat });
+  }, [driver, config, storeId, codeFormat]);
 
   return (
     <div className="flex flex-col gap-6 max-w-6xl mx-auto px-4 py-8">
@@ -132,6 +132,7 @@ export function AutoDeployClient() {
                 products={products}
                 selectedIds={selectedIds}
                 onSelectionChange={setSelectedIds}
+                codeFormat={codeFormat}
               />
             )}
           </section>

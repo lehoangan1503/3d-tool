@@ -14,8 +14,8 @@ import { runPostCreateSteps } from "@/lib/shopify/post-create";
 import { buildFormData, type ShopifyDeployRequest } from "@/lib/shopify/form-data";
 import { withStore, activeStore } from "@/lib/shopify/store-context";
 import { getStore } from "@/lib/shopify/stores";
-
-const PRODUCT_CODE_PATTERN = /^(n\d{2})-(\d{2})$/i;
+import { getProductCodeFormat } from "@/lib/shopify/product-code";
+import { parseProductTitle } from "@/lib/shopify/parse-title";
 
 export async function POST(request: Request) {
   try {
@@ -77,7 +77,7 @@ export async function POST(request: Request) {
     // admin → any product; mode → own products only.
     const { data: productRow, error: prodError } = await supabase
       .from("products")
-      .select("id, user_id")
+      .select("id, user_id, name")
       .eq("id", productId)
       .single();
 
@@ -91,15 +91,24 @@ export async function POST(request: Request) {
       );
     }
 
-    // Validate product code
-    const codeMatch = productCode?.trim().match(PRODUCT_CODE_PATTERN);
-    if (!codeMatch) {
+    // Resolve + validate the product code against the ACTIVE store's format.
+    // Prime-cues uses nXX-YY; Wow cue uses W{initial}{number} (e.g. WA1). The
+    // code becomes the variant SKU base and an auto-created tag downstream.
+    //
+    // Fall back to parsing it from the product name when the client sends an
+    // empty/invalid code — guards against the client resolving the store format
+    // late (which would otherwise drop the auto-tag).
+    const codeFormat = getProductCodeFormat(activeStore().codeFormat);
+    let resolvedCode = productCode?.trim() ?? "";
+    if (!codeFormat.pattern.test(resolvedCode)) {
+      resolvedCode = parseProductTitle(productRow.name ?? "", activeStore().codeFormat).code ?? "";
+    }
+    if (!codeFormat.pattern.test(resolvedCode)) {
       return NextResponse.json(
-        { error: "Product code must match format nXX-YY (e.g. n01-05)" },
+        { error: `Product code must match format ${codeFormat.label}` },
         { status: 400 }
       );
     }
-    const employeeCode = codeMatch[1].toLowerCase();
 
     if (!title?.trim()) {
       return NextResponse.json({ error: "title is required" }, { status: 400 });
@@ -117,8 +126,7 @@ export async function POST(request: Request) {
     const descriptionHtml = markdownToHtml(description ?? "");
 
     const payload = buildShopifyProduct({
-      productCode: productCode.toLowerCase(),
-      employeeCode,
+      productCode: resolvedCode.toLowerCase(),
       title: title.trim(),
       descriptionHtml,
       collections: collections ?? "",
@@ -140,7 +148,9 @@ export async function POST(request: Request) {
       .map((c) => c.trim())
       .filter(Boolean);
 
-    const formData = buildFormData({ ...body, manualTags: tags });
+    // Persist the resolved code (server may have derived it from the name) so a
+    // re-open shows the same code that was actually deployed.
+    const formData = buildFormData({ ...body, productCode: resolvedCode, manualTags: tags });
 
     // Genuine service-role client (bypasses RLS) so admins can record
     // deployments on products they don't own; ownership/role enforced above.

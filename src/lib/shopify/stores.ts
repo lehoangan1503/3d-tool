@@ -20,6 +20,8 @@
  *
  * Shape: { Standard: { wrap, wrapless }, Premium: {...}, Pro: {...}, Lux: {...} }.
  */
+import { DEFAULT_PRODUCT_CODE_FORMAT, type ProductCodeFormatKey } from "./product-code";
+
 export type SpecMetafieldMap = Record<string, Partial<Record<"wrap" | "wrapless", string>>>;
 
 export interface ShopifyStore {
@@ -34,6 +36,8 @@ export interface ShopifyStore {
   isDefault?: boolean;
   /** Per-store cue_spec_variants metaobject GIDs (empty = skip the metafield). */
   specMetafields: SpecMetafieldMap;
+  /** Which product-code format this store enforces (validation + SKU/tag base). */
+  codeFormat: ProductCodeFormatKey;
 }
 
 interface RawStore {
@@ -45,6 +49,7 @@ interface RawStore {
   clientSecret?: string;
   isDefault?: boolean;
   specMetafields?: SpecMetafieldMap;
+  codeFormat?: string;
 }
 
 /**
@@ -102,6 +107,19 @@ function sanitizeSpecMetafields(raw: SpecMetafieldMap | undefined): SpecMetafiel
   return out;
 }
 
+/**
+ * Resolve a store's product-code format. An explicit `codeFormat` in
+ * SHOPIFY_STORES wins; otherwise the known Wow cue store (id "store2") defaults
+ * to the "wowcue" format and everything else to the "nXX-YY" default — so the
+ * existing env value works without edits.
+ */
+function resolveCodeFormat(raw: string | undefined, id: string): ProductCodeFormatKey {
+  const v = raw?.trim().toLowerCase();
+  if (v === "wowcue" || v === "primecues") return v;
+  if (id === "store2") return "wowcue";
+  return DEFAULT_PRODUCT_CODE_FORMAT;
+}
+
 let _cache: ShopifyStore[] | null = null;
 
 function buildStores(): ShopifyStore[] {
@@ -133,6 +151,7 @@ function buildStores(): ShopifyStore[] {
         clientSecret: isRealValue(s.clientSecret) ? s.clientSecret! : "",
         isDefault: s.isDefault ?? false,
         specMetafields: sanitizeSpecMetafields(s.specMetafields),
+        codeFormat: resolveCodeFormat(s.codeFormat, s.id ?? `store-${i}`),
       }));
     if (stores.length > 0) {
       if (!stores.some((s) => s.isDefault)) stores[0].isDefault = true;
@@ -155,6 +174,7 @@ function buildStores(): ShopifyStore[] {
         // Legacy single-store deployments are the original main shop, so carry
         // its known cue_spec_variants metaobject GIDs to preserve behaviour.
         specMetafields: MAIN_STORE_SPEC_METAFIELDS,
+        codeFormat: DEFAULT_PRODUCT_CODE_FORMAT,
       },
     ];
   }
@@ -179,6 +199,6 @@ export function getStore(id: string | null | undefined): ShopifyStore | null {
 }
 
 /** Public-safe store list for the switcher UI (no tokens). */
-export function getStoresPublic(): Array<{ id: string; name: string; isDefault: boolean }> {
-  return getStores().map((s) => ({ id: s.id, name: s.name, isDefault: Boolean(s.isDefault) }));
+export function getStoresPublic(): Array<{ id: string; name: string; isDefault: boolean; codeFormat: ProductCodeFormatKey }> {
+  return getStores().map((s) => ({ id: s.id, name: s.name, isDefault: Boolean(s.isDefault), codeFormat: s.codeFormat }));
 }

@@ -7,12 +7,15 @@ import { Search, CheckSquare, Square } from "lucide-react";
 import type { Product } from "@/types/product";
 import { AutoDeployProductCard } from "./product-card";
 import { groupProductsByPrefix, canDeployProduct, NO_CODE_GROUP } from "@/lib/auto-deploy/group-products";
+import { DEFAULT_PRODUCT_CODE_FORMAT, type ProductCodeFormatKey } from "@/lib/shopify/product-code";
 
 interface ProductSelectorProps {
   products: Product[];
   /** Selected product ids — lifted to the parent so selection persists across tabs/search. */
   selectedIds: Set<string>;
   onSelectionChange: (next: Set<string>) => void;
+  /** Product-code format of the active store (decides which products are coded). */
+  codeFormat?: ProductCodeFormatKey;
 }
 
 const SEARCH_TAB = "__search__";
@@ -23,8 +26,8 @@ const SEARCH_TAB = "__search__";
  * parent and is NEVER reset on tab/search change, so picks persist. Choose-all /
  * Unchoose-all act only on the currently-visible, selectable subset.
  */
-export function ProductSelector({ products, selectedIds, onSelectionChange }: ProductSelectorProps) {
-  const groups = useMemo(() => groupProductsByPrefix(products), [products]);
+export function ProductSelector({ products, selectedIds, onSelectionChange, codeFormat = DEFAULT_PRODUCT_CODE_FORMAT }: ProductSelectorProps) {
+  const groups = useMemo(() => groupProductsByPrefix(products, codeFormat), [products, codeFormat]);
   const [activeTab, setActiveTab] = useState<string>(() => groups[0]?.prefix ?? "");
   const [search, setSearch] = useState("");
 
@@ -41,8 +44,8 @@ export function ProductSelector({ products, selectedIds, onSelectionChange }: Pr
 
   // Only selectable (coded) products participate in choose-all / counts.
   const selectableVisible = useMemo(
-    () => visibleProducts.filter(canDeployProduct),
-    [visibleProducts],
+    () => visibleProducts.filter((p) => canDeployProduct(p, codeFormat)),
+    [visibleProducts, codeFormat],
   );
   const selectedVisibleCount = selectableVisible.filter((p) => selectedIds.has(p.id)).length;
   const allVisibleSelected = selectableVisible.length > 0 && selectedVisibleCount === selectableVisible.length;
@@ -146,7 +149,7 @@ export function ProductSelector({ products, selectedIds, onSelectionChange }: Pr
               key={p.id}
               product={p}
               selected={selectedIds.has(p.id)}
-              selectable={canDeployProduct(p)}
+              selectable={canDeployProduct(p, codeFormat)}
               onToggleSelect={toggleOne}
             />
           ))}

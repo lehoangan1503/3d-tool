@@ -36,6 +36,7 @@ import { uploadBlobToStorage } from "@/lib/supabase/upload";
 import { StoreSwitcher, useStore } from "@/components/shopify/store-switcher";
 import { createClient } from "@/lib/supabase/client";
 import { parseProductTitle } from "@/lib/shopify/parse-title";
+import { getProductCodeFormat, isValidProductCode } from "@/lib/shopify/product-code";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -278,8 +279,9 @@ function SkillModal({ skill, onClose, onSaved, onDeleted }: { skill: ShopifySkil
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export function ShopifyDeployDialog({ product, sceneManager, deployment: initialDeployment = null, canDelete = false, onDeploymentChange, onClose }: Props) {
-  const { storeId, stores } = useStore();
+  const { storeId, stores, codeFormat } = useStore();
   const activeStoreName = stores.find((s) => s.id === storeId)?.name ?? null;
+  const codeFormatDef = getProductCodeFormat(codeFormat);
   // The deployment shown reflects the CURRENTLY-SELECTED store. Starts from the
   // server-provided default-store row, then re-fetched whenever the store changes.
   const [deployment, setDeployment] = useState<ShopifyDeploymentSummary | null>(initialDeployment);
@@ -462,15 +464,22 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     loadSkills();
   }, [loadSkills]);
 
-  // ── Auto-parse "nXX-XX - [theme]" from the product name on first open.
-  // Only when there's no saved deployment to prefill from (don't override). ──
+  // ── Auto-parse "<code> - [theme]" from the product name using the active
+  // store's code format (nXX-YY or WA1). Re-runs when the store's format
+  // resolves so the code is parsed with the right pattern — important because
+  // codeFormat starts as the default until the store list loads async, which
+  // would otherwise leave the code (and its auto-tag) empty for Wow cue.
+  //
+  // The code is back-filled whenever the field is empty (even with a prefill,
+  // since an old draft saved before the right format resolved may have an empty
+  // code). The theme only seeds the AI hint when it isn't already set, and is
+  // never auto-set from a prefilled draft. ──
   useEffect(() => {
-    if (prefill) return;
-    const { code, theme } = parseProductTitle(product.name);
-    if (code) setProductCode(code);
-    if (theme) setAiHint((cur) => cur || theme);
+    const { code, theme } = parseProductTitle(product.name, codeFormat);
+    if (code) setProductCode((cur) => cur.trim() || code);
+    if (theme && !prefill) setAiHint((cur) => cur || theme);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [codeFormat]);
 
   // ── Load groups ──
   useEffect(() => {
@@ -905,8 +914,8 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
   // ── Deploy ──
   const handleDeploy = useCallback(async () => {
     const customTextOn = customTextMode !== "none";
-    if (!productCode.trim()) {
-      alert("Tên sản phẩm phải bắt đầu bằng mã nXX-YY (vd: n01-05 - American). Hãy đổi tên sản phẩm.");
+    if (!isValidProductCode(productCode, codeFormat)) {
+      alert(`Tên sản phẩm phải có mã đúng định dạng ${codeFormatDef.label}. Hãy đổi tên sản phẩm.`);
       return;
     }
     if (!versions.length) {
@@ -963,7 +972,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     } finally {
       setDeploying(false);
     }
-  }, [productCode, versions, wrapType, title, customTextMode, customTextLabel, customTextExample, renderedImages, uploadAssets, buildPayload, deployment, onDeploymentChange, activeStoreName]);
+  }, [productCode, codeFormat, codeFormatDef, versions, wrapType, title, customTextMode, customTextLabel, customTextExample, renderedImages, uploadAssets, buildPayload, deployment, onDeploymentChange, activeStoreName]);
 
   // ── Save draft (persist form_data without touching Shopify) ──
   const handleSaveDraft = useCallback(async () => {

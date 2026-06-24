@@ -4,11 +4,14 @@ import { createContext, useContext, useEffect, useState, useCallback, type React
 import { Store, ChevronDown, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { DEFAULT_PRODUCT_CODE_FORMAT, type ProductCodeFormatKey } from "@/lib/shopify/product-code";
 
 export interface StoreOption {
   id: string;
   name: string;
   isDefault: boolean;
+  /** Product-code format this store enforces (nXX-YY vs WA1). */
+  codeFormat: ProductCodeFormatKey;
 }
 
 interface StoreContextValue {
@@ -17,6 +20,8 @@ interface StoreContextValue {
   storeId: string | null;
   setStoreId: (id: string) => void;
   loading: boolean;
+  /** Product-code format of the currently selected store. */
+  codeFormat: ProductCodeFormatKey;
 }
 
 const Ctx = createContext<StoreContextValue | null>(null);
@@ -59,7 +64,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (typeof window !== "undefined") window.localStorage.setItem(LS_KEY, id);
   }, []);
 
-  return <Ctx.Provider value={{ stores, storeId, setStoreId, loading }}>{children}</Ctx.Provider>;
+  const codeFormat = stores.find((s) => s.id === storeId)?.codeFormat ?? DEFAULT_PRODUCT_CODE_FORMAT;
+
+  return <Ctx.Provider value={{ stores, storeId, setStoreId, loading, codeFormat }}>{children}</Ctx.Provider>;
 }
 
 export function useStore(): StoreContextValue {

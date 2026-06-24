@@ -134,7 +134,7 @@ async function generateContent(
 ): Promise<GenerateContentResult> {
   const dataUrl = await blobToDataUrl(firstImageBlob);
   const skillPrompt = composeSkillPrompt(skills);
-  const hint = parseProductTitle(product.name).theme ?? undefined;
+  const hint = parseProductTitle(product.name, config.codeFormat).theme ?? undefined;
 
   const res = await fetch("/api/shopify/generate-content", {
     method: "POST",
@@ -312,7 +312,7 @@ export async function runProductDeploy(
 
   // ── Step 4: create/update Shopify product ──
   onProgress?.({ step: "deploy" });
-  const productCode = parseProductTitle(product.name).code ?? "";
+  const productCode = parseProductTitle(product.name, config.codeFormat).code ?? "";
   // Custom-text config feeds either the free or paid metafield (mutually exclusive).
   const customTextConfig =
     config.customTextMode !== "none"

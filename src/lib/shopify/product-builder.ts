@@ -287,10 +287,9 @@ export interface CustomTextConfig {
 }
 
 export interface ProductInput {
-  /** Product code e.g. n01-05 */
+  /** Product code — store-specific format (e.g. n01-05 or WA1). Used as the
+   *  variant SKU base and an auto-created tag. */
   productCode: string;
-  /** Employee code e.g. n01 */
-  employeeCode: string;
   title: string;
   descriptionHtml: string;
   /** Comma-separated or array */
@@ -346,7 +345,6 @@ export interface ShopifyProductPayload {
 export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload {
   const {
     productCode,
-    employeeCode,
     title,
     descriptionHtml,
     collections,

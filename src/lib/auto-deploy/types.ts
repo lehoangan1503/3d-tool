@@ -1,4 +1,5 @@
 import type { ShopifyWrapType } from "@/types/product";
+import type { ProductCodeFormatKey } from "@/lib/shopify/product-code";
 
 export type AutoDeployVersion = "Standard" | "Premium" | "Pro" | "Lux";
 
@@ -35,6 +36,8 @@ export interface AutoDeployConfig {
   videoTemplateId: string | null;
   /** Target Shopify store id (from the store switcher); null → default store. */
   storeId?: string | null;
+  /** Product-code format of the target store (injected at run time, not persisted). */
+  codeFormat?: ProductCodeFormatKey;
 }
 
 export function emptyRunConfig(): AutoDeployConfig {

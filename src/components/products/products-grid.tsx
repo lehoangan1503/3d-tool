@@ -39,7 +39,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // nXX tag filter, applied client-side over loaded products. Persists across searches.
   const [prefixFilter, setPrefixFilter] = useState<string>(PREFIX_ALL);
-  const { storeId, loading: storeLoading } = useStore();
+  const { storeId, loading: storeLoading, codeFormat } = useStore();
   const offsetRef = useRef(0);
   // Remembers that the user pressed "Load All" so a store switch re-loads ALL
   // pages (not just page 1). Reset when search/filter/sort/myOnly change.
@@ -279,7 +279,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
   // nXX tags derived from loaded products (sorted; uncoded bucket last).
   const prefixTags = (() => {
     const set = new Set<string>();
-    for (const p of products) set.add(productPrefix(p) ?? NO_CODE_GROUP);
+    for (const p of products) set.add(productPrefix(p, codeFormat) ?? NO_CODE_GROUP);
     const coded = [...set].filter((k) => k !== NO_CODE_GROUP).sort((a, b) => a.localeCompare(b));
     if (set.has(NO_CODE_GROUP)) coded.push(NO_CODE_GROUP);
     return coded;
@@ -288,7 +288,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
   const visibleProducts =
     prefixFilter === PREFIX_ALL
       ? products
-      : products.filter((p) => (productPrefix(p) ?? NO_CODE_GROUP) === prefixFilter);
+      : products.filter((p) => (productPrefix(p, codeFormat) ?? NO_CODE_GROUP) === prefixFilter);
 
   const hasActiveFilter = debouncedSearch || typeFilter !== "all" || myOnly || prefixFilter !== PREFIX_ALL;
   // Select-all now targets the currently-visible (prefix-filtered) set so other
@@ -423,7 +423,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
               );
             })()}
             {prefixTags.map((tag) => {
-              const inTag = products.filter((p) => (productPrefix(p) ?? NO_CODE_GROUP) === tag);
+              const inTag = products.filter((p) => (productPrefix(p, codeFormat) ?? NO_CODE_GROUP) === tag);
               const count = inTag.length;
               const selectedInTag = inTag.filter((p) => selectedIds.has(p.id)).length;
               return (

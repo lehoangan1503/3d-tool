@@ -38,13 +38,13 @@ const FORMATS: Record<ProductCodeFormatKey, ProductCodeFormat> = {
     pattern: /^n\d{2}-\d{2}$/i,
     titlePattern: /^\s*(n\d{2}-\d{2})\s*(?:-\s*)?(.*)$/i,
   },
-  // W + a single designer-initial letter + a product number (1+ digits):
-  // WA1, WA99, WA199.
+  // W + 1 or 2 designer-initial letters + a product number (1+ digits):
+  // WA1, WVT1, WA99, WA199.
   wowcue: {
     key: "wowcue",
-    label: "W{tên}{số} (vd: WA1, WA99)",
-    pattern: /^w[a-z]\d+$/i,
-    titlePattern: /^\s*(w[a-z]\d+)\s*(?:-\s*)?(.*)$/i,
+    label: "W{tên}{số} (vd: WA1, WVT1, WA99)",
+    pattern: /^w[a-z]{1,2}\d+$/i,
+    titlePattern: /^\s*(w[a-z]{1,2}\d+)\s*(?:-\s*)?(.*)$/i,
   },
 };
 

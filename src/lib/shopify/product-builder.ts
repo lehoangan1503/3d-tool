@@ -45,8 +45,22 @@ function calculateCompareAtPrice(finalPrice: number, version: string): number {
   return roundPriceNaturally(finalPrice / (1 - pct / 100));
 }
 
-function slugify(text: string): string {
+/**
+ * Transliterate Vietnamese diacritics to ASCII so handles stay readable
+ * (e.g. "Gậy đánh" → "gay danh" instead of "gy nh"). Unicode NFD splits a
+ * letter from its combining marks, which we strip; đ/Đ has no decomposition
+ * so it's mapped explicitly.
+ */
+function deburrVietnamese(text: string): string {
   return text
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D");
+}
+
+function slugify(text: string): string {
+  return deburrVietnamese(text)
     .toLowerCase()
     .trim()
     .replace(/[^\w\s-]/g, "")

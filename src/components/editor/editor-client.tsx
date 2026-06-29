@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CollapsibleCard } from "@/components/ui/collapsible-card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useUnsavedChangesWarning } from "@/hooks/use-unsaved-changes-warning";
 import {
@@ -252,6 +253,9 @@ export function EditorClient({
 
     // Update body roughness (for smooth cue, or non-leather parts)
     sceneManager.updateBodyRoughness(config.bodyRoughness);
+
+    // Update "Phủ bạc" silver metallic-flake overlay on the body
+    sceneManager.updateSilverCoating(config.silverCoating);
 
     // Update leather-specific material config (overrides body roughness for leather parts)
     if (isLeatherLikeType(product.type)) {
@@ -659,6 +663,23 @@ export function EditorClient({
                   pendingPreview={pendingFiles.surface?.preview}
                   uploading={uploading && !!pendingFiles.surface}
                 />
+                {/* Phủ bạc — silver metallic-flake overlay (Pro line blank) */}
+                <label
+                  htmlFor="silverCoating-mobile"
+                  className="mt-4 flex cursor-pointer items-start justify-between gap-3"
+                >
+                  <span className="flex flex-col gap-0.5">
+                    <span className="text-sm font-medium">Phủ bạc</span>
+                    <span className="text-xs text-muted-foreground">
+                      Hiệu ứng phôi phủ bạc lấp lánh nhẹ (dòng Pro)
+                    </span>
+                  </span>
+                  <Checkbox
+                    id="silverCoating-mobile"
+                    checked={config.silverCoating}
+                    onCheckedChange={(v) => updateConfig({ silverCoating: v === true })}
+                  />
+                </label>
               </CollapsibleCard>
 
               {/* HDRI Exposure Control */}
@@ -1110,6 +1131,23 @@ export function EditorClient({
                 pendingPreview={pendingFiles.surface?.preview}
                 uploading={uploading && !!pendingFiles.surface}
               />
+              {/* Phủ bạc — silver metallic-flake overlay (Pro line blank) */}
+              <label
+                htmlFor="silverCoating"
+                className="mt-4 flex cursor-pointer items-start justify-between gap-3"
+              >
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-sm font-medium">Phủ bạc</span>
+                  <span className="text-xs text-muted-foreground">
+                    Hiệu ứng phôi phủ bạc lấp lánh nhẹ (dòng Pro)
+                  </span>
+                </span>
+                <Checkbox
+                  id="silverCoating"
+                  checked={config.silverCoating}
+                  onCheckedChange={(v) => updateConfig({ silverCoating: v === true })}
+                />
+              </label>
             </CollapsibleCard>
 
             {/* HDRI Exposure Control */}

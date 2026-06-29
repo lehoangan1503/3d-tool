@@ -18,6 +18,13 @@ import {
   type LeatherTextureMaps,
 } from "./leather-material";
 import { createLeatherRoughnessMap } from "./leather-overlay";
+import {
+  getSilverCoatingMaps,
+  SILVER_ENV_MAP_INTENSITY,
+  SILVER_NORMAL_SCALE,
+  SILVER_CLEARCOAT,
+  SILVER_CLEARCOAT_ROUGHNESS,
+} from "./silver-coating";
 import type { ProductType, LeatherColor, LeatherTextureType } from "@/types/product";
 import { isLeatherLikeType } from "@/types/product";
 
@@ -111,6 +118,70 @@ function ensurePhysicalMaterial(mesh: THREE.Mesh, mat: THREE.MeshStandardMateria
   return physMat;
 }
 
+interface SilverOriginalProps {
+  clearcoat: number;
+  clearcoatRoughness: number;
+  clearcoatNormalMap: THREE.Texture | null;
+  clearcoatNormalScale: THREE.Vector2;
+  clearcoatRoughnessMap: THREE.Texture | null;
+  envMapIntensity: number;
+}
+
+/**
+ * Apply (or restore) the "Phủ bạc" silver shine on a single body material.
+ *
+ * IMPORTANT: a metal has no diffuse colour — making the body metallic replaces
+ * the bright printed artwork with a darker reflection, which muddies/darkens it.
+ * So we leave the base material (map / colour / metalness / roughness) ENTIRELY
+ * untouched and add the silver purely as a CLEARCOAT — a clear, glossy,
+ * reflective top layer. Clearcoat is additive: it adds white reflections + a
+ * rolling glare on top of the print without dimming it. The flake grain lives
+ * in the clearcoat's normal + roughness maps, so the shine sparkles.
+ *
+ * Snapshots only the clearcoat props so toggling off restores the prior look.
+ */
+export function applySilverCoatingToBodyMaterial(mat: THREE.MeshPhysicalMaterial, enabled: boolean): void {
+  const ud = mat.userData as { __silverOrig?: SilverOriginalProps };
+
+  if (enabled) {
+    // Snapshot originals once (before we mutate anything).
+    if (!ud.__silverOrig) {
+      ud.__silverOrig = {
+        clearcoat: mat.clearcoat,
+        clearcoatRoughness: mat.clearcoatRoughness,
+        clearcoatNormalMap: mat.clearcoatNormalMap,
+        clearcoatNormalScale: mat.clearcoatNormalScale.clone(),
+        clearcoatRoughnessMap: mat.clearcoatRoughnessMap,
+        envMapIntensity: mat.envMapIntensity,
+      };
+    }
+
+    const { normalMap, roughnessMap } = getSilverCoatingMaps();
+    // Clear reflective top layer → bright WHITE specular glare + sparkle on top
+    // of the UNTOUCHED artwork. Base map/colour/metalness stay as-is, so the
+    // print keeps its original brightness and colour.
+    mat.clearcoat = SILVER_CLEARCOAT;
+    mat.clearcoatRoughness = SILVER_CLEARCOAT_ROUGHNESS;
+    // Flake grain lives in the clearcoat layer → fine twinkling silver specks.
+    mat.clearcoatNormalMap = normalMap;
+    mat.clearcoatNormalScale = new THREE.Vector2(SILVER_NORMAL_SCALE, SILVER_NORMAL_SCALE);
+    mat.clearcoatRoughnessMap = roughnessMap;
+    // Stronger environment reflection so the silver reads brightly.
+    mat.envMapIntensity = SILVER_ENV_MAP_INTENSITY;
+    mat.needsUpdate = true;
+  } else if (ud.__silverOrig) {
+    // Restore the pre-coating look.
+    mat.clearcoat = ud.__silverOrig.clearcoat;
+    mat.clearcoatRoughness = ud.__silverOrig.clearcoatRoughness;
+    mat.clearcoatNormalMap = ud.__silverOrig.clearcoatNormalMap;
+    mat.clearcoatNormalScale.copy(ud.__silverOrig.clearcoatNormalScale);
+    mat.clearcoatRoughnessMap = ud.__silverOrig.clearcoatRoughnessMap;
+    mat.envMapIntensity = ud.__silverOrig.envMapIntensity;
+    delete ud.__silverOrig;
+    mat.needsUpdate = true;
+  }
+}
+
 export class SceneManager {
   private instanceId: number;
   private container: HTMLElement;
@@ -161,6 +232,7 @@ export class SceneManager {
     color: "#000000",
   };
   private bodyRoughness = 0; // For smooth cue body (default: 0)
+  private silverCoating = false; // "Phủ bạc" metallic-flake overlay on body meshes
   private textureScale = 1; // Texture tiling scale (1 = no tiling)
   private isLeatherProduct = false; // Track product type
   private leatherRoughnessTexture: THREE.CanvasTexture | null = null; // For dynamic roughness map updates
@@ -657,6 +729,18 @@ export class SceneManager {
   }
 
   /**
+   * Toggle the "Phủ bạc" silver metallic-flake overlay on the cue body.
+   * Bakes flake metalness/normal maps into the body material so the effect
+   * follows the 3D surface and is inherited by extractor model clones.
+   */
+  updateSilverCoating(enabled: boolean) {
+    console.log(`[SceneManager #${this.instanceId}] updateSilverCoating:`, enabled);
+    if (this.silverCoating === enabled) return;
+    this.silverCoating = enabled;
+    this.updateModelMaterials();
+  }
+
+  /**
    * Update leather material config and re-apply to model
    */
   updateLeatherConfig(config: { roughness?: number; clearcoat?: number; sheen?: number; normalStrength?: number }) {
@@ -794,6 +878,7 @@ export class SceneManager {
           const physMat = ensurePhysicalMaterial(child, mat, matIdx);
           physMat.roughness = this.bodyRoughness / 255;
           physMat.clearcoat = this.currentLeatherConfig.clearcoat / 100;
+          applySilverCoatingToBodyMaterial(physMat, this.silverCoating);
           physMat.needsUpdate = true;
           updatedCount++;
         }
@@ -1335,6 +1420,7 @@ export class SceneManager {
           }
           physMat.roughness = this.bodyRoughness / 255;
           physMat.clearcoat = this.currentLeatherConfig.clearcoat / 100;
+          applySilverCoatingToBodyMaterial(physMat, this.silverCoating);
           physMat.needsUpdate = true;
           console.log("[SceneManager] ✅ Applied surface texture + body config to:", matName || meshName);
           return;
@@ -1474,6 +1560,7 @@ export class SceneManager {
       jointConfig: { ...this.currentJointConfig },
       bumperConfig: { ...this.currentBumperConfig },
       bodyRoughness: this.bodyRoughness,
+      silverCoating: this.silverCoating,
       textureScale: this.textureScale,
       isLeatherProduct: this.isLeatherProduct,
     };

@@ -6,6 +6,8 @@ import Link from "next/link";
 import { CuePreview } from "@/components/editor/cue-preview";
 import { LeatherPicker } from "@/components/editor/leather-picker";
 import { SurfaceUploader } from "@/components/editor/surface-uploader";
+import { SilverTuningPanel } from "@/components/editor/silver-tuning-panel";
+import { DEFAULT_SILVER_GLOBAL, type SilverGlobalConfig } from "@/lib/three/silver-coating";
 import { ImageExtractor } from "@/components/editor/image-extractor";
 import { VideoStudio } from "@/components/editor/video-studio";
 import { ShopifyDeployDialog } from "@/components/editor/shopify-deploy-dialog";
@@ -254,8 +256,9 @@ export function EditorClient({
     // Update body roughness (for smooth cue, or non-leather parts)
     sceneManager.updateBodyRoughness(config.bodyRoughness);
 
-    // Update "Phủ bạc" silver metallic-flake overlay on the body
-    sceneManager.updateSilverCoating(config.silverCoating);
+    // NOTE: "Phủ bạc" (silver frost) is driven by the GLOBAL silver config
+    // effect below (density + metalness + normalScale), not from per-product
+    // config — so it's a single shared look across all products.
 
     // Update leather-specific material config (overrides body roughness for leather parts)
     if (isLeatherLikeType(product.type)) {
@@ -295,6 +298,51 @@ export function EditorClient({
     setConfig((prev) => ({ ...prev, ...updates }));
     setHasChanges(true);
   };
+
+  // Single GLOBAL "Phủ bạc" config (density + metalness + normalScale), shared by
+  // all products and persisted to the DB. Loaded once on mount.
+  const [silverConfig, setSilverConfig] = useState<SilverGlobalConfig>(DEFAULT_SILVER_GLOBAL);
+  const silverSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Load the global silver config once.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/silver-config")
+      .then((r) => r.json())
+      .then((cfg: SilverGlobalConfig) => {
+        if (!cancelled) setSilverConfig(cfg);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Push the global silver config to the live scene whenever it (or the manager) changes.
+  useEffect(() => {
+    if (!sceneManager) return;
+    sceneManager.updateSilverTuning({
+      metalness: silverConfig.metalness,
+      normalScale: silverConfig.normalScale,
+    });
+    sceneManager.updateSilverCoating(config.silverCoating, { density: silverConfig.density });
+  }, [sceneManager, silverConfig, config.silverCoating]);
+
+  // Edit a silver value: update state live + debounce-save to the DB (global).
+  const handleSilverConfig = useCallback((patch: Partial<SilverGlobalConfig>) => {
+    setSilverConfig((prev) => {
+      const next = { ...prev, ...patch };
+      if (silverSaveTimer.current) clearTimeout(silverSaveTimer.current);
+      silverSaveTimer.current = setTimeout(() => {
+        fetch("/api/silver-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(next),
+        }).catch(() => {});
+      }, 500);
+      return next;
+    });
+  }, []);
 
   const handleSurfaceFileSelect = useCallback((file: File | null, previewUrl: string) => {
     if (file) {
@@ -680,6 +728,9 @@ export function EditorClient({
                     onCheckedChange={(v) => updateConfig({ silverCoating: v === true })}
                   />
                 </label>
+                {config.silverCoating && (
+                  <SilverTuningPanel value={silverConfig} onChange={handleSilverConfig} idSuffix="-mobile" />
+                )}
               </CollapsibleCard>
 
               {/* HDRI Exposure Control */}
@@ -1148,6 +1199,9 @@ export function EditorClient({
                   onCheckedChange={(v) => updateConfig({ silverCoating: v === true })}
                 />
               </label>
+              {config.silverCoating && (
+                <SilverTuningPanel value={silverConfig} onChange={handleSilverConfig} />
+              )}
             </CollapsibleCard>
 
             {/* HDRI Exposure Control */}

@@ -20,10 +20,12 @@ import {
 import { createLeatherRoughnessMap } from "./leather-overlay";
 import {
   getSilverCoatingMaps,
-  SILVER_ENV_MAP_INTENSITY,
-  SILVER_NORMAL_SCALE,
-  SILVER_CLEARCOAT,
-  SILVER_CLEARCOAT_ROUGHNESS,
+  densityToCoverage,
+  getSilverTuning,
+  setSilverTuning,
+  DEFAULT_SILVER_GRAIN,
+  type SilverGrainParams,
+  type SilverTuning,
 } from "./silver-coating";
 import type { ProductType, LeatherColor, LeatherTextureType } from "@/types/product";
 import { isLeatherLikeType } from "@/types/product";
@@ -125,22 +127,40 @@ interface SilverOriginalProps {
   clearcoatNormalScale: THREE.Vector2;
   clearcoatRoughnessMap: THREE.Texture | null;
   envMapIntensity: number;
+  // Base props we blend toward silver frost so the coating can COVER the artwork
+  // (the real cue is a frosted-metal surface, not sparkle on top of the print).
+  metalness: number;
+  roughness: number;
+  color: THREE.Color;
+  roughnessMap: THREE.Texture | null;
+  normalMap: THREE.Texture | null;
+  normalScale: THREE.Vector2;
+  emissive: THREE.Color;
+  emissiveIntensity: number;
 }
 
+// Reusable scratch so we don't allocate a Color every material/every frame.
+const _frostColor = new THREE.Color();
+const _frostEmissive = new THREE.Color();
+
 /**
- * Apply (or restore) the "Phủ bạc" silver shine on a single body material.
+ * Apply (or restore) the "Phủ bạc" frosted-silver coating on a single body
+ * material.
  *
- * IMPORTANT: a metal has no diffuse colour — making the body metallic replaces
- * the bright printed artwork with a darker reflection, which muddies/darkens it.
- * So we leave the base material (map / colour / metalness / roughness) ENTIRELY
- * untouched and add the silver purely as a CLEARCOAT — a clear, glossy,
- * reflective top layer. Clearcoat is additive: it adds white reflections + a
- * rolling glare on top of the print without dimming it. The flake grain lives
- * in the clearcoat's normal + roughness maps, so the shine sparkles.
+ * The real Pro blank is a frosted-metal surface (fine matte tooth, near-full
+ * silver coverage), NOT sparkle floating over the print. So at COVERAGE > 0 we
+ * blend the base material toward a silver-grey metal: metalness↑, a fine matte
+ * roughness/normal tooth, and colour lerped to silver — which dims the artwork
+ * underneath, exactly like the reference. Coverage (grain.density, 0–100) is the
+ * blend amount. A clearcoat is layered on for the bright rolling glare.
  *
- * Snapshots only the clearcoat props so toggling off restores the prior look.
+ * Snapshots the base + clearcoat props once so toggling off restores the print.
  */
-export function applySilverCoatingToBodyMaterial(mat: THREE.MeshPhysicalMaterial, enabled: boolean): void {
+export function applySilverCoatingToBodyMaterial(
+  mat: THREE.MeshPhysicalMaterial,
+  enabled: boolean,
+  grain: SilverGrainParams = DEFAULT_SILVER_GRAIN
+): void {
   const ud = mat.userData as { __silverOrig?: SilverOriginalProps };
 
   if (enabled) {
@@ -153,30 +173,64 @@ export function applySilverCoatingToBodyMaterial(mat: THREE.MeshPhysicalMaterial
         clearcoatNormalScale: mat.clearcoatNormalScale.clone(),
         clearcoatRoughnessMap: mat.clearcoatRoughnessMap,
         envMapIntensity: mat.envMapIntensity,
+        metalness: mat.metalness,
+        roughness: mat.roughness,
+        color: mat.color.clone(),
+        roughnessMap: mat.roughnessMap,
+        normalMap: mat.normalMap,
+        normalScale: mat.normalScale.clone(),
+        emissive: mat.emissive.clone(),
+        emissiveIntensity: mat.emissiveIntensity,
       };
     }
 
+    const orig = ud.__silverOrig;
+    const coverage = densityToCoverage(grain.density);
     const { normalMap, roughnessMap } = getSilverCoatingMaps();
-    // Clear reflective top layer → bright WHITE specular glare + sparkle on top
-    // of the UNTOUCHED artwork. Base map/colour/metalness stay as-is, so the
-    // print keeps its original brightness and colour.
-    mat.clearcoat = SILVER_CLEARCOAT;
-    mat.clearcoatRoughness = SILVER_CLEARCOAT_ROUGHNESS;
-    // Flake grain lives in the clearcoat layer → fine twinkling silver specks.
-    mat.clearcoatNormalMap = normalMap;
-    mat.clearcoatNormalScale = new THREE.Vector2(SILVER_NORMAL_SCALE, SILVER_NORMAL_SCALE);
-    mat.clearcoatRoughnessMap = roughnessMap;
-    // Stronger environment reflection so the silver reads brightly.
-    mat.envMapIntensity = SILVER_ENV_MAP_INTENSITY;
+    // Read the LIVE-tunable frost values (editor panel mutates these).
+    const t = getSilverTuning();
+    _frostColor.set(t.color);
+    _frostEmissive.set(t.emissive);
+
+    // Blend the BASE material from its original look toward frosted silver by
+    // `coverage`. All targets come from the live tuning so every value is drag-able.
+    mat.metalness = THREE.MathUtils.lerp(orig.metalness, t.metalness, coverage);
+    mat.roughness = THREE.MathUtils.lerp(orig.roughness, t.roughness, coverage);
+    mat.color.copy(orig.color).lerp(_frostColor, coverage);
+    // Fine matte tooth: swap in the frost roughness/normal maps once there's any
+    // coverage (they read as the sandpaper micro-texture of the silver).
+    mat.roughnessMap = coverage > 0 ? roughnessMap : orig.roughnessMap;
+    mat.normalMap = coverage > 0 ? normalMap : orig.normalMap;
+    mat.normalScale.set(
+      THREE.MathUtils.lerp(orig.normalScale.x, t.normalScale, coverage),
+      THREE.MathUtils.lerp(orig.normalScale.y, t.normalScale, coverage)
+    );
+
+    // Clearcoat: bright WHITE rolling glare on top of the frost.
+    mat.clearcoat = t.clearcoat;
+    mat.clearcoatRoughness = t.clearcoatRoughness;
+    mat.envMapIntensity = THREE.MathUtils.lerp(orig.envMapIntensity, t.envMapIntensity, coverage);
+    // Emissive brightness floor (0 = natural, no glow). Scaled by coverage.
+    mat.emissive.copy(_frostEmissive);
+    mat.emissiveIntensity = t.emissiveIntensity * coverage;
     mat.needsUpdate = true;
   } else if (ud.__silverOrig) {
     // Restore the pre-coating look.
-    mat.clearcoat = ud.__silverOrig.clearcoat;
-    mat.clearcoatRoughness = ud.__silverOrig.clearcoatRoughness;
-    mat.clearcoatNormalMap = ud.__silverOrig.clearcoatNormalMap;
-    mat.clearcoatNormalScale.copy(ud.__silverOrig.clearcoatNormalScale);
-    mat.clearcoatRoughnessMap = ud.__silverOrig.clearcoatRoughnessMap;
-    mat.envMapIntensity = ud.__silverOrig.envMapIntensity;
+    const orig = ud.__silverOrig;
+    mat.clearcoat = orig.clearcoat;
+    mat.clearcoatRoughness = orig.clearcoatRoughness;
+    mat.clearcoatNormalMap = orig.clearcoatNormalMap;
+    mat.clearcoatNormalScale.copy(orig.clearcoatNormalScale);
+    mat.clearcoatRoughnessMap = orig.clearcoatRoughnessMap;
+    mat.envMapIntensity = orig.envMapIntensity;
+    mat.metalness = orig.metalness;
+    mat.roughness = orig.roughness;
+    mat.color.copy(orig.color);
+    mat.roughnessMap = orig.roughnessMap;
+    mat.normalMap = orig.normalMap;
+    mat.normalScale.copy(orig.normalScale);
+    mat.emissive.copy(orig.emissive);
+    mat.emissiveIntensity = orig.emissiveIntensity;
     delete ud.__silverOrig;
     mat.needsUpdate = true;
   }
@@ -233,6 +287,7 @@ export class SceneManager {
   };
   private bodyRoughness = 0; // For smooth cue body (default: 0)
   private silverCoating = false; // "Phủ bạc" metallic-flake overlay on body meshes
+  private silverGrain: SilverGrainParams = { ...DEFAULT_SILVER_GRAIN }; // user-tunable flake density (tile repeat)
   private textureScale = 1; // Texture tiling scale (1 = no tiling)
   private isLeatherProduct = false; // Track product type
   private leatherRoughnessTexture: THREE.CanvasTexture | null = null; // For dynamic roughness map updates
@@ -729,15 +784,40 @@ export class SceneManager {
   }
 
   /**
-   * Toggle the "Phủ bạc" silver metallic-flake overlay on the cue body.
-   * Bakes flake metalness/normal maps into the body material so the effect
-   * follows the 3D surface and is inherited by extractor model clones.
+   * Toggle / retune the "Phủ bạc" frosted-silver coating on the cue body.
+   * Blends each body material toward silver frost by the coverage slider, so the
+   * effect follows the 3D surface and is inherited by extractor model clones.
+   * Re-applying with a new coverage just re-lerps from the saved originals — no
+   * texture regeneration, so it's cheap enough to run live on every slider tick.
    */
-  updateSilverCoating(enabled: boolean) {
-    console.log(`[SceneManager #${this.instanceId}] updateSilverCoating:`, enabled);
-    if (this.silverCoating === enabled) return;
+  updateSilverCoating(enabled: boolean, grain?: SilverGrainParams) {
+    console.log(`[SceneManager #${this.instanceId}] updateSilverCoating:`, enabled, grain);
+    const grainChanged = grain !== undefined && grain.density !== this.silverGrain.density;
+    if (this.silverCoating === enabled && !grainChanged) return;
+
     this.silverCoating = enabled;
+    if (grain) this.silverGrain = { density: grain.density };
+
+    // Both on/off and coverage changes re-run the full body-material pass, which
+    // calls applySilverCoatingToBodyMaterial with the current coverage. The frost
+    // blend re-lerps from each material's saved originals, so repeat calls with a
+    // new coverage are correct and cheap (no texture work).
     this.updateModelMaterials();
+  }
+
+  /**
+   * LIVE-tune the silver frost material values (metalness, roughness, envMap,
+   * clearcoat, normal scale, colour, emissive). Mutates the shared tuning and
+   * re-applies to every coated body material — instant, no texture rebuild.
+   */
+  updateSilverTuning(patch: Partial<SilverTuning>) {
+    setSilverTuning(patch);
+    if (this.silverCoating) this.updateModelMaterials();
+  }
+
+  /** Current live silver tuning values (for seeding the editor panel). */
+  getSilverTuning(): SilverTuning {
+    return getSilverTuning();
   }
 
   /**
@@ -878,7 +958,7 @@ export class SceneManager {
           const physMat = ensurePhysicalMaterial(child, mat, matIdx);
           physMat.roughness = this.bodyRoughness / 255;
           physMat.clearcoat = this.currentLeatherConfig.clearcoat / 100;
-          applySilverCoatingToBodyMaterial(physMat, this.silverCoating);
+          applySilverCoatingToBodyMaterial(physMat, this.silverCoating, this.silverGrain);
           physMat.needsUpdate = true;
           updatedCount++;
         }
@@ -1420,7 +1500,7 @@ export class SceneManager {
           }
           physMat.roughness = this.bodyRoughness / 255;
           physMat.clearcoat = this.currentLeatherConfig.clearcoat / 100;
-          applySilverCoatingToBodyMaterial(physMat, this.silverCoating);
+          applySilverCoatingToBodyMaterial(physMat, this.silverCoating, this.silverGrain);
           physMat.needsUpdate = true;
           console.log("[SceneManager] ✅ Applied surface texture + body config to:", matName || meshName);
           return;
@@ -1561,6 +1641,7 @@ export class SceneManager {
       bumperConfig: { ...this.currentBumperConfig },
       bodyRoughness: this.bodyRoughness,
       silverCoating: this.silverCoating,
+      silverGrain: { ...this.silverGrain },
       textureScale: this.textureScale,
       isLeatherProduct: this.isLeatherProduct,
     };

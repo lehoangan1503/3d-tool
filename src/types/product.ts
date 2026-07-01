@@ -145,6 +145,7 @@ export interface ProductConfig {
   clearcoat: number; // 0-100 range (shared)
   bodyRoughness: number; // 0-255 range for non-leather body parts
   silverCoating: boolean; // "Phủ bạc" — metallic-flake sparkle overlay on the body (Pro line blank)
+  silverGrainDensity: number; // "Độ phủ bạc" — 0-100 silver-frost coverage (100 ≈ 96% covers artwork)
   hdriExposure: number; // 0-3 range — HDRI intensity control
   hdriType: string; // HDRI filename under /public/hdri (e.g. "bloem_train_track_clear_2k.hdr")
   hdriRotationX: number; // 0-360 — HDRI vertical rotation (X-axis)
@@ -186,6 +187,7 @@ export interface ThreeJSSettingsJson {
     normalStrength: number;
     textureScale: number;
     silverCoating?: boolean; // "Phủ bạc" metallic-flake overlay (default false)
+    silverGrainDensity?: number; // "Mật độ hạt" flake density 0-100 (default 50)
   };
   joint?: {
     roughness: number;
@@ -222,6 +224,7 @@ export function configToSettingsJson(config: ProductConfig): ThreeJSSettingsJson
       normalStrength: config.normalStrength,
       textureScale: config.textureScale,
       silverCoating: config.silverCoating,
+      silverGrainDensity: config.silverGrainDensity,
     },
     joint: {
       roughness: config.jointRoughness,
@@ -248,6 +251,7 @@ export function settingsJsonToConfig(json: ThreeJSSettingsJson): ProductConfig {
     clearcoat: json.lighting.clearcoat,
     bodyRoughness: json.lighting.bodyRoughness,
     silverCoating: json.material.silverCoating ?? false,
+    silverGrainDensity: json.material.silverGrainDensity ?? 50,
     hdriExposure: json.lighting.hdriExposure ?? 1.0,
     hdriType: json.lighting.hdriType ?? "bloem_train_track_clear_2k.hdr",
     hdriRotationX: json.lighting.hdriRotationX ?? 0,
@@ -317,6 +321,7 @@ export const DEFAULT_SMOOTH_CONFIG: ProductConfig = {
   clearcoat: 5,
   bodyRoughness: 0, // Smooth cue body (0 = very shiny)
   silverCoating: false, // Phủ bạc off by default
+  silverGrainDensity: 80, // Độ phủ bạc — strong frost coverage by default
   hdriExposure: 1.0, // HDRI intensity (1 = default)
   hdriType: "bloem_train_track_clear_2k.hdr",
   hdriRotationX: 0, // HDRI vertical rotation
@@ -344,6 +349,7 @@ export const DEFAULT_LEATHER_CONFIG: ProductConfig = {
   clearcoat: 5,
   bodyRoughness: 0, // Body roughness for "outside" mesh
   silverCoating: false, // Phủ bạc off by default
+  silverGrainDensity: 80, // Độ phủ bạc — strong frost coverage by default
   hdriExposure: 1.0, // HDRI intensity (1 = default)
   hdriType: "bloem_train_track_clear_2k.hdr",
   hdriRotationX: 0, // HDRI vertical rotation

@@ -32,16 +32,39 @@ export interface SilverCoatingMaps {
   normalMap: THREE.CanvasTexture;
 }
 
-// Tunables for the "subtle sparkle" look. Kept conservative so the artwork
-// underneath stays clearly readable, but strong enough to be obviously visible
-// when toggled.
-const FLAKE_TEXTURE_SIZE = 1024; // tile resolution
+/**
+ * User-tunable grain controls for the silver flake ("Phủ bạc") pattern.
+ * A single global setting shared by every product — users adjust it until the
+ * sparkle looks right and all cues reuse the same look.
+ *  - `density`: 0–100 slider. 50 reproduces the original hardcoded flake count.
+ *    Lower = sparser/subtler grain, higher = denser grain.
+ *  - `size`: 0–100 slider. 50 reproduces the original ~1–3px grain radius.
+ *    Lower = finer flecks, higher = coarser/larger flakes.
+ */
+export interface SilverGrainParams {
+  /**
+   * 0..100 — silver-frost COVERAGE. How strongly the frosted-silver surface
+   * covers/dims the artwork. 0 = artwork with a light silver sheen; 100 = ~96%
+   * frosted silver like the real "phủ bạc" blank. The fine tooth micro-texture
+   * is fixed; this slider only changes the coverage blend (cheap per-material).
+   */
+  density: number;
+}
+
+/** Default coverage. Frost brightness/look is controlled by the live tuning
+ * panel (see SilverTuning), not here. */
+export const DEFAULT_SILVER_GRAIN: SilverGrainParams = {
+  density: 80,
+};
+
+// The frost TOOTH tile (fine matte speckle) is generated ONCE at a fixed
+// resolution + fixed speckle count, so it's cheap and never regenerates. The
+// coverage slider does NOT touch this tile — it only blends each material toward
+// silver frost (see densityToCoverage), which is what hides the artwork.
+const FLAKE_TEXTURE_SIZE = 1024; // tooth tile resolution (fixed — fast to build once)
 // The body surface UV is a tall cylinder unwrap (recommended art is 1141×8359 ≈
-// 1:7.3 W:H). Tiling a SQUARE flake tile equally in U and V would stretch the
-// flecks ~7× vertically. So we repeat far more along V than U to keep flakes
-// round and evenly covering the full width & height.
-const FLAKE_TILES_U = 8; // repeats across the (narrow) circumference
-const FLAKE_TILES_V = 58; // repeats along the (tall) length — ~8 × 7.3 aspect
+// 1:7.3 W:H). The tooth tile is repeated far more along V than U (see
+// FROST_TILES_*) to keep the speckle round & even across the stretched cylinder.
 /** With a metalnessMap present, metalness acts as the max — keep it full so the map drives the pattern. */
 export const SILVER_METALNESS = 1.0;
 /** Base metalness floor (non-grain). High so the body is a silver substrate and
@@ -50,8 +73,12 @@ export const SILVER_METALNESS = 1.0;
 export const SILVER_BASE_METALNESS_FLOOR = 0.7;
 /** Base roughness (non-grain) when coating is on — glossy silver substrate. */
 export const SILVER_BASE_ROUGHNESS = 0.32;
-/** envMapIntensity bump so the metallic sheen reads strongly under the HDRI. */
-export const SILVER_ENV_MAP_INTENSITY = 2.6;
+/** envMapIntensity bump so the metallic sheen reads strongly under the HDRI.
+ * With metalness=1 the surface has NO diffuse — its ONLY brightness comes from
+ * reflecting the environment, so this is the main lever for making the silver
+ * LIGHTER. Pushed high so the frost reads bright even against a dark background
+ * (the HDRI it reflects is a bright daytime scene). */
+export const SILVER_ENV_MAP_INTENSITY = 9.0;
 /** Normal map strength — small, so grains glint without distorting the print. */
 export const SILVER_NORMAL_SCALE = 0.4;
 /** Clearcoat: a clear reflective top layer whose specular highlight is WHITE
@@ -63,6 +90,127 @@ export const SILVER_CLEARCOAT_ROUGHNESS = 0.12;
 /** Specular intensity bump — strengthens the white specular reflection. */
 export const SILVER_SPECULAR_INTENSITY = 1.0;
 
+/**
+ * Fixed speckle COUNT for the one tooth tile we build. Dense so the frost reads
+ * as a fine uniform tooth (like fine sandpaper) rather than discrete dots — but
+ * cheap since it's a single 1024² build, once.
+ */
+const FIXED_FLAKE_COUNT = 260_000;
+/** Fine tooth radius range: ~0.6–1.8px, so the frost is a tight micro-texture. */
+const BASE_GRAIN_MIN = 0.6;
+const BASE_GRAIN_SPAN = 1.2;
+
+/** Tooth grain is FINE and fixed — no per-flake size scaling for the frost look. */
+const SIZE_MULTIPLIER = 1.0;
+
+/** Density slider range: 0–100. Here "density" = COVERAGE: how much the silver
+ * frost covers/dims the artwork. 0 = artwork with light sheen (old look),
+ * 100 = ~96% frosted silver like the real cue. */
+export const SILVER_GRAIN_DENSITY_MAX = 100;
+
+/** Frosted-silver target look at full coverage. A bright silver with a fine
+ * matte tooth — matches the real "phủ bạc" blank.
+ *
+ * NOTE ON BRIGHTNESS: metalness is kept only PARTIAL (not 1.0). A fully metallic
+ * surface has NO diffuse colour — it can only show what it reflects, so under a
+ * dark background/HDRI it reads near-black (that was the "too dark" problem).
+ * Keeping metalness ~0.5 preserves a bright diffuse silver that the scene lights
+ * directly, so the frost stays light while still looking metallic. */
+export const SILVER_FROST_COLOR = 0xffffff; // white silver tint (locked-in default)
+export const SILVER_FROST_METALNESS = 1; // full metal (locked-in default)
+export const SILVER_FROST_ROUGHNESS = 1; // locked-in default
+/** Cap coverage so a sliver of artwork can still faintly read at max (like the
+ * ~96% in the reference — never a 100% featureless sheet). */
+export const SILVER_MAX_COVERAGE = 0.96;
+/** Emissive silver fill added at full coverage. A metal reflecting a dark
+ * artwork/background reads dark; this adds a small constant brightness floor so
+ * the dark stained-glass areas can't drag the frost to black. Scaled by coverage
+ * so it only kicks in with the frost. Keep low — too high washes the sparkle. */
+export const SILVER_FROST_EMISSIVE = 0x2a2a2c; // subtle grey lift
+export const SILVER_FROST_EMISSIVE_INTENSITY = 0.6;
+
+/**
+ * LIVE-TUNABLE frost material values. Seeded from the constants above; the
+ * editor's tuning panel mutates these via setSilverTuning() and the material
+ * apply reads them, so every value can be dragged and seen instantly. Once the
+ * look is dialled in, bake the chosen numbers back into the constants as the
+ * permanent defaults.
+ *
+ * DEFAULT AIM: natural + lighter. Emissive OFF (0) — the natural look; lightness
+ * comes from reflecting more environment (envMapIntensity) at a slightly lower
+ * roughness, which reads like real frosted metal rather than a flat glow.
+ */
+export interface SilverTuning {
+  metalness: number; // 0..1
+  roughness: number; // 0..1
+  envMapIntensity: number; // 0..15
+  clearcoat: number; // 0..1
+  clearcoatRoughness: number; // 0..1
+  normalScale: number; // 0..2
+  color: number; // hex silver tint
+  emissive: number; // hex emissive lift colour
+  emissiveIntensity: number; // 0..3 (0 = natural, no glow)
+}
+
+// LOCKED-IN defaults (the look the user approved). Metalness/normalScale are
+// the only two the user can still change live (plus coverage); the rest are fixed.
+const silverTuning: SilverTuning = {
+  metalness: 1.0,
+  roughness: 1.0,
+  envMapIntensity: 6.7,
+  clearcoat: 1.0,
+  clearcoatRoughness: 0.0,
+  normalScale: 0.5,
+  color: 0xffffff,
+  emissive: SILVER_FROST_EMISSIVE,
+  emissiveIntensity: 0.0,
+};
+
+export function getSilverTuning(): SilverTuning {
+  return { ...silverTuning };
+}
+
+export function setSilverTuning(patch: Partial<SilverTuning>): void {
+  Object.assign(silverTuning, patch);
+}
+
+/**
+ * The ONLY user-editable, DB-persisted silver settings — a single GLOBAL config
+ * shared by every product. Everything else in SilverTuning is hard-coded above.
+ *  - density: 0–100 "Độ phủ bạc" coverage
+ *  - metalness: 0–1
+ *  - normalScale: 0–2 "Độ sâu hạt"
+ */
+export interface SilverGlobalConfig {
+  density: number;
+  metalness: number;
+  normalScale: number;
+}
+
+/** Global defaults = the approved look from the reference screenshot. */
+export const DEFAULT_SILVER_GLOBAL: SilverGlobalConfig = {
+  density: 90,
+  metalness: 1.0,
+  normalScale: 0.5,
+};
+
+/**
+ * Map a 0–100 density slider to a COVERAGE fraction (0..SILVER_MAX_COVERAGE).
+ * Linear; 100 → 0.96. This is the blend amount from the base material toward the
+ * frosted-silver target — cheap per-material lerp, no texture work.
+ */
+export function densityToCoverage(v: number): number {
+  const clamped = Math.max(0, Math.min(SILVER_GRAIN_DENSITY_MAX, v));
+  return (clamped / SILVER_GRAIN_DENSITY_MAX) * SILVER_MAX_COVERAGE;
+}
+
+/** Fixed tile repeat for the fine tooth (frost micro-texture). Kept high so the
+ * speckle is fine/dense regardless of coverage — decoupled from the slider. */
+const FROST_TILES_U = 16;
+const FROST_TILES_V = 116;
+
+// The flake tile is built ONCE (size is fixed) and cached. Density does not
+// affect the canvas, only the repeat count, so a single cache entry suffices.
 let cachedMaps: SilverCoatingMaps | null = null;
 
 /**
@@ -87,6 +235,7 @@ function buildFlakeCanvases(): {
 } {
   const size = FLAKE_TEXTURE_SIZE;
   const rand = mulberry32(0x5b1f);
+  const sizeMul = SIZE_MULTIPLIER;
 
   // --- Metalness map ---
   // High metallic base so the body is a silver substrate; denser grain makes it
@@ -119,14 +268,15 @@ function buildFlakeCanvases(): {
   nctx.fillStyle = "rgb(128,128,255)";
   nctx.fillRect(0, 0, size, size);
 
-  // Scatter grain. Very high density + fine size for a tight metallic texture.
-  // Each grain gets ONE random "intensity" and all maps are driven from it so a
-  // bright/metallic grain is also the glossiest one — a real flake catching light.
-  const flakeCount = Math.round((size * size) / 2.2);
+  // Scatter grain. Fixed count + fixed size for a tight metallic tile that we
+  // build only once. Each grain gets ONE random "intensity" and all maps are
+  // driven from it so a bright/metallic grain is also the glossiest one — a real
+  // flake catching light. Visual density is added later by tiling, not here.
+  const flakeCount = FIXED_FLAKE_COUNT;
   for (let i = 0; i < flakeCount; i++) {
     const x = rand() * size;
     const y = rand() * size;
-    const r = 1.0 + rand() * 2.0; // ~1.0–3.0px grains (larger)
+    const r = (BASE_GRAIN_MIN + rand() * BASE_GRAIN_SPAN) * sizeMul; // ~2.5–7.5px at size 125
     const intensity = Math.sqrt(rand()); // 0..1, skewed toward bright/metallic
 
     // Metal grain — strongly metallic, brighter grains fully metal.
@@ -159,17 +309,19 @@ function makeTiledTexture(canvas: HTMLCanvasElement): THREE.CanvasTexture {
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  // Anisotropic repeat keeps flakes round on the stretched cylinder UV and
-  // covers the full width & height of the surface.
-  tex.repeat.set(FLAKE_TILES_U, FLAKE_TILES_V);
+  // Fixed dense anisotropic repeat → a fine, uniform matte tooth across the whole
+  // surface (the frost micro-texture). Independent of the coverage slider.
+  tex.repeat.set(FROST_TILES_U, FROST_TILES_V);
   tex.colorSpace = THREE.NoColorSpace; // data textures, not color
   tex.needsUpdate = true;
   return tex;
 }
 
 /**
- * Get (and lazily create) the shared silver-flake texture maps.
- * Returns cached textures — callers must NOT dispose them.
+ * Get (and lazily create) the shared silver-frost tooth maps. Built ONCE, then
+ * reused by the live preview and the extractors — callers must NOT dispose them.
+ * Coverage (how much the frost hides the artwork) is applied separately per
+ * material via densityToCoverage(), so these maps never change.
  */
 export function getSilverCoatingMaps(): SilverCoatingMaps {
   if (cachedMaps) return cachedMaps;

@@ -1,4 +1,4 @@
-import type { ShopifyFormData, ShopifyVersionName } from "@/types/product";
+import type { ShaftConfig, ShopifyFormData, ShopifyVersionName, SurfaceSlotsConfig } from "@/types/product";
 
 // The shared request body for both deploy (create-product) and save-draft.
 // Save-draft tolerates partial/incomplete values; deploy validates them.
@@ -25,6 +25,12 @@ export interface ShopifyDeployRequest {
   aiModel?: string;
   manualTags?: string[];
   skillIds?: string[];
+  /** Current editor surface slot config. Deploy uses this so slot edits do not require a separate product save first. */
+  surfaceSlots?: SurfaceSlotsConfig | null;
+  /** Current editor surface image URL, paired with surfaceSlots for Shopify metafields. */
+  surfaceImageUrl?: string | null;
+  /** Per-product laser shaft preview images + text frame positions. */
+  shaftConfig?: ShaftConfig | null;
 }
 
 // Build the full form snapshot persisted in shopify_deployments.form_data so a
@@ -50,6 +56,7 @@ export function buildFormData(body: ShopifyDeployRequest): ShopifyFormData {
     aiModel = "",
     manualTags = [],
     skillIds = [],
+    shaftConfig = null,
   } = body;
 
   const collectionList = (collections ?? "")
@@ -87,5 +94,6 @@ export function buildFormData(body: ShopifyDeployRequest): ShopifyFormData {
     videoUrl: videoUrl ?? null,
     manualTags,
     skillIds,
+    shaftConfig,
   };
 }

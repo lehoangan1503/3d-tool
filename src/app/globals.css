@@ -1,5 +1,5 @@
-/* Plus Jakarta Sans - Modern SaaS typography */
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+/* Plus Jakarta Sans - Modern SaaS typography; Poppins is used for laser text previews. */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Poppins:wght@300;400;500;600;700;800;900&display=swap');
 
 @import "tailwindcss";
 

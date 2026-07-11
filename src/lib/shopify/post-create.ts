@@ -6,8 +6,8 @@
  *   1. Map laser-shaft variant images (Yes → Mockup-Web-5, others → Mockup-Web-1)
  *   2. Promote Details/Package images to product metafields (custom.*), then
  *      delete those temporary images from the gallery
- *   3. Set the per-variant cue_spec metafield (already inlined at create time;
- *      kept here only for parity / future use)
+ *   3. Upsert product-level metafields that are inlined on first create but not
+ *      included in Shopify product PUT payloads on re-deploy
  *   4. Publish the product to all sales channels
  *   5. Assign the product to collections (custom or smart; create smart if absent)
  *   6. Attach the rendered video (best-effort)
@@ -18,6 +18,7 @@
 
 import {
   type ShopifyCreatedProduct,
+  ensureProductMetafieldDefinition,
   setProductMetafield,
   setVariantImage,
   createFileFromImageUrl,
@@ -36,6 +37,43 @@ import {
 import type { ShopifyProductPayload } from "./product-builder";
 
 type PostCreateMetadata = ShopifyProductPayload["_metadata"];
+
+const PRODUCT_METAFIELD_DEFINITIONS = [
+  {
+    name: "Surface Slots",
+    namespace: "custom",
+    key: "surface_slots",
+    type: "json",
+    description: "Customer-fillable surface slot definitions for the storefront cue customizer.",
+  },
+  {
+    name: "Surface Image",
+    namespace: "custom",
+    key: "surface_image",
+    type: "single_line_text_field",
+    description: "Public surface image URL used by the storefront cue customizer.",
+  },
+  {
+    name: "Cue 3D Config",
+    namespace: "custom",
+    key: "cue_3d_config",
+    type: "json",
+    description: "Cue 3D model, surface, and material configuration for the storefront cue customizer.",
+  },
+  {
+    name: "Shaft Config",
+    namespace: "custom",
+    key: "shaft_config",
+    type: "json",
+    description: "Laser shaft preview images and text frame positions for the storefront cue customizer.",
+  },
+] satisfies Array<{
+  name: string;
+  namespace: string;
+  key: string;
+  type: string;
+  description: string;
+}>;
 
 interface PostCreateInput {
   product: ShopifyCreatedProduct;
@@ -70,14 +108,18 @@ export async function runPostCreateSteps({ product, metadata, videoUrl, title }:
   // ── 2. Image metafields (Details / Package) ──
   await setImageMetafields(product, metadata, title);
 
-  // ── 3. Publish to all sales channels ──
+  // ── 3. Product-level metafields (custom text, customizer slots, 3D config) ──
+  await ensureProductMetafieldDefinitions(metadata);
+  await setProductMetafields(productId, metadata);
+
+  // ── 4. Publish to all sales channels ──
   try {
     await publishProductToAllChannels(productId);
   } catch (err) {
     console.warn("[post-create] publish product:", err instanceof Error ? err.message : err);
   }
 
-  // ── 4. Collections ──
+  // ── 5. Collections ──
   // Keep the resolved name → collection-id map so the breadcrumb step (next)
   // can turn the picked collection name into a GID without re-fetching.
   let collectionIdsByName = new Map<string, number>();
@@ -89,7 +131,7 @@ export async function runPostCreateSteps({ product, metadata, videoUrl, title }:
     }
   }
 
-  // ── 4b. Breadcrumb collection metafield (custom.breadcrumb_collection) ──
+  // ── 5b. Breadcrumb collection metafield (custom.breadcrumb_collection) ──
   // The user picked one of the collections above to drive the storefront
   // breadcrumb. We write it as a collection_reference (GID). null = skip.
   if (metadata.breadcrumbCollection) {
@@ -100,7 +142,7 @@ export async function runPostCreateSteps({ product, metadata, videoUrl, title }:
     }
   }
 
-  // ── 5. Video (best-effort) ──
+  // ── 6. Video (best-effort) ──
   // Note: Shopify only accepts MP4/MOV for product video. The studio renders
   // WebM, so this may be rejected at processing time — logged, not fatal.
   if (videoUrl) {
@@ -119,6 +161,43 @@ export async function runPostCreateSteps({ product, metadata, videoUrl, title }:
       }
     } catch (err) {
       console.warn("[post-create] add video:", err instanceof Error ? err.message : err);
+    }
+  }
+}
+
+// ── Product-level metafields ─────────────────────────────────────────────────
+
+async function ensureProductMetafieldDefinitions(metadata: PostCreateMetadata): Promise<void> {
+  if (!metadata.productMetafields.length) return;
+
+  const neededKeys = new Set(
+    metadata.productMetafields.map((metafield) => `${metafield.namespace}.${metafield.key}`),
+  );
+
+  for (const definition of PRODUCT_METAFIELD_DEFINITIONS) {
+    if (!neededKeys.has(`${definition.namespace}.${definition.key}`)) continue;
+    try {
+      await ensureProductMetafieldDefinition(definition);
+    } catch (err) {
+      console.warn(
+        `[post-create] ensure metafield definition ${definition.namespace}.${definition.key}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+}
+
+async function setProductMetafields(productId: number, metadata: PostCreateMetadata): Promise<void> {
+  if (!metadata.productMetafields.length) return;
+
+  for (const metafield of metadata.productMetafields) {
+    try {
+      await setProductMetafield(productId, metafield);
+    } catch (err) {
+      console.warn(
+        `[post-create] set metafield ${metafield.namespace}.${metafield.key}:`,
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 }

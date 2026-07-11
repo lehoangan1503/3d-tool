@@ -338,6 +338,9 @@ export async function runProductDeploy(
     aiModel: config.aiModel,
     manualTags: config.manualTags,
     skillIds: config.skillIds,
+    surfaceSlots: product.surface_slots,
+    surfaceImageUrl: product.surface_url ?? null,
+    shaftConfig: product.shaft_config ?? null,
   };
 
   const res = await fetch("/api/shopify/create-product", {

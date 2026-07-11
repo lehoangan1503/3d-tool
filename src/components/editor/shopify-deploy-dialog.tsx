@@ -24,7 +24,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import type { Product, ShopifyDeploymentSummary, ShopifyCollection, ShopifySkill } from "@/types/product";
+import type { Product, ShaftConfig, ShopifyDeploymentSummary, ShopifyCollection, ShopifySkill } from "@/types/product";
 import type { ShopifyLiveCollection } from "@/app/api/shopify/collections/shopify/route";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import type { ExtractorReference, ExtractorReferenceGroup } from "@/types/extractor";
@@ -37,6 +37,7 @@ import { StoreSwitcher, useStore } from "@/components/shopify/store-switcher";
 import { createClient } from "@/lib/supabase/client";
 import { parseProductTitle } from "@/lib/shopify/parse-title";
 import { getProductCodeFormat, isValidProductCode } from "@/lib/shopify/product-code";
+import { ShaftConfigEditor } from "@/components/editor/shaft-config-editor";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -363,6 +364,8 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
   // No default — the editor must pick wrap or wrapless.
   const [wrapType, setWrapType] = useState<WrapType | "">(prefill?.wrapType ?? "");
   const [laserShaft, setLaserShaft] = useState(prefill?.laserShaft ?? true);
+  const [shaftConfigOpen, setShaftConfigOpen] = useState(false);
+  const [shaftConfig, setShaftConfig] = useState<ShaftConfig | null>(prefill?.shaftConfig ?? product.shaft_config ?? null);
   const [customImage, setCustomImage] = useState(prefill?.customImage ?? false);
   // Custom text has two mutually-exclusive modes: "free" and "paid" (+$20).
   const [customTextMode, setCustomTextMode] = useState<"none" | "free" | "paid">(prefill?.customTextPaid ? "paid" : prefill?.customText ? "free" : "none");
@@ -886,10 +889,16 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
         aiModel,
         manualTags,
         skillIds: selectedSkillIds,
+        surfaceSlots: product.surface_slots,
+        surfaceImageUrl: product.surface_url ?? null,
+        shaftConfig,
       };
     },
     [
       product.id,
+      product.surface_slots,
+      product.surface_url,
+      shaftConfig,
       storeId,
       productCode,
       title,
@@ -910,6 +919,23 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       selectedSkillIds,
     ]
   );
+
+  const handleSaveShaftConfig = useCallback(async (config: ShaftConfig | null) => {
+    setDeployError("");
+    setSaveMsg("");
+    const res = await fetch(`/api/products/${product.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ shaft_config: config }),
+    });
+    const data = (await res.json().catch(() => null)) as Product | { error?: string } | null;
+    if (!res.ok) {
+      throw new Error((data && "error" in data && data.error) || "Lưu shaft config thất bại");
+    }
+    const savedConfig = data && "shaft_config" in data ? data.shaft_config ?? config : config;
+    setShaftConfig(savedConfig);
+    setSaveMsg("Đã lưu shaft config.");
+  }, [product.id]);
 
   // ── Deploy ──
   const handleDeploy = useCallback(async () => {
@@ -936,6 +962,14 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     }
     if (customTextOn && (!customTextLabel.trim() || !customTextExample.trim())) {
       alert("Custom Text yêu cầu cả 'Custom text label' và 'Custom text example'.");
+      return;
+    }
+    if (product.surface_url?.startsWith("blob:")) {
+      alert("Surface mới cần được lưu để có URL public trước khi deploy Shopify.");
+      return;
+    }
+    if ((Array.isArray(product.surface_slots?.slots) ? product.surface_slots.slots.length : 0) > 0 && !product.surface_url) {
+      alert("Surface slots cần một surface URL public. Hãy lưu sản phẩm trước khi deploy Shopify.");
       return;
     }
 
@@ -972,7 +1006,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     } finally {
       setDeploying(false);
     }
-  }, [productCode, codeFormat, codeFormatDef, versions, wrapType, title, customTextMode, customTextLabel, customTextExample, renderedImages, uploadAssets, buildPayload, deployment, onDeploymentChange, activeStoreName]);
+  }, [productCode, codeFormat, codeFormatDef, versions, wrapType, title, customTextMode, customTextLabel, customTextExample, product.surface_slots, product.surface_url, renderedImages, uploadAssets, buildPayload, deployment, onDeploymentChange, activeStoreName]);
 
   // ── Save draft (persist form_data without touching Shopify) ──
   const handleSaveDraft = useCallback(async () => {
@@ -1502,6 +1536,25 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
                     Custom Text
                   </ToggleBtn>
                 </div>
+                {laserShaft && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-purple-500/25 bg-purple-500/10 p-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 border-purple-400/40 bg-purple-500/10 text-xs text-purple-100 hover:bg-purple-500/20"
+                      onClick={() => setShaftConfigOpen(true)}
+                    >
+                      <ImageIcon className="mr-1.5 h-3.5 w-3.5" />
+                      Shaft preview slot
+                    </Button>
+                    <span className="text-xs text-purple-200/70">
+                      {shaftConfig?.standard?.imageUrl || shaftConfig?.proLux?.imageUrl
+                        ? "Configured for Shopify custom.shaft_config"
+                        : "Upload Standard and Pro/Lux preview images, then place the text frame"}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Custom Text fields — required when a custom-text mode is on */}
@@ -2144,6 +2197,14 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ShaftConfigEditor
+        productId={product.id}
+        open={shaftConfigOpen}
+        onOpenChange={setShaftConfigOpen}
+        value={shaftConfig}
+        onSave={handleSaveShaftConfig}
+      />
     </div>
   );
 }

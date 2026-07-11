@@ -146,9 +146,37 @@ export interface MetafieldInput {
   value: string;
 }
 
+interface ShopifyMetafieldRecord extends MetafieldInput {
+  id: number;
+}
+
+async function getProductMetafield(productId: number, namespace: string, key: string): Promise<ShopifyMetafieldRecord | null> {
+  const data = await shopifyRequest<{ metafields: ShopifyMetafieldRecord[] }>(
+    "GET",
+    `/products/${productId}/metafields.json?namespace=${encodeURIComponent(namespace)}&key=${encodeURIComponent(key)}`
+  );
+  return data.metafields?.[0] ?? null;
+}
+
 export async function setProductMetafield(productId: number, metafield: MetafieldInput): Promise<void> {
+  const value = normalizeGid(metafield.value);
+  const existing = await getProductMetafield(productId, metafield.namespace, metafield.key);
+
+  if (existing) {
+    await shopifyRequest("PUT", `/metafields/${existing.id}.json`, {
+      metafield: {
+        id: existing.id,
+        namespace: metafield.namespace,
+        key: metafield.key,
+        type: metafield.type,
+        value,
+      },
+    });
+    return;
+  }
+
   await shopifyRequest("POST", `/products/${productId}/metafields.json`, {
-    metafield: { ...metafield, value: normalizeGid(metafield.value) },
+    metafield: { ...metafield, value },
   });
 }
 
@@ -156,6 +184,67 @@ export async function setVariantMetafield(variantId: number, metafield: Metafiel
   await shopifyRequest("POST", `/variants/${variantId}/metafields.json`, {
     metafield: { ...metafield, value: normalizeGid(metafield.value) },
   });
+}
+
+export interface ProductMetafieldDefinitionInput {
+  name: string;
+  namespace: string;
+  key: string;
+  type: string;
+  description?: string;
+}
+
+export async function ensureProductMetafieldDefinition(definition: ProductMetafieldDefinitionInput): Promise<void> {
+  const existing = await shopifyGraphQL<{
+    metafieldDefinitions: { nodes: Array<{ id: string }> };
+  }>(
+    `query($namespace: String!, $key: String!) {
+      metafieldDefinitions(first: 1, ownerType: PRODUCT, namespace: $namespace, key: $key) {
+        nodes { id }
+      }
+    }`,
+    { namespace: definition.namespace, key: definition.key },
+  );
+
+  if (existing.metafieldDefinitions.nodes.length > 0) return;
+
+  const result = await shopifyGraphQL<{
+    metafieldDefinitionCreate: {
+      createdDefinition: { id: string } | null;
+      userErrors: Array<{ code?: string; message: string }>;
+    };
+  }>(
+    `mutation($definition: MetafieldDefinitionInput!) {
+      metafieldDefinitionCreate(definition: $definition) {
+        createdDefinition { id }
+        userErrors { code message }
+      }
+    }`,
+    {
+      definition: {
+        ownerType: "PRODUCT",
+        name: definition.name,
+        namespace: definition.namespace,
+        key: definition.key,
+        type: definition.type,
+        ...(definition.description ? { description: definition.description } : {}),
+      },
+    },
+  );
+
+  const errors = result.metafieldDefinitionCreate.userErrors ?? [];
+  if (!errors.length) return;
+
+  const alreadyExists = errors.every((error) => (
+    error.code === "TAKEN" || /already|exists|taken/i.test(error.message)
+  ));
+  if (alreadyExists) return;
+
+  throw new Error(
+    `metafieldDefinitionCreate ${definition.namespace}.${definition.key}: ${errors
+      .map((error) => error.message)
+      .join("; ")}`
+  );
 }
 
 // ── Variant images ────────────────────────────────────────────────────────────

@@ -1,0 +1,17 @@
+-- Laser shaft preview configuration for the storefront customizer.
+-- JSON shape (ShaftConfig in src/types/product.ts):
+-- {
+--   "version": 1,
+--   "standard": {
+--     "imageUrl": "https://...",
+--     "frame": { "x", "y", "w", "h", "fontSize", "fontWeight", "rotate", "color", "fontFamily" }
+--   },
+--   "proLux": {
+--     "imageUrl": "https://...",
+--     "frame": { "x", "y", "w", "h", "fontSize", "fontWeight", "rotate", "color", "fontFamily" }
+--   }
+-- }
+-- Coordinates are fractions of the flat laser preview image. fontSize is a
+-- percent of the preview image width. Deployed to Shopify as
+-- custom.shaft_config.
+alter table products add column if not exists shaft_config jsonb;

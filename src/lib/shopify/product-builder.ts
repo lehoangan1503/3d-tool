@@ -5,7 +5,15 @@
 
 import { activeStore } from "./store-context";
 import type { SpecMetafieldMap } from "./stores";
-import type { ShopifyVersionName } from "@/types/product";
+import type {
+  LeatherColor,
+  LeatherTextureType,
+  ProductType,
+  ShaftConfig,
+  ShopifyVersionName,
+  SurfaceSlotsConfig,
+  ThreeJSSettingsJson,
+} from "@/types/product";
 
 // ── Base config ──────────────────────────────────────────────────────────────
 
@@ -29,6 +37,14 @@ const DEFAULT_PRODUCT_SETTINGS = {
   weight: 600,
   weight_unit: "g",
 };
+
+const SHOPIFY_3D_LOGO_URL = "https://cdn.shopify.com/s/files/1/0728/7314/8553/files/logo.png";
+
+const SHOPIFY_HDRI_URLS = [
+  "https://cdn.shopify.com/s/files/1/0728/7314/8553/files/church_museum_2k.hdr",
+  "https://cdn.shopify.com/s/files/1/0728/7314/8553/files/church_stairway_2k.hdr",
+  "https://cdn.shopify.com/s/files/1/0728/7314/8553/files/bloem_train_track_clear_2k.hdr",
+];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -71,6 +87,98 @@ function slugify(text: string): string {
 /** Strip a file extension from an image name → its stem (e.g. "Mockup-Web-1.png" → "Mockup-Web-1"). */
 function imageStem(name: string): string {
   return name.replace(/\.[^.]+$/, "");
+}
+
+interface Cue3dMetafieldConfig {
+  type: ProductType;
+  surface_url: string;
+  texture_type?: LeatherTextureType | null;
+  color?: LeatherColor | null;
+  config: {
+    logoUrl: string;
+    hdriExposure: number;
+    hdriType: string;
+    hdriUrls: string[];
+    textureScale: number;
+    lighting: {
+      clearcoat: number;
+      bodyRoughness: number;
+    };
+    leather: {
+      roughness: number;
+      sheen: number;
+      normalStrength: number;
+    };
+    joint: {
+      roughness: number;
+      clearcoat: number;
+      metalness: number;
+    };
+    cylinder?: {
+      roughness: number;
+      clearcoat: number;
+      metalness: number;
+      color: string;
+      normalScale?: number;
+      sheen?: number;
+      sheenColor?: string;
+    };
+  };
+}
+
+function buildCue3dConfig(input: {
+  productType: ProductType;
+  surfaceImageUrl: string | null;
+  textureType?: LeatherTextureType | null;
+  color?: LeatherColor | null;
+  threejsSettings?: ThreeJSSettingsJson | null;
+}): Cue3dMetafieldConfig | null {
+  const { productType, surfaceImageUrl, textureType = null, color = null, threejsSettings } = input;
+  if (!surfaceImageUrl || !threejsSettings) return null;
+
+  const lighting = threejsSettings.lighting;
+  const material = threejsSettings.material;
+
+  return {
+    type: productType,
+    surface_url: surfaceImageUrl,
+    texture_type: textureType,
+    color,
+    config: {
+      logoUrl: SHOPIFY_3D_LOGO_URL,
+      hdriExposure: lighting.hdriExposure ?? 1,
+      hdriType: lighting.hdriType ?? "bloem_train_track_clear_2k.hdr",
+      hdriUrls: SHOPIFY_HDRI_URLS,
+      textureScale: material.textureScale ?? 1,
+      lighting: {
+        clearcoat: lighting.clearcoat,
+        bodyRoughness: lighting.bodyRoughness,
+      },
+      leather: {
+        roughness: material.leatherRoughness,
+        sheen: material.sheen,
+        normalStrength: material.normalStrength,
+      },
+      joint: {
+        roughness: threejsSettings.joint?.roughness ?? 255,
+        clearcoat: threejsSettings.joint?.clearcoat ?? 0,
+        metalness: threejsSettings.joint?.metalness ?? 1,
+      },
+      ...(threejsSettings.cylinder
+        ? {
+            cylinder: {
+              roughness: threejsSettings.cylinder.roughness,
+              clearcoat: threejsSettings.cylinder.clearcoat,
+              metalness: threejsSettings.cylinder.metalness,
+              color: threejsSettings.cylinder.color,
+              normalScale: threejsSettings.cylinder.normalScale,
+              sheen: threejsSettings.cylinder.sheen,
+              sheenColor: threejsSettings.cylinder.sheenColor,
+            },
+          }
+        : {}),
+    },
+  };
 }
 
 // ── Image classification (port of classify_attachments) ─────────────────────────
@@ -304,6 +412,7 @@ export interface ProductInput {
   /** Product code — store-specific format (e.g. n01-05 or WA1). Used as the
    *  variant SKU base and an auto-created tag. */
   productCode: string;
+  productType: ProductType;
   title: string;
   descriptionHtml: string;
   /** Comma-separated or array */
@@ -325,6 +434,18 @@ export interface ProductInput {
   customText?: CustomTextConfig | null;
   /** Paid custom text: same metafields PLUS +$20 on every variant + a tag */
   customTextPaid?: boolean;
+  /** Customer-fillable surface slots designed in the editor. Written to the
+   *  custom.surface_slots JSON metafield + adds the custom-slots tag. */
+  surfaceSlots?: SurfaceSlotsConfig | null;
+  /** Public URL of the product's surface image. Written to custom.surface_image
+   *  so the storefront customizer can composite slot content onto it. */
+  surfaceImageUrl?: string | null;
+  /** Flat laser-shaft preview images + text frame positions. */
+  shaftConfig?: ShaftConfig | null;
+  textureType?: LeatherTextureType | null;
+  color?: LeatherColor | null;
+  /** Saved editor 3D settings. Written to custom.cue_3d_config + adds the 3d tag. */
+  threejsSettings?: ThreeJSSettingsJson | null;
 }
 
 export interface ShopifyProductPayload {
@@ -353,6 +474,10 @@ export interface ShopifyProductPayload {
     laserShaftDefaultImagePosition: number | null;
     /** Gallery position of the "Mockup-Web-5" image (laser shaft = Yes). */
     laserShaftImagePosition: number | null;
+    /** Product-level metafields (custom_text, surface_slots, surface_image, shaft_config).
+     *  Inlined on create, but the update-in-place PUT does not carry
+     *  metafields — post-create upserts these so re-deploys get them too. */
+    productMetafields: Array<{ namespace: string; key: string; type: string; value: string }>;
   };
 }
 
@@ -360,6 +485,7 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
   const {
     productCode,
     title,
+    productType,
     descriptionHtml,
     collections,
     breadcrumbCollection = null,
@@ -372,7 +498,21 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
     customImage = false,
     customText = null,
     customTextPaid = false,
+    surfaceSlots = null,
+    surfaceImageUrl = null,
+    shaftConfig = null,
+    textureType = null,
+    color = null,
+    threejsSettings = null,
   } = input;
+
+  const cue3dConfig = buildCue3dConfig({
+    productType,
+    surfaceImageUrl,
+    textureType,
+    color,
+    threejsSettings,
+  });
 
   // Build handle
   const titleSlug = slugify(title);
@@ -394,6 +534,19 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
   // only one can be picked per product and the storefront logic keys on it.
   if (customTextPaid || customText?.label) {
     tags.add("custom-text");
+  }
+
+  // Customer-fillable surface slots — storefront customizer keys on this tag.
+  const hasSurfaceSlots = Array.isArray(surfaceSlots?.slots) && surfaceSlots.slots.length > 0;
+  const hasShaftConfig = Boolean(shaftConfig && (shaftConfig.standard?.imageUrl || shaftConfig.proLux?.imageUrl));
+  if (hasSurfaceSlots) {
+    tags.add("custom-slots");
+  }
+  if (hasShaftConfig) {
+    tags.add("shaft-config");
+  }
+  if (cue3dConfig) {
+    tags.add("3d");
   }
 
   for (const tag of manualTags) {
@@ -499,6 +652,45 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
     });
   }
 
+  // Surface slot definitions + the surface image they overlay. The storefront
+  // customizer reads both to let customers fill the slots (photo/text) and
+  // composite the result onto the cue surface.
+  if (hasSurfaceSlots && surfaceSlots) {
+    metafields.push({
+      namespace: "custom",
+      key: "surface_slots",
+      type: "json",
+      value: JSON.stringify(surfaceSlots),
+    });
+  }
+
+  if (surfaceImageUrl && (hasSurfaceSlots || cue3dConfig)) {
+    metafields.push({
+      namespace: "custom",
+      key: "surface_image",
+      type: "single_line_text_field",
+      value: surfaceImageUrl,
+    });
+  }
+
+  if (cue3dConfig) {
+    metafields.push({
+      namespace: "custom",
+      key: "cue_3d_config",
+      type: "json",
+      value: JSON.stringify(cue3dConfig),
+    });
+  }
+
+  if (hasShaftConfig && shaftConfig) {
+    metafields.push({
+      namespace: "custom",
+      key: "shaft_config",
+      type: "json",
+      value: JSON.stringify(shaftConfig),
+    });
+  }
+
   const payload: ShopifyProductPayload = {
     product: {
       title,
@@ -520,6 +712,7 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
       imageMetafields,
       laserShaftDefaultImagePosition,
       laserShaftImagePosition,
+      productMetafields: metafields,
     },
   };
 

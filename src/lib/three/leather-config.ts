@@ -396,7 +396,7 @@ export function getSurfacePath(surfaceKey: string): string {
 
 export const RUBBER_CONFIG: RubberConfigType = {
   enabled: true,
-  materialNames: ["bumper_mat", "bumper", "rubber", "bottom", "butt_cap", "end_cap", "pad", "foot", "base", "Mat_Bumper"],
+  materialNames: ["bumper_mat", "bumper", "rubber", "bottom", "butt_cap", "end_cap", "pad", "foot", "base", "Mat_Bumper", "plastic black", "plastic black 4"],
   backgroundColor: "#0a0a0a",
   roughness: 0.94,
   clearcoat: 0.01,

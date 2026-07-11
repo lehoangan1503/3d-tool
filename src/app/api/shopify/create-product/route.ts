@@ -16,6 +16,7 @@ import { withStore, activeStore } from "@/lib/shopify/store-context";
 import { getStore } from "@/lib/shopify/stores";
 import { getProductCodeFormat } from "@/lib/shopify/product-code";
 import { parseProductTitle } from "@/lib/shopify/parse-title";
+import type { ShaftConfig, SurfaceSlotsConfig, ThreeJSSettingsJson } from "@/types/product";
 
 export async function POST(request: Request) {
   try {
@@ -40,7 +41,12 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = await request.json() as ShopifyDeployRequest;
+    const rawBody = await request.json() as ShopifyDeployRequest & {
+      surface_slots?: SurfaceSlotsConfig | null;
+      surface_image_url?: string | null;
+      shaft_config?: ShaftConfig | null;
+    };
+    const body = rawBody as ShopifyDeployRequest;
 
     // All Shopify API calls below run against the store selected in the request
     // (defaults to the configured default store when storeId is omitted).
@@ -66,6 +72,24 @@ export async function POST(request: Request) {
       manualTags = [],
       skillIds = [],
     } = body;
+    const hasRequestSurfaceSlots =
+      Object.prototype.hasOwnProperty.call(rawBody, "surfaceSlots") ||
+      Object.prototype.hasOwnProperty.call(rawBody, "surface_slots");
+    const requestSurfaceSlots = Object.prototype.hasOwnProperty.call(rawBody, "surfaceSlots")
+      ? body.surfaceSlots
+      : rawBody.surface_slots;
+    const hasRequestSurfaceImageUrl =
+      Object.prototype.hasOwnProperty.call(rawBody, "surfaceImageUrl") ||
+      Object.prototype.hasOwnProperty.call(rawBody, "surface_image_url");
+    const requestSurfaceImageUrl = Object.prototype.hasOwnProperty.call(rawBody, "surfaceImageUrl")
+      ? body.surfaceImageUrl
+      : rawBody.surface_image_url;
+    const hasRequestShaftConfig =
+      Object.prototype.hasOwnProperty.call(rawBody, "shaftConfig") ||
+      Object.prototype.hasOwnProperty.call(rawBody, "shaft_config");
+    const requestShaftConfig = Object.prototype.hasOwnProperty.call(rawBody, "shaftConfig")
+      ? body.shaftConfig
+      : rawBody.shaft_config;
 
     // Auto tags (sku, wrap, laser shaft, col_<collection>) come from the builder;
     // these are the editor's extra freeform/test tags.
@@ -77,7 +101,7 @@ export async function POST(request: Request) {
     // admin → any product; mode → own products only.
     const { data: productRow, error: prodError } = await supabase
       .from("products")
-      .select("id, user_id, name")
+      .select("id, user_id, name, type, surface_url, surface_slots, shaft_config, texture_type, color, threejs_settings_id")
       .eq("id", productId)
       .single();
 
@@ -89,6 +113,21 @@ export async function POST(request: Request) {
         { error: "Forbidden — mode users can only deploy their own products" },
         { status: 403 }
       );
+    }
+
+    let threejsSettings: ThreeJSSettingsJson | null = null;
+    if (productRow.threejs_settings_id) {
+      const { data: settingsRow, error: settingsError } = await supabase
+        .from("threejs_settings")
+        .select("settings")
+        .eq("id", productRow.threejs_settings_id)
+        .maybeSingle();
+
+      if (settingsError) {
+        console.warn("Failed to load threejs_settings for Shopify 3D metafield:", settingsError.message);
+      } else {
+        threejsSettings = (settingsRow?.settings as ThreeJSSettingsJson | null) ?? null;
+      }
     }
 
     // Resolve + validate the product code against the ACTIVE store's format.
@@ -125,8 +164,16 @@ export async function POST(request: Request) {
 
     const descriptionHtml = markdownToHtml(description ?? "");
 
+    const resolvedSurfaceSlots = hasRequestSurfaceSlots ? requestSurfaceSlots ?? null : productRow.surface_slots ?? null;
+    const resolvedSurfaceImageUrl =
+      !hasRequestSurfaceImageUrl
+        ? productRow.surface_url ?? null
+        : requestSurfaceImageUrl?.trim() || null;
+    const resolvedShaftConfig = hasRequestShaftConfig ? requestShaftConfig ?? null : productRow.shaft_config ?? null;
+
     const payload = buildShopifyProduct({
       productCode: resolvedCode.toLowerCase(),
+      productType: productRow.type,
       title: title.trim(),
       descriptionHtml,
       collections: collections ?? "",
@@ -139,6 +186,14 @@ export async function POST(request: Request) {
       customImage: Boolean(customImage),
       customText: activeCustomText,
       customTextPaid: Boolean(customTextPaid),
+      // Surface slot design (customer-fillable frames) + the surface image it
+      // overlays — deployed as custom.surface_slots / custom.surface_image.
+      surfaceSlots: resolvedSurfaceSlots,
+      surfaceImageUrl: resolvedSurfaceImageUrl,
+      shaftConfig: resolvedShaftConfig,
+      textureType: productRow.texture_type ?? null,
+      color: productRow.color ?? null,
+      threejsSettings,
     });
 
     // Build the full form snapshot to persist for later edit / re-deploy.
@@ -150,7 +205,14 @@ export async function POST(request: Request) {
 
     // Persist the resolved code (server may have derived it from the name) so a
     // re-open shows the same code that was actually deployed.
-    const formData = buildFormData({ ...body, productCode: resolvedCode, manualTags: tags });
+    const formData = buildFormData({
+      ...body,
+      productCode: resolvedCode,
+      manualTags: tags,
+      surfaceSlots: resolvedSurfaceSlots,
+      surfaceImageUrl: resolvedSurfaceImageUrl,
+      shaftConfig: resolvedShaftConfig,
+    });
 
     // Genuine service-role client (bypasses RLS) so admins can record
     // deployments on products they don't own; ownership/role enforced above.

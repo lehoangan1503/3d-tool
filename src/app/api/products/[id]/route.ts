@@ -61,6 +61,8 @@ export async function PUT(request: Request, { params }: RouteParams) {
 
     if (body.name !== undefined) updateData.name = body.name;
     if (body.surface_url !== undefined) updateData.surface_url = body.surface_url;
+    if (body.surface_slots !== undefined) updateData.surface_slots = body.surface_slots;
+    if (body.shaft_config !== undefined) updateData.shaft_config = body.shaft_config;
     if (body.texture_type !== undefined) updateData.texture_type = body.texture_type;
     if (body.texture_url !== undefined) updateData.texture_url = body.texture_url;
     if (body.color !== undefined) updateData.color = body.color;

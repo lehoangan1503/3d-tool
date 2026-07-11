@@ -6,6 +6,7 @@ import Link from "next/link";
 import { CuePreview } from "@/components/editor/cue-preview";
 import { LeatherPicker } from "@/components/editor/leather-picker";
 import { SurfaceUploader } from "@/components/editor/surface-uploader";
+import { SurfaceSlotEditor } from "@/components/editor/surface-slot-editor";
 import { SilverTuningPanel } from "@/components/editor/silver-tuning-panel";
 import { DEFAULT_SILVER_GLOBAL, type SilverGlobalConfig } from "@/lib/three/silver-coating";
 import { ImageExtractor } from "@/components/editor/image-extractor";
@@ -40,6 +41,7 @@ import {
   Video,
   ShoppingBag,
   ExternalLink,
+  LayoutTemplate,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { Product, ProductConfig, LeatherColor, LeatherTextureType, ShopifyDeploymentSummary } from "@/types/product";
@@ -77,6 +79,8 @@ export function EditorClient({
 }: EditorClientProps) {
   const router = useRouter();
   const [product, setProduct] = useState(initialProduct);
+  // Surface slot designer dialog (customer-fillable frames on the surface).
+  const [slotEditorOpen, setSlotEditorOpen] = useState(false);
   // Held in state so the badge / button / header links update immediately after
   // a deploy or delete, without needing a page reload.
   //
@@ -370,23 +374,24 @@ export function EditorClient({
     }
   }, []);
 
-  const handleSave = async () => {
+  const persistProduct = async (productOverrides: Partial<Product> = {}) => {
     setSaving(true);
     setUploading(true);
 
     try {
-      let surfaceUrl = product.surface_url;
-      let textureUrl = product.texture_url;
+      const productToSave = { ...productRef.current, ...productOverrides };
+      let surfaceUrl = productToSave.surface_url;
+      let textureUrl = productToSave.texture_url;
 
       // Prepare parallel upload tasks
       const uploadTasks: Promise<{ type: "surface" | "texture"; url: string }>[] = [];
 
       if (pendingFiles.surface) {
-        uploadTasks.push(uploadToStorage(pendingFiles.surface.file, product.id, "surface", product.user_id).then((url) => ({ type: "surface" as const, url })));
+        uploadTasks.push(uploadToStorage(pendingFiles.surface.file, productToSave.id, "surface", productToSave.user_id).then((url) => ({ type: "surface" as const, url })));
       }
 
       if (pendingFiles.customTexture) {
-        uploadTasks.push(uploadToStorage(pendingFiles.customTexture.file, product.id, "texture", product.user_id).then((url) => ({ type: "texture" as const, url })));
+        uploadTasks.push(uploadToStorage(pendingFiles.customTexture.file, productToSave.id, "texture", productToSave.user_id).then((url) => ({ type: "texture" as const, url })));
       }
 
       // Upload files in parallel (direct to Supabase - no Next.js proxy)
@@ -403,15 +408,17 @@ export function EditorClient({
 
       setUploading(false);
 
-      const res = await fetch(`/api/products/${product.id}`, {
+      const res = await fetch(`/api/products/${productToSave.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: product.name,
-          texture_type: product.texture_type,
+          name: productToSave.name,
+          texture_type: productToSave.texture_type,
           texture_url: textureUrl,
-          color: product.color,
+          color: productToSave.color,
           surface_url: surfaceUrl,
+          surface_slots: productToSave.surface_slots ?? null,
+          shaft_config: productToSave.shaft_config ?? null,
           config: configToSettingsJson(config),
         }),
       });
@@ -419,6 +426,7 @@ export function EditorClient({
       if (!res.ok) {
         throw new Error("Failed to save");
       }
+      const savedProduct = (await res.json()) as Product;
 
       // Clear pending files
       setPendingFiles({ surface: null, customTexture: null });
@@ -427,17 +435,34 @@ export function EditorClient({
       // Update product with uploaded URLs
       setProduct((prev) => ({
         ...prev,
+        ...savedProduct,
         surface_url: surfaceUrl,
         texture_url: textureUrl,
       }));
 
       router.refresh();
-    } catch (error) {
-      console.error("Save error:", error);
-      alert("Không thể lưu thay đổi");
     } finally {
       setSaving(false);
       setUploading(false);
+    }
+  };
+
+  const handleSave = async () => {
+    try {
+      await persistProduct();
+    } catch (error) {
+      console.error("Save error:", error);
+      alert("Không thể lưu thay đổi");
+    }
+  };
+
+  const handleSurfaceSlotsSave = async (surfaceSlots: Product["surface_slots"] | null) => {
+    try {
+      await persistProduct({ surface_slots: surfaceSlots });
+    } catch (error) {
+      console.error("Surface slots save error:", error);
+      alert("Không thể lưu khung tùy chỉnh");
+      throw error;
     }
   };
 
@@ -711,6 +736,20 @@ export function EditorClient({
                   pendingPreview={pendingFiles.surface?.preview}
                   uploading={uploading && !!pendingFiles.surface}
                 />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-3 w-full"
+                  onClick={() => setSlotEditorOpen(true)}
+                  disabled={!product.surface_url && !pendingFiles.surface}
+                >
+                  <LayoutTemplate className="mr-1.5 h-4 w-4" />
+                  Khung tùy chỉnh (Slots)
+                  {(Array.isArray(product.surface_slots?.slots) ? product.surface_slots.slots.length : 0) > 0 && (
+                    <Badge variant="outline" className="ml-2">{product.surface_slots?.slots.length}</Badge>
+                  )}
+                </Button>
                 {/* Phủ bạc — silver metallic-flake overlay (Pro line blank) */}
                 <label
                   htmlFor="silverCoating-mobile"
@@ -1182,6 +1221,20 @@ export function EditorClient({
                 pendingPreview={pendingFiles.surface?.preview}
                 uploading={uploading && !!pendingFiles.surface}
               />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-3 w-full"
+                onClick={() => setSlotEditorOpen(true)}
+                disabled={!product.surface_url && !pendingFiles.surface}
+              >
+                <LayoutTemplate className="mr-1.5 h-4 w-4" />
+                Khung tùy chỉnh (Slots)
+                {(Array.isArray(product.surface_slots?.slots) ? product.surface_slots.slots.length : 0) > 0 && (
+                  <Badge variant="outline" className="ml-2">{product.surface_slots?.slots.length}</Badge>
+                )}
+              </Button>
               {/* Phủ bạc — silver metallic-flake overlay (Pro line blank) */}
               <label
                 htmlFor="silverCoating"
@@ -1657,6 +1710,14 @@ export function EditorClient({
           onClose={() => setShowShopifyDeploy(false)}
         />
       )}
+
+      <SurfaceSlotEditor
+        open={slotEditorOpen}
+        onOpenChange={setSlotEditorOpen}
+        surfaceUrl={pendingFiles.surface?.preview ?? product.surface_url}
+        value={product.surface_slots}
+        onSave={handleSurfaceSlotsSave}
+      />
     </div>
   );
 }

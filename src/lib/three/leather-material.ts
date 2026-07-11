@@ -1062,11 +1062,11 @@ export function applyBumperEmissiveShaderMask(physMat: THREE.MeshPhysicalMateria
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <emissivemap_fragment>",
       `#include <emissivemap_fragment>
-      float bumperMask = smoothstep(-0.85, -0.95, vBumperObjNormalY);
+      float bumperMask = 1.0 - smoothstep(-0.95, -0.85, vBumperObjNormalY);
       totalEmissiveRadiance *= bumperMask;`
     );
   };
-  physMat.customProgramCacheKey = () => "bumperEmissiveMaskV2";
+  physMat.customProgramCacheKey = () => "bumperEmissiveMaskV3";
   physMat.needsUpdate = true;
 }
 

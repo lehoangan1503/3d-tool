@@ -18,12 +18,84 @@ export type LeatherColor = "black" | "chestnut" | "chocolate" | "darkBrown" | "w
 // auth.users.app_metadata.role and is NOT stored here. null = normal user.
 export type UserRole = "mode" | null;
 
+// ── Surface customization slots ──────────────────────────────────────────────
+// Placeholder frames designed on the surface image in the internal editor.
+// Customers on the storefront fill them (photo upload / text input) but cannot
+// move or resize them. Coordinates are FRACTIONS of the surface image:
+// x/w across the width (wraps the cue circumference), y/h along the length.
+export type SurfaceSlotType = "image" | "text";
+export type SurfaceSlotImageFit = "contain" | "cover" | "fill";
+export type SurfaceSlotShape = "rect" | "polygon";
+
+export interface SurfaceSlotPoint {
+  x: number;
+  y: number;
+}
+
+export interface SurfaceSlot {
+  id: string;
+  type: SurfaceSlotType;
+  shape?: SurfaceSlotShape;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Polygon slots only. Points are fractions inside the slot's x/y/w/h box. */
+  points?: SurfaceSlotPoint[];
+  /** Degrees. Rotates the whole slot frame around its center. */
+  rotate?: number;
+  /** Corner radius as percent of the smaller side, 0-50. */
+  radius?: number;
+  /** Shown to the customer (e.g. "Photo 1", "Your name"). */
+  label?: string;
+  /** Image slots only. */
+  fit?: SurfaceSlotImageFit;
+  /** Text slots only. */
+  maxChars?: number;
+  font?: string;
+  fontSize?: number;
+  fontWeight?: number;
+  color?: string;
+}
+
+export interface SurfaceSlotsConfig {
+  version: 1;
+  slots: SurfaceSlot[];
+}
+
+export interface ShaftPreviewTextFrame {
+  /** Fractions of the flat preview image. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Percent of preview width. */
+  fontSize: number;
+  fontWeight: number;
+  rotate: number;
+  color: string;
+  fontFamily?: string;
+}
+
+export interface ShaftPreviewImageConfig {
+  imageUrl: string | null;
+  frame: ShaftPreviewTextFrame;
+}
+
+export interface ShaftConfig {
+  version: 1;
+  standard: ShaftPreviewImageConfig;
+  proLux: ShaftPreviewImageConfig;
+}
+
 export interface Product {
   id: string;
   user_id: string;
   name: string;
   type: ProductType;
   surface_url: string | null;
+  surface_slots?: SurfaceSlotsConfig | null;
+  shaft_config?: ShaftConfig | null;
   texture_type: LeatherTextureType | null;
   texture_url: string | null;
   color: LeatherColor | null;
@@ -87,6 +159,7 @@ export interface ShopifyFormData {
   manualTags?: string[];
   // IDs of the AI skills last used for this product (re-selected on reopen).
   skillIds: string[];
+  shaftConfig?: ShaftConfig | null;
 }
 
 // Full Shopify deployment record (shopify_deployments table).
@@ -284,6 +357,8 @@ export interface CreateProductInput {
 export interface UpdateProductInput {
   name?: string;
   surface_url?: string;
+  surface_slots?: SurfaceSlotsConfig | null;
+  shaft_config?: ShaftConfig | null;
   texture_type?: LeatherTextureType;
   texture_url?: string;
   color?: LeatherColor;

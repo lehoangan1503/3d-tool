@@ -154,7 +154,12 @@ export interface ShopifyFormData {
   // Names of the rendered images (parallel to imageUrls), used to classify
   // gallery vs metafield images (Mockup-Web-N, Details-N, Package-N) on deploy.
   imageNames?: string[];
+  // Legacy single-video field. Kept for backward compat with old drafts; new
+  // deploys use videoUrls[] (multiple videos, ordered right after the 1st image).
   videoUrl: string | null;
+  // Ordered list of video URLs. Deployed as gallery media at positions 2,3,...
+  // (right after the first image). Supersedes videoUrl.
+  videoUrls?: string[];
   // Extra freeform tags the editor typed (test tags etc.) — not saved to DB.
   manualTags?: string[];
   // IDs of the AI skills last used for this product (re-selected on reopen).

@@ -17,7 +17,26 @@ import {
   XCircle,
   AlertTriangle,
   Save,
+  GripVertical,
+  Upload,
 } from "lucide-react";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  rectSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -60,6 +79,24 @@ interface RenderedImage {
   /** True when this entry was restored from form_data (url is already hosted). */
   saved?: boolean;
   /** MIME type of the blob (rendered = image/png; user uploads keep their own). */
+  mimeType?: string;
+  /** True for user-uploaded images. These persist across a group re-render
+   *  (only auto-rendered images are cleared/replaced when re-rendering). */
+  uploaded?: boolean;
+}
+
+interface RenderedVideo {
+  /** Stable id for drag-and-drop + React keys. */
+  id: string;
+  /** object URL (freshly rendered/uploaded) OR a saved storage URL on reopen. */
+  url: string;
+  /** Freshly rendered/uploaded videos carry a blob to upload; saved ones don't. */
+  blob: Blob | null;
+  /** Human label shown on the tile (template name / file name). */
+  label: string;
+  /** True when restored from form_data (url already hosted). */
+  saved?: boolean;
+  /** MIME type of the blob (rendered = video/webm; uploads keep their own). */
   mimeType?: string;
 }
 
@@ -107,19 +144,63 @@ function Divider() {
   return <div className="border-t border-white/10" />;
 }
 
-/** One rendered-image tile with hover actions to replace or remove it. */
-function EditableImageTile({ refName, url, expanded, onReplace, onRemove }: { refName: string; url: string; expanded: boolean; onReplace: () => void; onRemove: () => void }) {
+/** Small circular badge showing the final deploy position of a media item. */
+function OrderBadge({ position, color = "blue" }: { position: number; color?: "blue" | "purple" }) {
+  const cls = color === "purple" ? "bg-purple-500" : "bg-blue-500";
   return (
-    <div className={`group relative rounded-lg overflow-hidden border border-blue-500/40 bg-white/5 ${expanded ? "aspect-[2/3]" : "aspect-square w-20 shrink-0"}`}>
-      <img src={url} alt={refName} className="w-full h-full object-cover" />
+    <div className={`absolute top-1 left-1 z-10 flex h-5 min-w-[20px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white shadow ${cls}`}>
+      {position}
+    </div>
+  );
+}
+
+/**
+ * One draggable rendered/uploaded image tile with an order badge (final deploy
+ * position), a drag handle, and hover actions to replace or remove it.
+ * `position` is the 1-based slot this image will occupy in the Shopify gallery.
+ */
+function SortableImageTile({
+  id,
+  refName,
+  url,
+  position,
+  expanded,
+  onReplace,
+  onRemove,
+}: {
+  id: string;
+  refName: string;
+  url: string;
+  position: number | null;
+  expanded: boolean;
+  onReplace: () => void;
+  onRemove: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = { transform: CSS.Transform.toString(transform), transition };
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`group relative rounded-lg overflow-hidden border border-blue-500/40 bg-white/5 ${expanded ? "aspect-[2/3]" : "aspect-square w-20 shrink-0"} ${isDragging ? "opacity-50 z-20 shadow-lg" : ""}`}
+    >
+      {position !== null && <OrderBadge position={position} />}
+      <img src={url} alt={refName} className="w-full h-full object-cover pointer-events-none" />
       <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
         <p className="text-[10px] text-white/70 truncate">{refName}</p>
       </div>
-      <div className="absolute top-1 right-1 h-4 w-4 rounded-full bg-green-500 flex items-center justify-center">
-        <Check className="h-2.5 w-2.5 text-white" />
-      </div>
+      {/* Drag handle */}
+      <button
+        type="button"
+        {...attributes}
+        {...listeners}
+        title="Kéo để đổi thứ tự"
+        className="absolute top-1 right-1 z-10 flex h-5 w-5 items-center justify-center rounded bg-black/50 text-white/80 opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity"
+      >
+        <GripVertical className="h-3 w-3" />
+      </button>
       {/* Hover actions */}
-      <div className="absolute inset-0 flex items-center justify-center gap-1.5 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="absolute inset-x-0 bottom-0 top-7 flex items-center justify-center gap-1.5 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           type="button"
           onClick={onReplace}
@@ -132,6 +213,63 @@ function EditableImageTile({ refName, url, expanded, onReplace, onRemove }: { re
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * One draggable video tile. Videos always occupy the block right after the first
+ * image, so `position` is 2,3,... Dragging reorders videos among themselves only.
+ */
+function SortableVideoTile({
+  id,
+  label,
+  url,
+  position,
+  expanded,
+  onRemove,
+}: {
+  id: string;
+  label: string;
+  url: string;
+  position: number | null;
+  expanded: boolean;
+  onRemove: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = { transform: CSS.Transform.toString(transform), transition };
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`group relative rounded-lg overflow-hidden border border-purple-500/50 bg-black ${expanded ? "aspect-[2/3]" : "aspect-square w-20 shrink-0"} ${isDragging ? "opacity-50 z-20 shadow-lg" : ""}`}
+    >
+      {position !== null && <OrderBadge position={position} color="purple" />}
+      <video src={url} muted playsInline className="w-full h-full object-cover pointer-events-none" />
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <Video className="h-5 w-5 text-white/70 drop-shadow" />
+      </div>
+      <div className="absolute bottom-0 left-0 right-0 bg-black/70 px-1 py-0.5">
+        <p className="text-[10px] text-purple-200/90 truncate">{label}</p>
+      </div>
+      {/* Drag handle */}
+      <button
+        type="button"
+        {...attributes}
+        {...listeners}
+        title="Kéo để đổi thứ tự video"
+        className="absolute top-1 right-1 z-10 flex h-5 w-5 items-center justify-center rounded bg-black/50 text-white/80 opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity"
+      >
+        <GripVertical className="h-3 w-3" />
+      </button>
+      <button
+        type="button"
+        onClick={onRemove}
+        title="Xóa video"
+        className="absolute bottom-1 right-1 z-10 flex h-6 w-6 items-center justify-center rounded-md bg-red-500/70 text-white opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-opacity"
+      >
+        <Trash2 className="h-3 w-3" />
+      </button>
     </div>
   );
 }
@@ -338,9 +476,19 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
   const [renderingImages, setRenderingImages] = useState(false);
   const [imageGridExpanded, setImageGridExpanded] = useState(false);
   const [imageProgress, setImageProgress] = useState({ done: 0, total: 0 });
-  const [renderedVideoBlob, setRenderedVideoBlob] = useState<Blob | null>(null);
-  // Restore the saved video (already hosted) so it previews on reopen.
-  const [renderedVideoUrl, setRenderedVideoUrl] = useState<string | null>(prefill?.videoUrl ?? null);
+  // Ordered list of videos to deploy (rendered from templates + user uploads).
+  // Restored from the saved snapshot so reopening previews them; videoUrls[] is
+  // the current field, with a fallback to the legacy single videoUrl.
+  const [renderedVideos, setRenderedVideos] = useState<RenderedVideo[]>(() => {
+    const urls = prefill?.videoUrls?.length ? prefill.videoUrls : prefill?.videoUrl ? [prefill.videoUrl] : [];
+    return urls.filter(Boolean).map((url, i) => ({
+      id: `saved-video-${i}`,
+      url,
+      blob: null,
+      label: `Video ${i + 1}`,
+      saved: true,
+    }));
+  });
   const [renderingVideo, setRenderingVideo] = useState(false);
   const [videoProgressPct, setVideoProgressPct] = useState(0);
   const [videoProgressLabel, setVideoProgressLabel] = useState("");
@@ -348,6 +496,17 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
   const cancelVideoRef = useRef(false);
   const activeEsmRef = useRef<ExtractorSceneManager | null>(null);
   const renderedImageUrlsRef = useRef<string[]>([]);
+  // Object URLs created for rendered/uploaded videos — revoked on unmount.
+  const renderedVideoUrlsRef = useRef<string[]>([]);
+  // Hidden picker for uploading user videos.
+  const videoUploadInputRef = useRef<HTMLInputElement | null>(null);
+  // Hidden picker for bulk-uploading user images (added as gallery images).
+  const imageUploadInputRef = useRef<HTMLInputElement | null>(null);
+  // dnd sensors (pointer w/ small activation distance, keyboard for a11y).
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
   // ── Manual image editing (replace one / add new) ──
   // Replacing: holds the refId being replaced; the hidden picker keeps the name.
   const replaceTargetRef = useRef<string | null>(null);
@@ -522,11 +681,11 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       .finally(() => setLoadingRefs(false));
   }, [selectedGroupId, groups]);
 
-  // Cleanup rendered image object URLs on unmount
+  // Cleanup rendered image/video object URLs on unmount
   useEffect(() => {
     return () => {
       renderedImageUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
-      if (renderedVideoUrl) URL.revokeObjectURL(renderedVideoUrl);
+      renderedVideoUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -534,10 +693,18 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
   const handleRenderImages = useCallback(async () => {
     if (!sceneManager || !groupRefs.length) return;
 
-    // Cleanup previous renders
-    renderedImageUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
-    renderedImageUrlsRef.current = [];
-    setRenderedImages([]);
+    // Preserve user uploads across a re-render — only the previously auto-rendered
+    // images are cleared/replaced. Uploaded images keep their spot after the
+    // rendered set (the user can drag them anywhere afterwards).
+    const preservedUploads = renderedImages.filter((ri) => ri.uploaded);
+    // Revoke object URLs of the OLD rendered images only (not the kept uploads).
+    const uploadUrls = new Set(preservedUploads.map((ri) => ri.url));
+    renderedImageUrlsRef.current = renderedImageUrlsRef.current.filter((u) => {
+      if (uploadUrls.has(u)) return true;
+      URL.revokeObjectURL(u);
+      return false;
+    });
+    setRenderedImages(preservedUploads);
     setRenderingImages(true);
     setImageProgress({ done: 0, total: groupRefs.length });
 
@@ -556,7 +723,8 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
         const url = URL.createObjectURL(blob);
         renderedImageUrlsRef.current.push(url);
         results.push({ refId: ref.id, refName: ref.name, url, blob });
-        setRenderedImages([...results]);
+        // Rendered images first, uploads kept after them.
+        setRenderedImages([...results, ...preservedUploads]);
         setImageProgress({ done: i + 1, total: groupRefs.length });
       } catch (err) {
         console.error(`[ShopifyDeploy] Failed to render ref ${ref.name}:`, err);
@@ -564,7 +732,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       }
     }
     setRenderingImages(false);
-  }, [sceneManager, groupRefs]);
+  }, [sceneManager, groupRefs, renderedImages, product.surface_url]);
 
   // ── Render video ──
   const handleRenderVideo = useCallback(async () => {
@@ -576,9 +744,6 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       return;
     }
 
-    if (renderedVideoUrl) URL.revokeObjectURL(renderedVideoUrl);
-    setRenderedVideoBlob(null);
-    setRenderedVideoUrl(null);
     setRenderingVideo(true);
     setVideoProgressPct(0);
     setVideoProgressLabel("");
@@ -637,8 +802,13 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
 
       if (!cancelVideoRef.current) {
         const url = URL.createObjectURL(blob);
-        setRenderedVideoBlob(blob);
-        setRenderedVideoUrl(url);
+        renderedVideoUrlsRef.current.push(url);
+        // Append the freshly rendered video to the ordered list (keeps existing
+        // videos + uploads). It joins the "after image #1" block.
+        setRenderedVideos((prev) => [
+          ...prev,
+          { id: `render-${prev.length}-${selectedTemplateId}`, url, blob, label: template.name || `Video ${prev.length + 1}` },
+        ]);
       }
     } catch (err) {
       if (!cancelVideoRef.current) {
@@ -651,7 +821,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       if (canvasContainerRef.current) canvasContainerRef.current.innerHTML = "";
       setRenderingVideo(false);
     }
-  }, [sceneManager, selectedTemplateId, templates, renderedVideoUrl]);
+  }, [sceneManager, selectedTemplateId, templates]);
 
   // Selected skill texts (in pick order) → sent as a SYSTEM prompt for strict
   // adherence. The AI Hint stays separate as the theme direction.
@@ -768,10 +938,10 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     }
   }, [renderedImages, aiModel, aiHint, composeSkillPrompt, selectedSkillIds, versions]);
 
-  // Upload rendered images/video to storage and return their hosted URLs.
-  // Reused by both Deploy and Save so the gallery restores either way.
-  // Toggles `uploadingAssets` for the shared progress label.
-  const uploadAssets = useCallback(async (): Promise<{ imageUrls: string[]; videoUrl?: string }> => {
+  // Upload rendered images/videos to storage and return their hosted URLs, both
+  // in their current (dragged) order. Reused by Deploy and Save so the gallery
+  // restores either way. Toggles `uploadingAssets` for the shared progress label.
+  const uploadAssets = useCallback(async (): Promise<{ imageUrls: string[]; videoUrls: string[] }> => {
     setUploadingAssets(true);
     try {
       const supabase = createClient();
@@ -797,19 +967,25 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
         imageUrls.push(await uploadBlobToStorage(ri.blob, path, mime));
       }
 
-      // Upload video if freshly rendered; otherwise reuse the saved video URL.
-      let videoUrl: string | undefined;
-      if (renderedVideoBlob) {
-        const videoPath = `shopify-mockups/${product.id}/${ts}-video.webm`;
-        videoUrl = await uploadBlobToStorage(renderedVideoBlob, videoPath, "video/webm");
-      } else if (renderedVideoUrl) {
-        videoUrl = renderedVideoUrl;
+      // Upload each video in order. Freshly rendered/uploaded ones carry a blob;
+      // saved ones already have a hosted URL and are reused as-is.
+      const videoUrls: string[] = [];
+      for (let i = 0; i < renderedVideos.length; i++) {
+        const rv = renderedVideos[i];
+        if (!rv.blob) {
+          videoUrls.push(rv.url);
+          continue;
+        }
+        const mime = rv.mimeType || rv.blob.type || "video/webm";
+        const ext = mime.includes("mp4") ? "mp4" : mime.includes("quicktime") || mime.includes("mov") ? "mov" : "webm";
+        const videoPath = `shopify-mockups/${product.id}/${ts}-video-${i}.${ext}`;
+        videoUrls.push(await uploadBlobToStorage(rv.blob, videoPath, mime));
       }
-      return { imageUrls, videoUrl };
+      return { imageUrls, videoUrls };
     } finally {
       setUploadingAssets(false);
     }
-  }, [product.id, renderedImages, renderedVideoBlob, renderedVideoUrl]);
+  }, [product.id, renderedImages, renderedVideos]);
 
   // ── Replace one image (keep its name) ──
   // Open the hidden picker for a specific entry; the chosen file replaces the
@@ -862,10 +1038,88 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     setRenderedImages((prev) => prev.filter((ri) => ri.refId !== refId));
   }, []);
 
+  // ── Bulk-upload user images → appended as gallery images (drag to reorder) ──
+  // Auto-named "User-Image-N" so they DON'T match the Mockup/Details/Package
+  // convention and therefore land in the gallery (drag order controls position).
+  const onUploadImagesPicked = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (!files.length) return;
+    setRenderedImages((prev) => {
+      const taken = new Set(prev.map((ri) => ri.refName.trim().toLowerCase()));
+      let n = prev.length + 1;
+      const additions: RenderedImage[] = [];
+      for (const file of files) {
+        let name = `User-Image-${n}`;
+        while (taken.has(name.toLowerCase())) name = `User-Image-${++n}`;
+        taken.add(name.toLowerCase());
+        n++;
+        const url = URL.createObjectURL(file);
+        renderedImageUrlsRef.current.push(url);
+        additions.push({ refId: `upload-${name}-${url}`, refName: name, url, blob: file, mimeType: file.type || "image/png", saved: false, uploaded: true });
+      }
+      return [...prev, ...additions];
+    });
+  }, []);
+
+  // ── Upload user videos → appended to the video block (drag to reorder) ──
+  const onUploadVideosPicked = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (!files.length) return;
+    setRenderedVideos((prev) => {
+      const additions: RenderedVideo[] = files.map((file, i) => {
+        const url = URL.createObjectURL(file);
+        renderedVideoUrlsRef.current.push(url);
+        return { id: `upload-video-${prev.length + i}-${url}`, url, blob: file, label: file.name || `Video ${prev.length + i + 1}`, mimeType: file.type || "video/mp4", saved: false };
+      });
+      return [...prev, ...additions];
+    });
+  }, []);
+
+  const removeVideo = useCallback((id: string) => {
+    setRenderedVideos((prev) => prev.filter((rv) => rv.id !== id));
+  }, []);
+
+  // ── Drag reorder handlers ──
+  const handleImageDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setRenderedImages((prev) => {
+      const oldIndex = prev.findIndex((ri) => ri.refId === active.id);
+      const newIndex = prev.findIndex((ri) => ri.refId === over.id);
+      if (oldIndex < 0 || newIndex < 0) return prev;
+      return arrayMove(prev, oldIndex, newIndex);
+    });
+  }, []);
+
+  const handleVideoDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setRenderedVideos((prev) => {
+      const oldIndex = prev.findIndex((rv) => rv.id === active.id);
+      const newIndex = prev.findIndex((rv) => rv.id === over.id);
+      if (oldIndex < 0 || newIndex < 0) return prev;
+      return arrayMove(prev, oldIndex, newIndex);
+    });
+  }, []);
+
+  // Final deploy order preview: image #1, then all videos (2,3,...), then the
+  // rest of the images. Mirrors the server rule (video block after 1st image).
+  // Returns a 1-based position for each image by its array index.
+  const imagePosition = useCallback(
+    (imageIndex: number): number => {
+      if (imageIndex === 0) return 1;
+      // After the first image come all videos, then image #2 onward.
+      return 1 + renderedVideos.length + imageIndex;
+    },
+    [renderedVideos.length],
+  );
+
   // Build the form payload shared by Deploy and Save. customText/customTextPaid
   // depend on the selected mode; the rest is the current form state verbatim.
   const buildPayload = useCallback(
-    (imageUrls: string[], videoUrl?: string) => {
+    (imageUrls: string[], videoUrls: string[]) => {
       const customTextOn = customTextMode !== "none";
       const customTextConfig = customTextOn ? { label: customTextLabel.trim(), example: customTextExample.trim() } : null;
       return {
@@ -878,7 +1132,8 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
         breadcrumbCollection,
         imageUrls,
         imageNames: renderedImages.map((ri) => ri.refName),
-        videoUrl,
+        videoUrl: videoUrls[0] ?? null,
+        videoUrls,
         versions,
         wrapType,
         laserShaft,
@@ -979,12 +1234,12 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     setSaveMsg("");
 
     try {
-      const { imageUrls, videoUrl } = await uploadAssets();
+      const { imageUrls, videoUrls } = await uploadAssets();
 
       const res = await fetch("/api/shopify/create-product", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildPayload(imageUrls, videoUrl)),
+        body: JSON.stringify(buildPayload(imageUrls, videoUrls)),
       });
       const data = (await res.json()) as DeployResult & { error?: string };
       if (!res.ok) throw new Error(data.error ?? "Tạo sản phẩm thất bại");
@@ -1015,12 +1270,12 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     setDeployError("");
     try {
       // Save the full snapshot incl. uploaded assets so the gallery restores.
-      const { imageUrls, videoUrl } = await uploadAssets();
+      const { imageUrls, videoUrls } = await uploadAssets();
 
       const res = await fetch("/api/shopify/save-draft", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildPayload(imageUrls, videoUrl)),
+        body: JSON.stringify(buildPayload(imageUrls, videoUrls)),
       });
       const data = (await res.json()) as { success?: boolean; formData?: ShopifyDeploymentSummary["form_data"]; error?: string };
       if (!res.ok) throw new Error(data.error ?? "Lưu nháp thất bại");
@@ -1249,25 +1504,71 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
         <div className="overflow-y-auto p-6 space-y-6 border-r border-white/10">
           {/* 1. Image group */}
           <Section title="1. Nhóm ảnh mockup">
-            <Select
-              value={selectedGroupId || undefined}
-              onValueChange={(v) => {
-                setSelectedGroupId(v);
-                setRenderedImages([]);
-              }}
-              disabled={loadingGroups}
-            >
-              <SelectTrigger className="w-full border-white/20 bg-white/5 text-white">
-                <SelectValue placeholder={loadingGroups ? "Đang tải..." : "-- Chọn nhóm ảnh --"} />
-              </SelectTrigger>
-              <SelectContent>
-                {groups.map((g) => (
-                  <SelectItem key={g.id} value={g.id}>
-                    {g.name} ({g.referenceIds.length} ảnh){g.createdByName ? ` · ${g.createdByName}` : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <p className="text-[11px] text-white/40 -mt-1">
+              Render ảnh từ nhóm hoặc tải ảnh lên. Ảnh tải lên được giữ lại khi render, kéo để đổi thứ tự.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Select
+                value={selectedGroupId || undefined}
+                onValueChange={(v) => {
+                  setSelectedGroupId(v);
+                  // Switching group clears the previously auto-rendered images but
+                  // keeps the user's uploads (they persist across group changes).
+                  setRenderedImages((prev) => prev.filter((ri) => ri.uploaded));
+                }}
+                disabled={loadingGroups}
+              >
+                <SelectTrigger className="flex-1 min-w-[180px] border-white/20 bg-white/5 text-white">
+                  <SelectValue placeholder={loadingGroups ? "Đang tải..." : "-- Chọn nhóm ảnh --"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {groups.map((g) => (
+                    <SelectItem key={g.id} value={g.id}>
+                      {g.name} ({g.referenceIds.length} ảnh){g.createdByName ? ` · ${g.createdByName}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => imageUploadInputRef.current?.click()}
+                className="gap-2 border-blue-400/40 bg-blue-500/10 text-blue-100 hover:bg-blue-500/20"
+              >
+                <Upload className="h-4 w-4" /> Tải ảnh lên
+              </Button>
+            </div>
+
+            {/* Uploaded images shown even before any group render (upload-from-start).
+                Rendered results (below) merge with these into one sortable grid. */}
+            {renderedImages.length > 0 && !selectedGroupId && !renderedImages.some((ri) => ri.saved) && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-white/40">{renderedImages.length} ảnh · kéo để đổi thứ tự</span>
+                  <button type="button" onClick={() => setImageGridExpanded((p) => !p)} className="text-xs text-blue-400 hover:text-blue-300">
+                    {imageGridExpanded ? "Thu nhỏ" : "Mở rộng"}
+                  </button>
+                </div>
+                <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleImageDragEnd}>
+                  <SortableContext items={renderedImages.map((ri) => ri.refId)} strategy={rectSortingStrategy}>
+                    <div className={imageGridExpanded ? "grid grid-cols-3 sm:grid-cols-4 gap-2" : "flex gap-2 overflow-x-auto pb-1"}>
+                      {renderedImages.map((ri, idx) => (
+                        <SortableImageTile
+                          key={ri.refId}
+                          id={ri.refId}
+                          refName={ri.refName}
+                          url={ri.url}
+                          position={imagePosition(idx)}
+                          expanded={imageGridExpanded}
+                          onReplace={() => startReplaceImage(ri.refId)}
+                          onRemove={() => removeImage(ri.refId)}
+                        />
+                      ))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
+              </div>
+            )}
 
             {loadingRefs ? (
               <div className="flex items-center gap-2 text-white/40 text-sm">
@@ -1303,11 +1604,11 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
                     </div>
                   )}
 
-                  {/* Results — single-line by default, expandable to full grid */}
+                  {/* Results — draggable, single-line by default, expandable */}
                   {renderedImages.length > 0 ? (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs text-white/40">{renderedImages.length} ảnh đã render</span>
+                        <span className="text-xs text-white/40">{renderedImages.length} ảnh · kéo để đổi thứ tự</span>
                         <div className="flex items-center gap-3">
                           <button type="button" onClick={() => setAddImageOpen(true)} className="flex items-center gap-1 text-xs text-green-400 hover:text-green-300">
                             <Plus className="h-3 w-3" /> Thêm ảnh
@@ -1317,33 +1618,39 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
                           </button>
                         </div>
                       </div>
-                      <div className={imageGridExpanded ? "grid grid-cols-3 sm:grid-cols-4 gap-2" : "flex gap-2 overflow-x-auto pb-1"}>
-                        {renderedImages.map((ri) => (
-                          <EditableImageTile
-                            key={ri.refId}
-                            refName={ri.refName}
-                            url={ri.url}
-                            expanded={imageGridExpanded}
-                            onReplace={() => startReplaceImage(ri.refId)}
-                            onRemove={() => removeImage(ri.refId)}
-                          />
-                        ))}
-                        {/* Pending refs not yet rendered */}
-                        {renderingImages &&
-                          groupRefs.slice(renderedImages.length).map((ref) => (
-                            <div
-                              key={ref.id}
-                              className={`relative rounded-lg overflow-hidden border border-white/10 bg-white/5 flex items-center justify-center ${
-                                imageGridExpanded ? "aspect-[2/3]" : "aspect-square w-20 shrink-0"
-                              }`}
-                            >
-                              <Loader2 className="h-6 w-6 text-white/30 animate-spin" />
-                              <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
-                                <p className="text-[10px] text-white/40 truncate">{ref.name}</p>
-                              </div>
-                            </div>
-                          ))}
-                      </div>
+                      <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleImageDragEnd}>
+                        <SortableContext items={renderedImages.map((ri) => ri.refId)} strategy={rectSortingStrategy}>
+                          <div className={imageGridExpanded ? "grid grid-cols-3 sm:grid-cols-4 gap-2" : "flex gap-2 overflow-x-auto pb-1"}>
+                            {renderedImages.map((ri, idx) => (
+                              <SortableImageTile
+                                key={ri.refId}
+                                id={ri.refId}
+                                refName={ri.refName}
+                                url={ri.url}
+                                position={imagePosition(idx)}
+                                expanded={imageGridExpanded}
+                                onReplace={() => startReplaceImage(ri.refId)}
+                                onRemove={() => removeImage(ri.refId)}
+                              />
+                            ))}
+                            {/* Pending refs not yet rendered */}
+                            {renderingImages &&
+                              groupRefs.slice(renderedImages.length).map((ref) => (
+                                <div
+                                  key={ref.id}
+                                  className={`relative rounded-lg overflow-hidden border border-white/10 bg-white/5 flex items-center justify-center ${
+                                    imageGridExpanded ? "aspect-[2/3]" : "aspect-square w-20 shrink-0"
+                                  }`}
+                                >
+                                  <Loader2 className="h-6 w-6 text-white/30 animate-spin" />
+                                  <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
+                                    <p className="text-[10px] text-white/40 truncate">{ref.name}</p>
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        </SortableContext>
+                      </DndContext>
                     </div>
                   ) : (
                     !renderingImages && (
@@ -1376,7 +1683,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
             {!selectedGroupId && renderedImages.some((ri) => ri.saved) && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-white/40">{renderedImages.length} ảnh đã lưu (lần đăng trước)</span>
+                  <span className="text-xs text-white/40">{renderedImages.length} ảnh đã lưu · kéo để đổi thứ tự</span>
                   <div className="flex items-center gap-3">
                     <button type="button" onClick={() => setAddImageOpen(true)} className="flex items-center gap-1 text-xs text-green-400 hover:text-green-300">
                       <Plus className="h-3 w-3" /> Thêm ảnh
@@ -1386,18 +1693,24 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
                     </button>
                   </div>
                 </div>
-                <div className={imageGridExpanded ? "grid grid-cols-3 sm:grid-cols-4 gap-2" : "flex gap-2 overflow-x-auto pb-1"}>
-                  {renderedImages.map((ri) => (
-                    <EditableImageTile
-                      key={ri.refId}
-                      refName={ri.refName}
-                      url={ri.url}
-                      expanded={imageGridExpanded}
-                      onReplace={() => startReplaceImage(ri.refId)}
-                      onRemove={() => removeImage(ri.refId)}
-                    />
-                  ))}
-                </div>
+                <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleImageDragEnd}>
+                  <SortableContext items={renderedImages.map((ri) => ri.refId)} strategy={rectSortingStrategy}>
+                    <div className={imageGridExpanded ? "grid grid-cols-3 sm:grid-cols-4 gap-2" : "flex gap-2 overflow-x-auto pb-1"}>
+                      {renderedImages.map((ri, idx) => (
+                        <SortableImageTile
+                          key={ri.refId}
+                          id={ri.refId}
+                          refName={ri.refName}
+                          url={ri.url}
+                          position={imagePosition(idx)}
+                          expanded={imageGridExpanded}
+                          onReplace={() => startReplaceImage(ri.refId)}
+                          onRemove={() => removeImage(ri.refId)}
+                        />
+                      ))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
                 <p className="text-[11px] text-white/40">Chọn nhóm ảnh ở trên để render lại, hoặc đăng lại ngay với ảnh đã lưu.</p>
               </div>
             )}
@@ -1405,28 +1718,38 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
 
           <Divider />
 
-          {/* 2. Video template */}
+          {/* 2. Video — rendered templates + user uploads (always placed 2nd,
+              then 3rd... right after the first image). */}
           <Section title="2. Video mockup">
-            <Select
-              value={selectedTemplateId || undefined}
-              onValueChange={(v) => {
-                setSelectedTemplateId(v);
-                setRenderedVideoBlob(null);
-                setRenderedVideoUrl(null);
-              }}
-              disabled={loadingTemplates}
-            >
-              <SelectTrigger className="w-full border-white/20 bg-white/5 text-white">
-                <SelectValue placeholder={loadingTemplates ? "Đang tải..." : "-- Chọn video template (tùy chọn) --"} />
-              </SelectTrigger>
-              <SelectContent>
-                {templates.map((t) => (
-                  <SelectItem key={t.id} value={t.id}>
-                    {t.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <p className="text-[11px] text-white/40 -mt-1">
+              Video luôn nằm ngay sau ảnh đầu tiên (vị trí 2, 3...). Có thể render từ template hoặc tải video lên, kéo để đổi thứ tự.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Select
+                value={selectedTemplateId || undefined}
+                onValueChange={(v) => setSelectedTemplateId(v)}
+                disabled={loadingTemplates}
+              >
+                <SelectTrigger className="flex-1 min-w-[180px] border-white/20 bg-white/5 text-white">
+                  <SelectValue placeholder={loadingTemplates ? "Đang tải..." : "-- Chọn video template (tùy chọn) --"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {templates.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>
+                      {t.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => videoUploadInputRef.current?.click()}
+                className="gap-2 border-purple-400/40 bg-purple-500/10 text-purple-100 hover:bg-purple-500/20"
+              >
+                <Upload className="h-4 w-4" /> Tải video lên
+              </Button>
+            </div>
 
             {selectedTemplateId && (
               <Button onClick={handleRenderVideo} disabled={renderingVideo || !sceneManager} className="gap-2 bg-purple-700 hover:bg-purple-800 text-white">
@@ -1435,15 +1758,10 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Đang render...
                   </>
-                ) : renderedVideoUrl ? (
-                  <>
-                    <RefreshCw className="h-4 w-4" />
-                    Render lại video
-                  </>
                 ) : (
                   <>
                     <Video className="h-4 w-4" />
-                    Render video mockup
+                    Render thêm video từ template
                   </>
                 )}
               </Button>
@@ -1478,12 +1796,29 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
               </div>
             )}
 
-            {renderedVideoUrl && !renderingVideo && (
-              <div className="rounded-lg overflow-hidden border border-purple-500/40 bg-white/5">
-                <video src={renderedVideoUrl} controls loop className="w-full max-h-48 object-contain" />
-                <p className="text-xs text-green-400 px-2 py-1 flex items-center gap-1">
-                  <Check className="h-3 w-3" /> Video đã render — sẵn sàng tải lên
-                </p>
+            {/* Video list — draggable among themselves. Badges show their final
+                deploy position (2,3,...). */}
+            {renderedVideos.length > 0 && (
+              <div className="space-y-2">
+                <span className="text-xs text-white/40">{renderedVideos.length} video · kéo để đổi thứ tự</span>
+                <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleVideoDragEnd}>
+                  <SortableContext items={renderedVideos.map((rv) => rv.id)} strategy={rectSortingStrategy}>
+                    <div className="flex gap-2 overflow-x-auto pb-1">
+                      {renderedVideos.map((rv, idx) => (
+                        <SortableVideoTile
+                          key={rv.id}
+                          id={rv.id}
+                          label={rv.label}
+                          url={rv.url}
+                          // Videos occupy positions 2,3,... (after the 1st image).
+                          position={2 + idx}
+                          expanded={false}
+                          onRemove={() => removeVideo(rv.id)}
+                        />
+                      ))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
               </div>
             )}
           </Section>
@@ -1962,12 +2297,12 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
                 </p>
                 <p>
                   <span className="text-white/30">Video:</span>{" "}
-                  {renderedVideoUrl ? (
-                    <span className="text-green-400">Đã render ✓</span>
+                  {renderedVideos.length > 0 ? (
+                    <span className="text-green-400">{renderedVideos.length} video (vị trí 2{renderedVideos.length > 1 ? `–${renderedVideos.length + 1}` : ""}) ✓</span>
                   ) : selectedTemplateId ? (
                     <span className="text-yellow-400/70">Chưa render</span>
                   ) : (
-                    <span className="text-white/20">Không chọn</span>
+                    <span className="text-white/20">Không có</span>
                   )}
                 </p>
                 <p>
@@ -2126,6 +2461,11 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       {/* Hidden picker used by "Thay ảnh" — replaces the targeted image's bytes
           while keeping its name (so classification/ordering is unchanged). */}
       <input ref={replaceInputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={onReplaceFilePicked} />
+
+      {/* Hidden pickers for bulk user uploads (images + videos). Both accept
+          multiple files and append to the gallery in the current order. */}
+      <input ref={imageUploadInputRef} type="file" accept="image/png,image/jpeg,image/webp" multiple className="hidden" onChange={onUploadImagesPicked} />
+      <input ref={videoUploadInputRef} type="file" accept="video/mp4,video/webm,video/quicktime" multiple className="hidden" onChange={onUploadVideosPicked} />
 
       {/* Add a brand-new image; the user names it to match the sort scheme. */}
       <Dialog

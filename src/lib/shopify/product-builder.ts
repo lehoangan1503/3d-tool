@@ -216,6 +216,61 @@ export interface ClassifiedImages {
  * - Package-2             → metafield custom.package_box
  * - anything else         → skipped
  */
+/**
+ * Order-preserving classification (drag order wins).
+ *
+ * Used when the client controls the gallery order explicitly (reordered/uploaded
+ * media). Details-N / Package-N still route to metafields by name, but every
+ * other image becomes a gallery image in the EXACT incoming array order — no
+ * name-based sorting or version de-duplication. This is what powers the deploy
+ * order badges shown in the UI.
+ */
+export function classifyImagesPreserveOrder(images: NamedImage[], versions: string[]): ClassifiedImages {
+  const galleryImages: NamedImage[] = [];
+  const metafieldImages: NamedImage[] = [];
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+
+  for (const img of images) {
+    const stem = imageStem(img.name);
+
+    // Details-N or Details-N-Version → metafield (routed by name, not order).
+    let m = stem.match(/^Details-(\d+)(?:-(.+))?$/i);
+    if (m) {
+      const num = m[1];
+      const verSuffix = m[2];
+      if (verSuffix) {
+        const ver = cap(verSuffix.trim());
+        if (ver === "Standard" && versions.includes("Standard")) metafieldImages.push({ ...img, name: `details_${num}_standard` });
+        else if (ver === "Premium" && versions.includes("Premium")) metafieldImages.push({ ...img, name: `details_${num}_premium` });
+        else if (ver === "Pro" && versions.includes("Pro")) metafieldImages.push({ ...img, name: `details_${num}_pro` });
+      } else {
+        metafieldImages.push({ ...img, name: `details_${num}` });
+      }
+      continue;
+    }
+
+    // Package-1-Version / Package-2 → metafield (routed by name).
+    m = stem.match(/^Package-(\d+)(?:-(.+))?$/i);
+    if (m) {
+      const num = m[1];
+      const verSuffix = m[2];
+      if (num === "1" && verSuffix) {
+        const ver = cap(verSuffix.trim());
+        if (ver === "Standard") metafieldImages.push({ ...img, name: "package_product_standard" });
+        else if (ver === "Pro") metafieldImages.push({ ...img, name: "package_product_pro" });
+      } else if (num === "2" && !verSuffix) {
+        metafieldImages.push({ ...img, name: "package_box" });
+      }
+      continue;
+    }
+
+    // Everything else → gallery image, in incoming order.
+    galleryImages.push(img);
+  }
+
+  return { galleryImages, metafieldImages };
+}
+
 export function classifyImages(images: NamedImage[], versions: string[]): ClassifiedImages {
   const hasStandardOrPremium = versions.includes("Standard") || versions.includes("Premium");
   const hasPremium = versions.includes("Premium");
@@ -425,6 +480,12 @@ export interface ProductInput {
   imageUrls: string[];
   /** Image reference names (parallel to imageUrls) used for classification. */
   imageNames?: string[];
+  /**
+   * When true, gallery images deploy in the exact order given by `imageUrls`
+   * (drag order wins) instead of the name-based fixed sort. Details-N/Package-N
+   * still route to metafields by name. Defaults to false (legacy behaviour).
+   */
+  preserveImageOrder?: boolean;
   versions: Array<ShopifyVersionName>;
   wrapType: "wrap" | "wrapless";
   laserShaft: boolean;
@@ -492,6 +553,7 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
     manualTags,
     imageUrls,
     imageNames = [],
+    preserveImageOrder = false,
     versions,
     wrapType,
     laserShaft,
@@ -595,7 +657,9 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
     url,
     name: imageNames[idx] ?? `image-${idx + 1}`,
   }));
-  const classified = classifyImages(named, sortedVersions);
+  const classified = preserveImageOrder
+    ? classifyImagesPreserveOrder(named, sortedVersions)
+    : classifyImages(named, sortedVersions);
   // Fallback: if no image followed the Mockup-Web/Details/Package naming
   // convention, classification would drop everything. Keep the legacy behaviour
   // (every rendered image becomes a gallery image, in order) so products are

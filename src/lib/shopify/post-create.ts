@@ -78,7 +78,10 @@ const PRODUCT_METAFIELD_DEFINITIONS = [
 interface PostCreateInput {
   product: ShopifyCreatedProduct;
   metadata: PostCreateMetadata;
+  /** Legacy single video. Ignored when `videoUrls` is provided. */
   videoUrl: string | null;
+  /** Ordered videos placed at gallery positions 2,3,... (after the 1st image). */
+  videoUrls?: string[];
   title: string;
 }
 
@@ -99,7 +102,7 @@ function collectionTag(name: string): string {
   return `col_${name.trim()}`;
 }
 
-export async function runPostCreateSteps({ product, metadata, videoUrl, title }: PostCreateInput): Promise<void> {
+export async function runPostCreateSteps({ product, metadata, videoUrl, videoUrls, title }: PostCreateInput): Promise<void> {
   const productId = product.id;
 
   // ── 1. Laser-shaft variant image mapping ──
@@ -142,25 +145,38 @@ export async function runPostCreateSteps({ product, metadata, videoUrl, title }:
     }
   }
 
-  // ── 6. Video (best-effort) ──
-  // Note: Shopify only accepts MP4/MOV for product video. The studio renders
-  // WebM, so this may be rejected at processing time — logged, not fatal.
-  if (videoUrl) {
-    const contentType = videoUrl.toLowerCase().includes(".mp4") ? "video/mp4" : "video/webm";
+  // ── 6. Videos (best-effort) ──
+  // Videos always sit right after the first image: positions 2,3,... (0-based
+  // indices 1,2,...). Multiple videos keep their given order. Note Shopify only
+  // accepts MP4/MOV for product video — the studio renders WebM, so this may be
+  // rejected at processing time; logged, not fatal.
+  const resolvedVideos = (videoUrls && videoUrls.length ? videoUrls : videoUrl ? [videoUrl] : []).filter(Boolean);
+  // Add videos in order. Each is added then moved to its target index. We move
+  // from LAST to FIRST so an earlier move can't be shifted by a later insert:
+  // targetIndex = 1 + i for the i-th video (0-based), i.e. positions 2,3,...
+  const addedVideos: Array<{ mediaId: string; targetIndex: number }> = [];
+  for (let i = 0; i < resolvedVideos.length; i++) {
+    const url = resolvedVideos[i];
+    const contentType = url.toLowerCase().includes(".mp4") ? "video/mp4" : "video/webm";
     try {
-      const videoMediaId = await addProductVideo(productId, videoUrl, title, contentType);
-      // Place the video second in the gallery (index 1 = after the first image),
-      // so it sits where the 2nd image would be. Best-effort: a reorder failure
-      // (e.g. video still processing) just leaves it appended at the end.
-      if (videoMediaId) {
-        try {
-          await moveProductMedia(productId, videoMediaId, 1);
-        } catch (err) {
-          console.warn("[post-create] move video to position 2:", err instanceof Error ? err.message : err);
-        }
-      }
+      const videoMediaId = await addProductVideo(productId, url, title, contentType);
+      if (videoMediaId) addedVideos.push({ mediaId: videoMediaId, targetIndex: 1 + i });
     } catch (err) {
-      console.warn("[post-create] add video:", err instanceof Error ? err.message : err);
+      console.warn(`[post-create] add video ${i + 1}:`, err instanceof Error ? err.message : err);
+    }
+  }
+  // Reorder each video to its slot after the first image. Videos start appended
+  // at the end of the gallery (in add order V0,V1,...). Moving them front-to-back
+  // — V0→index 1, then V1→index 2, ... — lands them as [img1, V0, V1, ..., rest]
+  // because each move pulls the next video from the tail into its slot. Doing
+  // this in reverse would interleave images between the videos. Best-effort: a
+  // reorder failure (e.g. video still processing) just leaves it appended.
+  for (let i = 0; i < addedVideos.length; i++) {
+    const { mediaId, targetIndex } = addedVideos[i];
+    try {
+      await moveProductMedia(productId, mediaId, targetIndex);
+    } catch (err) {
+      console.warn(`[post-create] move video to position ${targetIndex + 1}:`, err instanceof Error ? err.message : err);
     }
   }
 }

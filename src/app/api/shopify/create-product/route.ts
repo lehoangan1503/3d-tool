@@ -61,6 +61,7 @@ export async function POST(request: Request) {
       imageUrls,
       imageNames = [],
       videoUrl = null,
+      videoUrls,
       versions,
       wrapType,
       laserShaft,
@@ -164,6 +165,10 @@ export async function POST(request: Request) {
 
     const descriptionHtml = markdownToHtml(description ?? "");
 
+    // Videos deploy as gallery media right after the 1st image (positions 2,3...).
+    // Accept the new ordered videoUrls[]; fall back to the legacy single videoUrl.
+    const resolvedVideoUrls = (videoUrls && videoUrls.length ? videoUrls : videoUrl ? [videoUrl] : []).filter(Boolean);
+
     const resolvedSurfaceSlots = hasRequestSurfaceSlots ? requestSurfaceSlots ?? null : productRow.surface_slots ?? null;
     const resolvedSurfaceImageUrl =
       !hasRequestSurfaceImageUrl
@@ -180,6 +185,8 @@ export async function POST(request: Request) {
       manualTags: tags,
       imageUrls,
       imageNames,
+      // The dialog now controls gallery order explicitly (drag order wins).
+      preserveImageOrder: true,
       versions,
       wrapType,
       laserShaft: Boolean(laserShaft),
@@ -252,6 +259,7 @@ export async function POST(request: Request) {
         product: result,
         metadata: payload._metadata,
         videoUrl: videoUrl ?? null,
+        videoUrls: resolvedVideoUrls,
         title: title.trim(),
       });
     } catch (err) {

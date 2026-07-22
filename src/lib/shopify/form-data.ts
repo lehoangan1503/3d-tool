@@ -14,7 +14,10 @@ export interface ShopifyDeployRequest {
   breadcrumbCollection?: string | null;
   imageUrls: string[];
   imageNames?: string[];
+  /** Legacy single video — still accepted from old clients/drafts. */
   videoUrl?: string | null;
+  /** Ordered list of videos deployed as gallery media at positions 2,3,... */
+  videoUrls?: string[];
   versions: Array<ShopifyVersionName>;
   wrapType: "wrap" | "wrapless" | "";
   laserShaft: boolean;
@@ -46,6 +49,7 @@ export function buildFormData(body: ShopifyDeployRequest): ShopifyFormData {
     imageUrls = [],
     imageNames = [],
     videoUrl = null,
+    videoUrls,
     versions = [],
     wrapType,
     laserShaft,
@@ -71,6 +75,10 @@ export function buildFormData(body: ShopifyDeployRequest): ShopifyFormData {
     ? breadcrumbPick
     : null;
 
+  // Normalize videos to an ordered list. Prefer the new videoUrls[]; fall back to
+  // the legacy single videoUrl so old clients/drafts still round-trip.
+  const resolvedVideoUrls = (videoUrls && videoUrls.length ? videoUrls : videoUrl ? [videoUrl] : []).filter(Boolean);
+
   return {
     productCode: (productCode ?? "").trim(),
     title: (title ?? "").trim(),
@@ -91,7 +99,10 @@ export function buildFormData(body: ShopifyDeployRequest): ShopifyFormData {
     breadcrumbCollection: breadcrumb,
     imageUrls,
     imageNames,
-    videoUrl: videoUrl ?? null,
+    // Keep the legacy field populated (first video) for older readers, plus the
+    // full ordered list for multi-video deploys.
+    videoUrl: resolvedVideoUrls[0] ?? null,
+    videoUrls: resolvedVideoUrls,
     manualTags,
     skillIds,
     shaftConfig,

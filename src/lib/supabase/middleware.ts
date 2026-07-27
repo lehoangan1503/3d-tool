@@ -38,11 +38,14 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const { pathname } = request.nextUrl;
-  const isAdmin = user?.app_metadata?.role === "admin";
+  // /admin/* is SUPERADMIN-only. The tool-level 'admin' role on
+  // user_profiles.role grants product edit/deploy powers but never admin-route
+  // access, so it is deliberately not consulted here.
+  const isSuperAdmin = user?.app_metadata?.role === "admin";
 
   // ── Admin routes ────────────────────────────────────────────────────────────
   // Redirect logged-in admins away from admin login
-  if (user && isAdmin && pathname === "/admin/login") {
+  if (user && isSuperAdmin && pathname === "/admin/login") {
     const url = request.nextUrl.clone();
     url.pathname = "/admin/dashboard";
     return NextResponse.redirect(url);
@@ -50,7 +53,7 @@ export async function updateSession(request: NextRequest) {
 
   // Protect all /admin/* routes except /admin/login
   if (pathname.startsWith("/admin") && pathname !== "/admin/login") {
-    if (!user || !isAdmin) {
+    if (!user || !isSuperAdmin) {
       const url = request.nextUrl.clone();
       url.pathname = "/admin/login";
       return NextResponse.redirect(url);

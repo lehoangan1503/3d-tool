@@ -26,8 +26,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { isAdmin, isMode } = await getSessionRole();
-    if (!isAdmin && !isMode) {
+    const { isToolAdmin, isMode } = await getSessionRole();
+    if (!isToolAdmin && !isMode) {
       return NextResponse.json(
         { error: "Forbidden — Shopify deploy requires admin or mode role" },
         { status: 403 }
@@ -109,7 +109,7 @@ export async function POST(request: Request) {
     if (prodError || !productRow) {
       return NextResponse.json({ error: "Product not found" }, { status: 404 });
     }
-    if (!isAdmin && productRow.user_id !== user.id) {
+    if (!isToolAdmin && productRow.user_id !== user.id) {
       return NextResponse.json(
         { error: "Forbidden — mode users can only deploy their own products" },
         { status: 403 }
@@ -356,8 +356,8 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { isAdmin, isMode } = await getSessionRole();
-    if (!isAdmin && !isMode) {
+    const { isToolAdmin, isMode } = await getSessionRole();
+    if (!isToolAdmin && !isMode) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -375,7 +375,7 @@ export async function DELETE(request: Request) {
     if (prodError || !productRow) {
       return NextResponse.json({ error: "Product not found" }, { status: 404 });
     }
-    if (!isAdmin && productRow.user_id !== user.id) {
+    if (!isToolAdmin && productRow.user_id !== user.id) {
       return NextResponse.json(
         { error: "Forbidden — mode users can only delete their own products" },
         { status: 403 }

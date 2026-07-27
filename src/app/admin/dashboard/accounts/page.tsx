@@ -5,11 +5,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Users } from "lucide-react";
 import { CreateUserForm } from "../create-user-form";
-import { ModeToggle } from "../mode-toggle";
+import { RoleSelect } from "../role-select";
 import type { UserProfile } from "@/types/product";
 
 interface AccountRow extends UserProfile {
-  isAdmin: boolean;
+  /** Superadmin — auth.users.app_metadata.role === 'admin'. Not editable here. */
+  isSuperAdmin: boolean;
 }
 
 async function getAccounts(): Promise<AccountRow[]> {
@@ -24,16 +25,17 @@ async function getAccounts(): Promise<AccountRow[]> {
     return [];
   }
 
-  // Determine which users are admins (role lives in auth.users.app_metadata).
+  // Determine which users are SUPERADMINS (auth.users.app_metadata.role).
+  // This tier is granted only via SQL/service key and is not editable here.
   const adminClient = createAdminClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
-  const adminIds = new Set<string>();
+  const superAdminIds = new Set<string>();
   try {
     const { data: list } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
     for (const u of list?.users ?? []) {
-      if (u.app_metadata?.role === "admin") adminIds.add(u.id);
+      if (u.app_metadata?.role === "admin") superAdminIds.add(u.id);
     }
   } catch (e) {
     console.error("[admin] Failed to list auth users:", e);
@@ -41,7 +43,7 @@ async function getAccounts(): Promise<AccountRow[]> {
 
   return ((profiles as UserProfile[]) ?? []).map((p) => ({
     ...p,
-    isAdmin: adminIds.has(p.user_id),
+    isSuperAdmin: superAdminIds.has(p.user_id),
   }));
 }
 
@@ -93,12 +95,17 @@ export default async function AdminAccountsPage() {
                       <td className="py-3 px-2">{u.email}</td>
                       <td className="py-3 px-2 text-muted-foreground">{u.nickname ?? "—"}</td>
                       <td className="py-3 px-2">
-                        {u.isAdmin ? (
-                          <Badge variant="outline" className="border-amber-500/40 text-amber-500">
-                            Admin
-                          </Badge>
+                        {u.isSuperAdmin ? (
+                          <div className="flex flex-col gap-1">
+                            <Badge variant="outline" className="w-fit border-amber-500/40 text-amber-500">
+                              Supabase Admin
+                            </Badge>
+                            <span className="text-[11px] text-muted-foreground">
+                              Toàn quyền — chỉ đổi được bằng SQL
+                            </span>
+                          </div>
                         ) : (
-                          <ModeToggle userId={u.user_id} enabled={u.role === "mode"} />
+                          <RoleSelect userId={u.user_id} role={u.role} />
                         )}
                       </td>
                       <td className="py-3 px-2 text-muted-foreground">

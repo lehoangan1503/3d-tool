@@ -53,6 +53,37 @@ export async function uploadToStorage(
 }
 
 /**
+ * Upload a product asset through the server instead of directly to Storage.
+ *
+ * Needed when the caller is a tool admin editing a product they do NOT own:
+ * assets belong in the OWNER's folder, and storage RLS requires the first path
+ * segment to equal auth.uid(), so the browser cannot write there. The route
+ * re-checks the admin role before using the service client.
+ */
+export async function uploadProductAssetViaServer(
+  file: File,
+  productId: string,
+  fileType: "surface" | "texture"
+): Promise<string> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("fileType", fileType);
+
+  const res = await fetch(`/api/products/${productId}/asset`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? "Không thể tải lên tệp");
+  }
+
+  const data = (await res.json()) as { url: string };
+  return data.url;
+}
+
+/**
  * Upload a blob directly to Supabase Storage with a custom path.
  * Used for shopify mockup images and videos.
  */

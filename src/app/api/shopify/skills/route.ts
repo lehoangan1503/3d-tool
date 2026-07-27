@@ -8,8 +8,8 @@ async function requireDeployRole() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { error: "Unauthorized", status: 401 as const, user: null };
-  const { isAdmin, isMode } = await getSessionRole();
-  if (!isAdmin && !isMode) return { error: "Forbidden", status: 403 as const, user: null };
+  const { isToolAdmin, isMode } = await getSessionRole();
+  if (!isToolAdmin && !isMode) return { error: "Forbidden", status: 403 as const, user: null };
   return { error: null, status: 200 as const, user };
 }
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminServiceClient } from "@/lib/supabase/server";
+import { getSessionRole } from "@/lib/auth/roles";
 import type { UpdateProductInput, ThreeJSSettingsJson } from "@/types/product";
 
 interface RouteParams {
@@ -53,6 +54,38 @@ export async function PUT(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // Ownership / permission. A tool admin (user_profiles.role === 'admin') and
+    // the superadmin may edit ANY user's product; everyone else only their own.
+    // Reads go through the caller's client (SELECT is open to all authenticated
+    // users); cross-owner WRITES need the service client because the products
+    // UPDATE policy is still USING (auth.uid() = user_id).
+    const { data: existing, error: existingError } = await supabase
+      .from("products")
+      .select("user_id, threejs_settings_id")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (existingError) {
+      return NextResponse.json({ error: existingError.message }, { status: 500 });
+    }
+    if (!existing) {
+      return NextResponse.json({ error: "Product not found" }, { status: 404 });
+    }
+
+    const isOwner = existing.user_id === user.id;
+    const { canEditAnyProduct } = await getSessionRole();
+
+    if (!isOwner && !canEditAnyProduct) {
+      return NextResponse.json(
+        { error: "Bạn không có quyền sửa sản phẩm của người dùng khác." },
+        { status: 403 }
+      );
+    }
+
+    // Owners write as themselves (RLS applies). Cross-owner admin edits bypass
+    // RLS via the service client, only after the check above passed.
+    const writeClient = isOwner ? supabase : createAdminServiceClient();
+
     const body: UpdateProductWithConfigInput = await request.json();
 
     const updateData: Record<string, unknown> = {
@@ -67,38 +100,26 @@ export async function PUT(request: Request, { params }: RouteParams) {
     if (body.texture_url !== undefined) updateData.texture_url = body.texture_url;
     if (body.color !== undefined) updateData.color = body.color;
 
-    // Update threejs_settings if config is provided
-    if (body.config) {
-      // Get the product's settings ID first
-      const { data: productData } = await supabase
-        .from("products")
-        .select("threejs_settings_id")
-        .eq("id", id)
-        .eq("user_id", user.id)
-        .single();
+    // Update threejs_settings if config is provided (settings id read above).
+    if (body.config && existing.threejs_settings_id) {
+      const { error: settingsError } = await writeClient
+        .from("threejs_settings")
+        .update({
+          settings: body.config,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existing.threejs_settings_id);
 
-      if (productData?.threejs_settings_id) {
-        const { error: settingsError } = await supabase
-          .from("threejs_settings")
-          .update({ 
-            settings: body.config,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", productData.threejs_settings_id);
-
-        if (settingsError) {
-          console.error("Failed to update threejs_settings:", settingsError);
-        }
+      if (settingsError) {
+        console.error("Failed to update threejs_settings:", settingsError);
       }
     }
 
-    const { data, error } = await supabase
-      .from("products")
-      .update(updateData)
-      .eq("id", id)
-      .eq("user_id", user.id)
-      .select()
-      .single();
+    let query = writeClient.from("products").update(updateData).eq("id", id);
+    // Keep the owner guard for self-edits; admins already passed the check above.
+    if (isOwner) query = query.eq("user_id", user.id);
+
+    const { data, error } = await query.select().single();
 
     if (error) {
       if (error.code === "PGRST116") {
@@ -114,7 +135,12 @@ export async function PUT(request: Request, { params }: RouteParams) {
   }
 }
 
-// DELETE /api/products/[id] - Delete a product
+// DELETE /api/products/[id] - Delete a product.
+//
+// Deliberately OWNER-ONLY: the tool 'admin' role may edit, update and deploy
+// any user's product but must NOT be able to delete someone else's work. The
+// .eq("user_id", user.id) filters below are the enforcement — do not relax them
+// to an admin bypass without an explicit product decision.
 export async function DELETE(request: Request, { params }: RouteParams) {
   try {
     const { id } = await params;

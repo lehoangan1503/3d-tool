@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { createClient, createAdminServiceClient } from "@/lib/supabase/server";
+import { isAssignableUserRole } from "@/types/product";
+import type { UserRole } from "@/types/product";
 
 async function assertAdmin(): Promise<{ ok: true } | { ok: false; error: string }> {
   const supabase = await createClient();
@@ -47,10 +49,18 @@ export async function createUser(formData: FormData) {
 }
 
 /**
- * Grant or revoke the 'mode' role on a user_profiles row. Admin-only.
- * 'mode' users may deploy/upload to Shopify on their own products.
+ * Set the assignable role on a user_profiles row. Superadmin-only.
+ *
+ * - null    → normal user: may only edit their own products.
+ * - 'mode'  → may deploy/update Shopify for their OWN products.
+ * - 'admin' → tool admin: may edit, update and deploy ANY user's product.
+ *             Cannot delete other users' products and has no /admin/* access
+ *             (this page stays superadmin-only).
+ *
+ * This never touches auth.users.app_metadata — the superadmin tier is granted
+ * only via SQL/service key (see migration 013) and cannot be changed from here.
  */
-export async function setUserMode(userId: string, enable: boolean) {
+export async function setUserRole(userId: string, role: UserRole) {
   const guard = await assertAdmin();
   if (!guard.ok) return { error: guard.error };
 
@@ -58,24 +68,28 @@ export async function setUserMode(userId: string, enable: boolean) {
     return { error: "userId là bắt buộc." };
   }
 
+  if (!isAssignableUserRole(role)) {
+    return { error: "Vai trò không hợp lệ." };
+  }
+
   const supabase = createAdminServiceClient();
   const { data, error } = await supabase
     .from("user_profiles")
-    .update({ role: enable ? "mode" : null })
+    .update({ role })
     .eq("user_id", userId)
     .select("user_id, role");
 
   if (error) {
-    console.error("[setUserMode] update failed:", error.message, error);
+    console.error("[setUserRole] update failed:", error.message, error);
     return { error: error.message };
   }
 
   if (!data || data.length === 0) {
-    console.error("[setUserMode] no row matched user_id:", userId);
+    console.error("[setUserRole] no row matched user_id:", userId);
     return { error: "Không tìm thấy tài khoản để cập nhật." };
   }
 
-  console.log("[setUserMode] updated:", data);
+  console.log("[setUserRole] updated:", data);
   revalidatePath("/admin/dashboard/accounts");
   return { success: true };
 }

@@ -17,11 +17,11 @@ export async function GET(request: Request) {
   if (!productId) return NextResponse.json({ error: "productId required" }, { status: 400 });
   const storeId = getStore(searchParams.get("storeId"))?.id ?? "main";
 
-  const { isAdmin, isMode } = await getSessionRole();
-  if (!isAdmin && !isMode) return NextResponse.json({ deployment: null });
+  const { isToolAdmin, isMode } = await getSessionRole();
+  if (!isToolAdmin && !isMode) return NextResponse.json({ deployment: null });
 
   // mode users only see their own product's deployment.
-  if (isMode && !isAdmin) {
+  if (isMode && !isToolAdmin) {
     const { data: prod } = await supabase
       .from("products")
       .select("user_id")

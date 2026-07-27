@@ -15,10 +15,13 @@ import type { UserProfile } from "@/types/product";
 interface DashboardClientProps {
   profile: UserProfile;
   showFirstLoginDialog: boolean;
-  isAdmin?: boolean;
+  /** Superadmin (auth app_metadata) — the only tier with /admin/* access. */
+  isSuperAdmin?: boolean;
+  /** Superadmin, tool admin, or mode — may use the auto-deploy tool. */
+  canDeploy?: boolean;
 }
 
-export function DashboardClient({ profile: initialProfile, showFirstLoginDialog, isAdmin }: DashboardClientProps) {
+export function DashboardClient({ profile: initialProfile, showFirstLoginDialog, isSuperAdmin, canDeploy }: DashboardClientProps) {
   const [profile, setProfile] = useState(initialProfile);
   const [firstLoginOpen, setFirstLoginOpen] = useState(showFirstLoginDialog);
 
@@ -38,7 +41,7 @@ export function DashboardClient({ profile: initialProfile, showFirstLoginDialog,
             <h1 className="text-xl font-semibold text-foreground">Cue Customizer</h1>
             <div className="flex items-center gap-2">
               <StoreSwitcher />
-              {isAdmin && (
+              {canDeploy && (
                 <Button variant="outline" size="sm" asChild>
                   <Link href="/auto-deploy" target="_blank" rel="noopener noreferrer">
                     <Rocket className="h-4 w-4" />
@@ -46,7 +49,7 @@ export function DashboardClient({ profile: initialProfile, showFirstLoginDialog,
                   </Link>
                 </Button>
               )}
-              {isAdmin && (
+              {isSuperAdmin && (
                 <Button variant="outline" size="sm" asChild>
                   <Link href="/admin/dashboard" target="_blank" rel="noopener noreferrer">
                     <ShieldCheck className="h-4 w-4" />

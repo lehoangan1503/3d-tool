@@ -43,13 +43,17 @@ export default async function DashboardPage() {
 
   const showFirstLoginDialog = !profile.nickname;
 
-  const isAdmin = user.app_metadata?.role === "admin";
+  // /admin/* is superadmin-only. The auto-deploy tool is open to anyone who may
+  // deploy (superadmin, tool admin, or mode) — its page re-checks canDeploy.
+  const isSuperAdmin = user.app_metadata?.role === "admin";
+  const canDeploy = isSuperAdmin || profile.role === "admin" || profile.role === "mode";
 
   return (
     <DashboardClient
       profile={profile}
       showFirstLoginDialog={showFirstLoginDialog}
-      isAdmin={isAdmin}
+      isSuperAdmin={isSuperAdmin}
+      canDeploy={canDeploy}
     />
   );
 }

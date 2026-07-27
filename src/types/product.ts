@@ -14,9 +14,24 @@ export type LeatherTextureType = "crocodile" | "cowhide" | "snake" | "custom";
 
 export type LeatherColor = "black" | "chestnut" | "chocolate" | "darkBrown" | "whiskey" | "tan";
 
-// Assignable role stored on user_profiles. 'admin' is authoritative via
-// auth.users.app_metadata.role and is NOT stored here. null = normal user.
-export type UserRole = "mode" | null;
+// Assignable roles stored on user_profiles, granted by the superadmin from
+// /admin/dashboard/accounts. null = normal user.
+//
+// - 'mode':  may deploy/update Shopify for their OWN products.
+// - 'admin': tool-level admin. May edit, update and deploy ANY user's product,
+//            but may NOT delete other users' products and has NO access to
+//            /admin/* (account management stays superadmin-only).
+//
+// The SUPERADMIN is separate and authoritative: auth.users.app_metadata.role
+// === 'admin', granted only via SQL/service key (see migration 013). It is NOT
+// stored here.
+export type UserRole = "admin" | "mode" | null;
+
+export const ASSIGNABLE_USER_ROLES: UserRole[] = [null, "mode", "admin"];
+
+export function isAssignableUserRole(value: unknown): value is UserRole {
+  return value === null || value === "mode" || value === "admin";
+}
 
 // ── Surface customization slots ──────────────────────────────────────────────
 // Placeholder frames designed on the surface image in the internal editor.

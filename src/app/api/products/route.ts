@@ -57,12 +57,12 @@ export async function GET(request: Request) {
 
     // Shopify deployment badges — surfaced per the viewer's role:
     // admin sees all; mode sees only their own; normal users see none.
-    const { isAdmin, isMode } = await getSessionRole();
+    const { isToolAdmin, isMode } = await getSessionRole();
     // Badges reflect ONE store — the one selected in the switcher (?storeId=).
     // A product deployed to a different store shows as "not deployed" here.
     const storeId = (searchParams.get("storeId") ?? "main").trim() || "main";
     const deploymentMap = new Map<string, ShopifyDeploymentSummary>();
-    if (isAdmin || isMode) {
+    if (isToolAdmin || isMode) {
       const productIds = products.map((p) => p.id);
       const { data: deployments } = await supabase
         .from("shopify_deployments")
@@ -111,7 +111,7 @@ export async function GET(request: Request) {
       const profile = profileMap.get(p.user_id);
       // mode users only see badges on their own products
       const deployment =
-        isAdmin || (isMode && p.user_id === user.id)
+        isToolAdmin || (isMode && p.user_id === user.id)
           ? deploymentMap.get(p.id) ?? null
           : null;
       return {

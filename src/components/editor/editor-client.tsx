@@ -47,13 +47,19 @@ import { Badge } from "@/components/ui/badge";
 import type { Product, ProductConfig, LeatherColor, LeatherTextureType, ShopifyDeploymentSummary } from "@/types/product";
 import { DEFAULT_PRODUCT_CONFIG, configToSettingsJson, isLeatherLikeType } from "@/types/product";
 import type { SceneManager } from "@/lib/three/scene-manager";
-import { uploadToStorage } from "@/lib/supabase/upload";
+import { uploadToStorage, uploadProductAssetViaServer } from "@/lib/supabase/upload";
 import { useStoreOptional } from "@/components/shopify/store-switcher";
 
 interface EditorClientProps {
   product: Product;
   initialConfig?: ProductConfig;
   isOwner?: boolean;
+  /**
+   * Whether the viewer may SAVE changes to this product. True for the owner and
+   * for tool admins (user_profiles.role === 'admin') on anyone's product.
+   * Non-editors get the preview/clone experience.
+   */
+  canEdit?: boolean;
   ownerProfile?: { nickname: string | null; email: string } | null;
   /** Whether the current viewer (admin or mode) may deploy to Shopify. */
   canDeploy?: boolean;
@@ -72,12 +78,19 @@ export function EditorClient({
   product: initialProduct,
   initialConfig,
   isOwner = true,
+  canEdit: canEditProp,
   ownerProfile,
   canDeploy = false,
   canDelete = false,
   deployment: initialDeployment = null,
 }: EditorClientProps) {
   const router = useRouter();
+  // Defaults to isOwner so existing callers that don't pass canEdit keep the
+  // old owner-only behaviour.
+  const canEdit = canEditProp ?? isOwner;
+  // A tool admin editing someone else's product: saving is allowed, but the
+  // header/banner should make clear whose product it is.
+  const isAdminEditing = canEdit && !isOwner;
   const [product, setProduct] = useState(initialProduct);
   // Surface slot designer dialog (customer-fillable frames on the surface).
   const [slotEditorOpen, setSlotEditorOpen] = useState(false);
@@ -167,8 +180,8 @@ export function EditorClient({
   const productRef = useRef(product);
   productRef.current = product;
 
-  // Unsaved changes warning — only meaningful for owners (non-owners can't save)
-  const { confirmNavigation } = useUnsavedChangesWarning(isOwner && hasChanges);
+  // Unsaved changes warning — only meaningful for viewers who can actually save
+  const { confirmNavigation } = useUnsavedChangesWarning(canEdit && hasChanges);
 
   // Load available HDRIs from /public/hdri (via API)
   useEffect(() => {
@@ -386,12 +399,20 @@ export function EditorClient({
       // Prepare parallel upload tasks
       const uploadTasks: Promise<{ type: "surface" | "texture"; url: string }>[] = [];
 
+      // Owners upload straight to Storage. Admins editing someone else's cue
+      // must write into the OWNER's folder, which storage RLS forbids from the
+      // browser — those go through the server route instead.
+      const uploadAsset = (file: File, fileType: "surface" | "texture") =>
+        isOwner
+          ? uploadToStorage(file, productToSave.id, fileType, productToSave.user_id)
+          : uploadProductAssetViaServer(file, productToSave.id, fileType);
+
       if (pendingFiles.surface) {
-        uploadTasks.push(uploadToStorage(pendingFiles.surface.file, productToSave.id, "surface", productToSave.user_id).then((url) => ({ type: "surface" as const, url })));
+        uploadTasks.push(uploadAsset(pendingFiles.surface.file, "surface").then((url) => ({ type: "surface" as const, url })));
       }
 
       if (pendingFiles.customTexture) {
-        uploadTasks.push(uploadToStorage(pendingFiles.customTexture.file, productToSave.id, "texture", productToSave.user_id).then((url) => ({ type: "texture" as const, url })));
+        uploadTasks.push(uploadAsset(pendingFiles.customTexture.file, "texture").then((url) => ({ type: "texture" as const, url })));
       }
 
       // Upload files in parallel (direct to Supabase - no Next.js proxy)
@@ -539,13 +560,13 @@ export function EditorClient({
       <header className="bg-card/80 backdrop-blur-sm border-b px-2 sm:px-4 py-2 sm:py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
           <Link href="/dashboard">
-            <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8 sm:h-10 sm:w-10" onClick={isOwner ? handleBackClick : undefined}>
+            <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8 sm:h-10 sm:w-10" onClick={canEdit ? handleBackClick : undefined}>
               <ArrowLeft className="h-4 w-4 sm:h-5 sm:w-5" />
             </Button>
           </Link>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 min-w-0">
-              {isOwner ? (
+              {canEdit ? (
                 <Input
                   value={product.name}
                   onChange={(e) => updateProduct({ name: e.target.value })}
@@ -569,6 +590,9 @@ export function EditorClient({
               ) : (
                 <span>
                   Sở hữu bởi: <span className="font-medium text-foreground">{ownerProfile?.nickname || ownerProfile?.email || "Người dùng"}</span>
+                  {isAdminEditing && (
+                    <span className="ml-1 normal-case text-sky-500">· đang sửa với quyền Admin</span>
+                  )}
                 </span>
               )}
             </p>
@@ -623,7 +647,7 @@ export function EditorClient({
               </span>
             </Button>
           )}
-          {isOwner ? (
+          {canEdit ? (
             <Button onClick={handleSave} disabled={saving || !hasChanges} size="sm" className="h-8 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm">
               {saving ? (
                 <>
@@ -720,10 +744,15 @@ export function EditorClient({
               </span>
             </div>
             <div className="flex flex-col gap-3">
-              {/* Preview-only banner for non-owners */}
-              {!isOwner && (
+              {/* Non-owners: preview-only, unless they're a tool admin who can save. */}
+              {!isOwner && !canEdit && (
                 <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400 leading-relaxed">
                   <span className="font-semibold">Chế độ xem trước.</span> Thay đổi chỉ hiển thị trên máy bạn. Nhấn <span className="font-semibold">Sao chép</span> để lưu thật sự.
+                </div>
+              )}
+              {isAdminEditing && (
+                <div className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-600 dark:text-sky-400 leading-relaxed">
+                  <span className="font-semibold">Quyền Admin.</span> Bạn đang sửa cue của người khác — nhấn <span className="font-semibold">Lưu</span> sẽ ghi trực tiếp lên sản phẩm của họ.
                 </div>
               )}
               {/* Surface Upload */}
@@ -1179,11 +1208,18 @@ export function EditorClient({
         {/* Desktop Sidebar */}
         <div className="hidden lg:flex lg:w-80 shrink-0 bg-card border-l overflow-y-auto flex-col">
           <div className="p-4 flex flex-col gap-4">
-            {/* Preview-only banner for non-owners */}
-            {!isOwner && (
+            {/* Non-owners: preview-only, unless they're a tool admin who can save. */}
+            {!isOwner && !canEdit && (
               <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400 leading-relaxed">
                 <span className="font-semibold">Chế độ xem trước.</span> Bạn đang xem cue của người khác. Mọi thay đổi chỉ hiển thị trên máy bạn và không được lưu. Nhấn{" "}
                 <span className="font-semibold">Sao chép</span> để tạo bản sao và chỉnh sửa thật sự.
+              </div>
+            )}
+            {isAdminEditing && (
+              <div className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-600 dark:text-sky-400 leading-relaxed">
+                <span className="font-semibold">Quyền Admin.</span> Bạn đang sửa cue của{" "}
+                <span className="font-medium">{ownerProfile?.nickname || ownerProfile?.email || "người dùng khác"}</span>. Nhấn{" "}
+                <span className="font-semibold">Lưu</span> sẽ ghi trực tiếp lên sản phẩm của họ.
               </div>
             )}
             {/* 3D Controls */}

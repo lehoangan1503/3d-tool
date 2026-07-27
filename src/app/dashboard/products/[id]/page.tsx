@@ -68,16 +68,19 @@ export default async function ProductEditorPage({ params }: PageProps) {
     ownerProfile = ownerData as UserProfile | null;
   }
 
-  // Role-based Shopify access:
-  // admin → deploy/delete any product; mode → own products only.
-  const { isAdmin, isMode } = await getSessionRole();
-  const canDeploy = isAdmin || (isMode && isOwner);
+  // Role-based access:
+  // tool admin (or superadmin) → edit + deploy/un-deploy ANY product;
+  // mode → deploy their own products only.
+  // Deleting the PRODUCT itself stays owner-only (enforced in the API).
+  const { isToolAdmin, isMode } = await getSessionRole();
+  const canEdit = isOwner || isToolAdmin;
+  const canDeploy = isToolAdmin || (isMode && isOwner);
   const canDelete = canDeploy;
 
   // Surface the deployment (badge + prefill data) only to viewers allowed to
   // see it (admin: always; mode: own product).
   let deployment: ShopifyDeploymentSummary | null = null;
-  if (isAdmin || (isMode && isOwner)) {
+  if (isToolAdmin || (isMode && isOwner)) {
     // Initial deployment for the default store + the SHARED draft (form_data,
     // store-independent). The dialog re-fetches per selected store client-side.
     const [{ data: dep }, { data: draft }] = await Promise.all([
@@ -142,6 +145,7 @@ export default async function ProductEditorPage({ params }: PageProps) {
       product={product as Product}
       initialConfig={initialConfig}
       isOwner={isOwner}
+      canEdit={canEdit}
       ownerProfile={ownerProfile}
       canDeploy={canDeploy}
       canDelete={canDelete}

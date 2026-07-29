@@ -158,7 +158,8 @@ export function EditorClient({
   const [sceneManager, setSceneManager] = useState<SceneManager | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [isAutoRotating, setIsAutoRotating] = useState(true);
+  // Off by default — the user opts in via the auto-rotate button in the top bar.
+  const [isAutoRotating, setIsAutoRotating] = useState(false);
   const [mobileControlsExpanded, setMobileControlsExpanded] = useState(false);
   const [sheetDragStart, setSheetDragStart] = useState<number | null>(null);
   const [pendingFiles, setPendingFiles] = useState<PendingFiles>({
@@ -224,6 +225,8 @@ export function EditorClient({
   const handleSceneReady = useCallback((manager: SceneManager) => {
     console.log("[EditorClient] handleSceneReady called");
     setSceneManager(manager);
+    // Start still — auto-rotate is opt-in via the top-bar button.
+    manager.setAutoRotate(false);
     // Apply config to the scene immediately (from DB or defaults)
     // This ensures material values match UI state
     const currentConfig = configRef.current;

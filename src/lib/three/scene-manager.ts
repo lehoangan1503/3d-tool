@@ -1223,6 +1223,19 @@ export class SceneManager {
   }
 
   /**
+   * Explicitly set auto-rotation on/off (the dashboard editor starts it off so
+   * the cue only spins once the user presses the top-bar button).
+   */
+  setAutoRotate(enabled: boolean) {
+    this.autoRotate = enabled;
+    // If a drag is mid-flight, keep its pending restore in sync so drag-end
+    // doesn't undo this call. (null = no drag active; leave it alone.)
+    if (this.restoreAutoRotateAfterDrag !== null) {
+      this.restoreAutoRotateAfterDrag = enabled;
+    }
+  }
+
+  /**
    * Set auto-rotate speed (radians per frame)
    */
   setAutoRotateSpeed(speed: number) {

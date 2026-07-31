@@ -12,6 +12,7 @@ import {
 import { updateShopifyProductInPlace } from "@/lib/shopify/update-in-place";
 import { runPostCreateSteps } from "@/lib/shopify/post-create";
 import { buildFormData, type ShopifyDeployRequest } from "@/lib/shopify/form-data";
+import { resolveShaftConfig } from "@/lib/shopify/global-shaft-config";
 import { withStore, activeStore } from "@/lib/shopify/store-context";
 import { getStore } from "@/lib/shopify/stores";
 import { getProductCodeFormat } from "@/lib/shopify/product-code";
@@ -58,6 +59,7 @@ export async function POST(request: Request) {
       title,
       description,
       collections,
+      breadcrumbCollection = null,
       imageUrls,
       imageNames = [],
       videoUrl = null,
@@ -174,7 +176,13 @@ export async function POST(request: Request) {
       !hasRequestSurfaceImageUrl
         ? productRow.surface_url ?? null
         : requestSurfaceImageUrl?.trim() || null;
-    const resolvedShaftConfig = hasRequestShaftConfig ? requestShaftConfig ?? null : productRow.shaft_config ?? null;
+    // The shaft (laser engraving) preview is authored once and shared by every
+    // cue, so a product without its own config falls back to the global one —
+    // but only when it actually offers laser engraving. Without this the
+    // storefront renders the "Shaft Engraving: Yes" option with no name input,
+    // which blocks add-to-cart entirely.
+    const ownShaftConfig = hasRequestShaftConfig ? requestShaftConfig ?? null : productRow.shaft_config ?? null;
+    const resolvedShaftConfig = await resolveShaftConfig(ownShaftConfig, Boolean(laserShaft));
 
     const payload = buildShopifyProduct({
       productCode: resolvedCode.toLowerCase(),
@@ -182,6 +190,10 @@ export async function POST(request: Request) {
       title: title.trim(),
       descriptionHtml,
       collections: collections ?? "",
+      // The picked breadcrumb collection travels through to _metadata so
+      // post-create writes custom.breadcrumb_collection. Without this the
+      // builder defaults it to null and the metafield is never set.
+      breadcrumbCollection,
       manualTags: tags,
       imageUrls,
       imageNames,

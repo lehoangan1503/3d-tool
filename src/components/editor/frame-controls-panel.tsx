@@ -811,7 +811,7 @@ export function FrameControlsPanel({
                 collisionPadding={8}
               >
                 <Label className="text-xs text-muted-foreground px-2 pb-1 shrink-0">Chọn HDRI để thêm</Label>
-                <div className="space-y-1 overflow-y-auto overscroll-contain min-h-0">
+                <div ref={popoverListRef} className="space-y-1 overflow-y-auto overscroll-contain min-h-0">
                   {hdriOptions.map((option) => (
                     <Button key={option.id} variant="ghost" size="sm" className="w-full justify-start text-sm h-8" onClick={() => addHdriLayer(option.id)}>
                       {option.label}

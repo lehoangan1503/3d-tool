@@ -1,7 +1,7 @@
 "use client";
 
 import * as THREE from "three";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -308,7 +308,8 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     return () => window.removeEventListener("keydown", handler);
   }, [open, undo, redo]);
 
-  // Minimap: register/unregister the canvas with ESM (it handles rendering internally)
+  // Minimap: register/unregister the canvas with ESM (it handles rendering internally).
+  // Re-runs on videoRatio change so the ESM picks up the resized canvas immediately.
   useEffect(() => {
     const esm = extractorRef.current;
     const canvas = minimapCanvasRef.current;
@@ -318,11 +319,43 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     }
     esm.setMinimapCanvas(canvas);
     return () => esm.setMinimapCanvas(null);
-  }, [open, viewMode]);
+  }, [open, viewMode, config.videoRatio]);
 
   const updateConfig = useCallback(<K extends keyof VideoStudioConfig>(key: K, value: VideoStudioConfig[K]) => {
     setConfig((prev) => ({ ...prev, [key]: value }));
   }, []);
+
+  /**
+   * Camera-view minimap dimensions derived from the selected video ratio, so the
+   * preview box always shows the true recording frame (a 9:16 export previews tall
+   * and narrow, not letterboxed inside a 16:9 box).
+   *
+   * The sidebar is 320px wide, so width is capped at 288px (w-80 minus p-4 padding)
+   * and height at 320px — portrait ratios shrink in width rather than growing tall
+   * enough to push the controls below the fold.
+   */
+  const minimapSize = useMemo(() => {
+    const MAX_W = 288;
+    const MAX_H = 320;
+    const ratio = config.videoRatio ?? "16:9";
+    const preset = VIDEO_RATIO_PRESETS.find((r) => r.id === ratio) ?? VIDEO_RATIO_PRESETS[0];
+    const aspect = preset.width / preset.height;
+
+    // Fit the box inside the MAX_W x MAX_H envelope while preserving the aspect
+    let cssW = MAX_W;
+    let cssH = Math.round(cssW / aspect);
+    if (cssH > MAX_H) {
+      cssH = MAX_H;
+      cssW = Math.round(cssH * aspect);
+    }
+
+    // Backing store at 2x for crisp rendering on HiDPI displays
+    return {
+      cssWidth: cssW,
+      width: cssW * 2,
+      height: cssH * 2,
+    };
+  }, [config.videoRatio]);
 
   const toggleSection = useCallback((id: string) => {
     setExpandedSections((prev) => {
@@ -1224,8 +1257,16 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               {/* Camera minimap — fixed at top (doesn't scroll with controls) */}
               {viewMode === "scene" && (
                 <div className="shrink-0 p-4 pb-2 border-b border-border/30">
-                  <div className="relative rounded-lg overflow-hidden border border-border/50 bg-black">
-                    <canvas ref={minimapCanvasRef} width={576} height={324} className="w-full h-auto block" />
+                  <div
+                    className="relative rounded-lg overflow-hidden border border-border/50 bg-black mx-auto"
+                    style={{ width: minimapSize.cssWidth }}
+                  >
+                    <canvas
+                      ref={minimapCanvasRef}
+                      width={minimapSize.width}
+                      height={minimapSize.height}
+                      className="w-full h-auto block"
+                    />
                     <span className="absolute top-1.5 left-2 text-[9px] text-white/70 font-medium bg-black/40 px-1.5 py-0.5 rounded">Góc nhìn máy quay</span>
                   </div>
                 </div>

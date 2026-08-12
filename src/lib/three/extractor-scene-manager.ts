@@ -3731,7 +3731,10 @@ export class ExtractorSceneManager {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const { MINIMAP_W, MINIMAP_H } = ExtractorSceneManager;
+    // Drive the minimap aspect from the canvas element itself so the preview always
+    // matches the selected video ratio (the caller sizes the canvas from the ratio).
+    const MINIMAP_W = canvas.width || ExtractorSceneManager.MINIMAP_W;
+    const MINIMAP_H = canvas.height || ExtractorSceneManager.MINIMAP_H;
 
     // Hide ALL editor helpers so they don't appear in the minimap
     this.setHelpersVisible(false);
@@ -3749,13 +3752,52 @@ export class ExtractorSceneManager {
     this.camera.aspect = MINIMAP_W / MINIMAP_H;
     this.camera.updateProjectionMatrix();
 
+    // The WebGL canvas is sized for the scene view, so its aspect generally differs
+    // from the minimap's. Render into the largest centred sub-rect of the canvas that
+    // matches the minimap aspect, then copy exactly that rect. This keeps the camera
+    // frame 1:1 with what records — rendering full-canvas at a mismatched aspect would
+    // widen the visible field, and cropping afterwards would zoom it in.
+    const src = this.renderer.domElement;
+    const targetAspect = MINIMAP_W / Math.max(MINIMAP_H, 1);
+
+    // setViewport() works in CSS pixels (it multiplies by pixelRatio internally), while
+    // src.width/height are backing-store pixels (already multiplied). Compute the rect in
+    // CSS pixels, then scale to backing-store pixels for the drawImage copy. Mixing the
+    // two unit spaces is what pushed the render off-centre.
+    const rendererSize = this.renderer.getSize(new THREE.Vector2());
+    const cssW = rendererSize.x;
+    const cssH = rendererSize.y;
+
+    let vw = cssW;
+    let vh = vw / targetAspect;
+    if (vh > cssH) {
+      vh = cssH;
+      vw = vh * targetAspect;
+    }
+    const vx = (cssW - vw) / 2;
+    // WebGL viewport origin is bottom-left vs. the canvas's top-left, but the rect is
+    // centred vertically so the same offset is correct in both conventions.
+    const vy = (cssH - vh) / 2;
+
+    const savedViewport = new THREE.Vector4();
+    this.renderer.getViewport(savedViewport);
+    this.renderer.setViewport(vx, vy, vw, vh);
+
     // Render directly to main WebGL canvas (preserveDrawingBuffer: true)
     // This ensures tone mapping + sRGB encoding match the main view exactly
     this.renderer.render(this.scene, this.camera);
 
-    // GPU-accelerated blit to 2D minimap canvas — no CPU readback, correct colours
+    this.renderer.setViewport(savedViewport);
+
+    // GPU-accelerated blit of just the rendered sub-rect — no CPU readback, correct colours.
+    // Convert the CSS-pixel rect to backing-store pixels to index into the source canvas.
+    const pr = cssW > 0 ? src.width / cssW : 1;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(this.renderer.domElement, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(
+      src,
+      vx * pr, vy * pr, vw * pr, vh * pr,
+      0, 0, canvas.width, canvas.height
+    );
 
     // Restore camera aspect and helpers
     this.camera.aspect = savedAspect;

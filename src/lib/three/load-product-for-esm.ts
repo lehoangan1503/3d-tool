@@ -11,8 +11,18 @@
 
 import { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
-import { MODEL_PATHS } from "@/types/product";
-import type { Product } from "@/types/product";
+import { MODEL_PATHS, settingsJsonToConfig } from "@/types/product";
+import type { Product, ProductConfig, ThreeJSSettingsJson } from "@/types/product";
+
+async function fetchProductConfig(productId: string): Promise<ProductConfig | null> {
+  try {
+    const response = await fetch(`/api/products/${productId}/settings`);
+    if (!response.ok) return null;
+    return settingsJsonToConfig(await response.json() as ThreeJSSettingsJson);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Loads a product model into an existing ExtractorSceneManager.
@@ -36,6 +46,7 @@ export async function loadProductIntoEsm(
     // Load GLTF model for this product type
     const modelPath = MODEL_PATHS[product.type];
     await sm.loadModel(modelPath);
+    const config = await fetchProductConfig(product.id);
 
     // Apply the product's surface texture (image, color, leather pattern)
     await sm.applySurface({
@@ -43,8 +54,18 @@ export async function loadProductIntoEsm(
       productType: product.type,
       leatherColor: product.color as import("@/types/product").LeatherColor | null,
       leatherTexture: product.texture_type as import("@/types/product").LeatherTextureType | null,
-      textureScale: 1,
+      textureScale: config?.textureScale ?? 1,
+      logoId: config?.logoId ?? "uni",
     });
+
+    if (config) {
+      sm.updateBodyRoughness(config.bodyRoughness);
+      sm.updateJointConfig({
+        roughness: config.jointRoughness,
+        clearcoat: config.jointClearcoat,
+        metalness: config.jointMetalness,
+      });
+    }
 
     // Clone the loaded model into the ESM
     const model = sm.getModelForClone();

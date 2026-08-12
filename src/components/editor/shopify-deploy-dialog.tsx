@@ -57,6 +57,7 @@ import { createClient } from "@/lib/supabase/client";
 import { parseProductTitle } from "@/lib/shopify/parse-title";
 import { getProductCodeFormat, isValidProductCode } from "@/lib/shopify/product-code";
 import { ShaftConfigEditor } from "@/components/editor/shaft-config-editor";
+import { buildPreviewPose } from "@/lib/shopify/preview-pose";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1122,6 +1123,18 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     (imageUrls: string[], videoUrls: string[]) => {
       const customTextOn = customTextMode !== "none";
       const customTextConfig = customTextOn ? { label: customTextLabel.trim(), example: customTextExample.trim() } : null;
+
+      // Camera pose for the storefront's 2D → 3D swap. Only a reference that
+      // opted in by name (Preview-3D) and renders a single full-canvas cue
+      // qualifies; composite mockups yield null and stay 2D. Pair it with the
+      // uploaded URL of the image it actually produced.
+      const urlByRefName = new Map<string, string>();
+      renderedImages.forEach((ri, i) => {
+        const url = imageUrls[i];
+        if (url) urlByRefName.set(ri.refName.trim().toLowerCase(), url);
+      });
+      const previewPose = buildPreviewPose(groupRefs, urlByRefName);
+
       return {
         productId: product.id,
         storeId: storeId ?? undefined,
@@ -1147,6 +1160,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
         surfaceSlots: product.surface_slots,
         surfaceImageUrl: product.surface_url ?? null,
         shaftConfig,
+        previewPose,
       };
     },
     [
@@ -1154,6 +1168,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       product.surface_slots,
       product.surface_url,
       shaftConfig,
+      groupRefs,
       storeId,
       productCode,
       title,

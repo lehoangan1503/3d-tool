@@ -8,6 +8,7 @@ import type { SpecMetafieldMap } from "./stores";
 import type {
   LeatherColor,
   LeatherTextureType,
+  PreviewPose,
   ProductType,
   ShaftConfig,
   ShopifyVersionName,
@@ -503,6 +504,9 @@ export interface ProductInput {
   surfaceImageUrl?: string | null;
   /** Flat laser-shaft preview images + text frame positions. */
   shaftConfig?: ShaftConfig | null;
+  /** Camera pose of the deployed 2D mockup, so the storefront's silent 3D
+   *  swap lands on the identical angle. Written to custom.preview_pose. */
+  previewPose?: PreviewPose | null;
   textureType?: LeatherTextureType | null;
   color?: LeatherColor | null;
   /** Saved editor 3D settings. Written to custom.cue_3d_config + adds the 3d tag. */
@@ -563,6 +567,7 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
     surfaceSlots = null,
     surfaceImageUrl = null,
     shaftConfig = null,
+    previewPose = null,
     textureType = null,
     color = null,
     threejsSettings = null,
@@ -752,6 +757,19 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
       key: "shaft_config",
       type: "json",
       value: JSON.stringify(shaftConfig),
+    });
+  }
+
+  // Camera pose of the main gallery mockup. The storefront customizer loads a
+  // 3D canvas over that still image at this exact angle, so the two are
+  // indistinguishable. Only written when the product has a 3D config — without
+  // one there is no 3D view to align, so the page just stays 2D.
+  if (previewPose && cue3dConfig) {
+    metafields.push({
+      namespace: "custom",
+      key: "preview_pose",
+      type: "json",
+      value: JSON.stringify(previewPose),
     });
   }
 

@@ -17,7 +17,7 @@ import { withStore, activeStore } from "@/lib/shopify/store-context";
 import { getStore } from "@/lib/shopify/stores";
 import { getProductCodeFormat } from "@/lib/shopify/product-code";
 import { parseProductTitle } from "@/lib/shopify/parse-title";
-import type { ShaftConfig, SurfaceSlotsConfig, ThreeJSSettingsJson } from "@/types/product";
+import type { PreviewPose, ShaftConfig, SurfaceSlotsConfig, ThreeJSSettingsJson } from "@/types/product";
 
 export async function POST(request: Request) {
   try {
@@ -46,6 +46,7 @@ export async function POST(request: Request) {
       surface_slots?: SurfaceSlotsConfig | null;
       surface_image_url?: string | null;
       shaft_config?: ShaftConfig | null;
+      preview_pose?: PreviewPose | null;
     };
     const body = rawBody as ShopifyDeployRequest;
 
@@ -93,6 +94,11 @@ export async function POST(request: Request) {
     const requestShaftConfig = Object.prototype.hasOwnProperty.call(rawBody, "shaftConfig")
       ? body.shaftConfig
       : rawBody.shaft_config;
+    // Camera pose of the main mockup — supplied by whichever client rendered
+    // the images, since only it knows which reference produced image #1.
+    const requestPreviewPose = Object.prototype.hasOwnProperty.call(rawBody, "previewPose")
+      ? body.previewPose
+      : rawBody.preview_pose;
 
     // Auto tags (sku, wrap, laser shaft, col_<collection>) come from the builder;
     // these are the editor's extra freeform/test tags.
@@ -210,6 +216,7 @@ export async function POST(request: Request) {
       surfaceSlots: resolvedSurfaceSlots,
       surfaceImageUrl: resolvedSurfaceImageUrl,
       shaftConfig: resolvedShaftConfig,
+      previewPose: requestPreviewPose ?? null,
       textureType: productRow.texture_type ?? null,
       color: productRow.color ?? null,
       threejsSettings,

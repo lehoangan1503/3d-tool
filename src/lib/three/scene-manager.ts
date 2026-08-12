@@ -27,7 +27,7 @@ import {
   type SilverGrainParams,
   type SilverTuning,
 } from "./silver-coating";
-import type { ProductType, LeatherColor, LeatherTextureType } from "@/types/product";
+import type { ProductType, LeatherColor, LeatherTextureType, CueLogoId } from "@/types/product";
 import { isLeatherLikeType } from "@/types/product";
 
 export interface SurfaceOptions {
@@ -36,6 +36,7 @@ export interface SurfaceOptions {
   leatherColor?: LeatherColor | null;
   leatherTexture?: LeatherTextureType | null;
   textureScale?: number; // How many times to tile the normal map texture (1-8)
+  logoId?: CueLogoId;
 }
 
 /**
@@ -107,6 +108,7 @@ function ensurePhysicalMaterial(mesh: THREE.Mesh, mat: THREE.MeshStandardMateria
     opacity: mat.opacity,
     name: mat.name,
   });
+  physMat.userData = { ...mat.userData };
 
   // Replace in mesh
   if (Array.isArray(mesh.material)) {
@@ -289,6 +291,7 @@ export class SceneManager {
   private silverCoating = false; // "Phủ bạc" metallic-flake overlay on body meshes
   private silverGrain: SilverGrainParams = { ...DEFAULT_SILVER_GRAIN }; // user-tunable flake density (tile repeat)
   private textureScale = 1; // Texture tiling scale (1 = no tiling)
+  private currentLogoId: CueLogoId = "uni";
   private isLeatherProduct = false; // Track product type
   private leatherRoughnessTexture: THREE.CanvasTexture | null = null; // For dynamic roughness map updates
   private autoRotate = true; // Auto-rotate model on Y axis
@@ -882,6 +885,25 @@ export class SceneManager {
     this.updateModelMaterials();
   }
 
+  async updateLogo(logoId: CueLogoId): Promise<void> {
+    if (!this.model || logoId === this.currentLogoId) return;
+    this.currentLogoId = logoId;
+    await loadAllLogos(logoId);
+
+    this.model.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      materials.forEach((mat) => {
+        if (!(mat instanceof THREE.MeshPhysicalMaterial)) return;
+        if (isTopCapFaceMaterial(mat.name) || isTopCapMaterial(mat.name, child.name)) {
+          applyLogoToExistingMaterial(mat, "topCapFace", logoId);
+        } else if (isRubberMaterial(mat.name, child.name)) {
+          applyRubberLogoEmissive(mat, logoId);
+        }
+      });
+    });
+  }
+
   /**
    * Update materials on the model with current config
    * Cylinder leather: cylinderConfig controls roughness/clearcoat/metalness/color
@@ -1389,11 +1411,12 @@ export class SceneManager {
       return;
     }
 
-    const { surfaceUrl, productType, leatherColor, leatherTexture, textureScale } = options;
+    const { surfaceUrl, productType, leatherColor, leatherTexture, textureScale, logoId = "uni" } = options;
 
     // Track product type and texture scale for material updates
     this.isLeatherProduct = isLeatherLikeType(productType);
     this.textureScale = textureScale || 1;
+    this.currentLogoId = logoId;
 
     // Clear old textures
     this.disposeTextures();
@@ -1407,11 +1430,11 @@ export class SceneManager {
       // Leather-like (leather/lizard) models: leather region is a separate
       // cylinder mesh stacked above "outside". Load raw surface for body mesh —
       // no color overlay needed.
-      const [, , loadedImage] = await Promise.all([loadAllLogos(), loadLeatherNormal(leatherTexture || "crocodile"), this.loadImage(baseSurfaceUrl)]);
+      const [, , loadedImage] = await Promise.all([loadAllLogos(logoId), loadLeatherNormal(leatherTexture || "crocodile"), this.loadImage(baseSurfaceUrl)]);
       surfaceImage = loadedImage;
     } else {
       // Smooth product: load logos and surface image in parallel
-      const [, loadedImage] = await Promise.all([loadAllLogos(), this.loadImage(baseSurfaceUrl)]);
+      const [, loadedImage] = await Promise.all([loadAllLogos(logoId), this.loadImage(baseSurfaceUrl)]);
       surfaceImage = loadedImage;
     }
 
@@ -1473,7 +1496,7 @@ export class SceneManager {
 
         // Check material type: top cap face first (most specific), then top cap body, then cylinder, then rubber
         if (isTopCapFaceMaterial(matName)) {
-          applyLogoToExistingMaterial(mat, "topCapFace");
+          applyLogoToExistingMaterial(mat, "topCapFace", this.currentLogoId);
           const physMat = ensurePhysicalMaterial(child, mat, idx);
           physMat.roughness = this.currentJointConfig.roughness / 255;
           physMat.clearcoat = this.currentJointConfig.clearcoat / 100;
@@ -1482,7 +1505,7 @@ export class SceneManager {
           console.log("[SceneManager] ✅ Applied TOP CAP FACE logo + joint config to:", matName);
           return;
         } else if (isTopCapMaterial(matName, meshName)) {
-          applyLogoToExistingMaterial(mat, "topCapFace");
+          applyLogoToExistingMaterial(mat, "topCapFace", this.currentLogoId);
           const physMat = ensurePhysicalMaterial(child, mat, idx);
           physMat.roughness = this.currentJointConfig.roughness / 255;
           physMat.clearcoat = this.currentJointConfig.clearcoat / 100;
@@ -1498,7 +1521,7 @@ export class SceneManager {
           physMat.roughness = this.currentBumperConfig.roughness / 255;
           physMat.metalness = this.currentBumperConfig.metalness;
           physMat.color.set(this.currentBumperConfig.color);
-          applyRubberLogoEmissive(physMat);
+          applyRubberLogoEmissive(physMat, this.currentLogoId);
           physMat.needsUpdate = true;
           console.log("[SceneManager] ✅ Applied RUBBER emissive logo + bumper config to:", matName || meshName);
           return;

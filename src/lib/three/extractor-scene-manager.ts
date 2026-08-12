@@ -32,6 +32,13 @@ import { applyBumperEmissiveShaderMask, applyLogoToExistingMaterial } from './le
 import { isRubberMaterial, isTopCapMaterial, isTopCapFaceMaterial, isCylinderLeatherMaterial } from './leather-config';
 import { createWhiteImmuneMaterial } from './studio-helpers';
 
+/**
+ * Material used by background frame planes. Unlit (Basic) when studio lights are
+ * set to not influence surfaces, lit (Standard) when they are. Both expose the
+ * `map` and `opacity` fields the frame-plane update paths rely on.
+ */
+type FramePlaneMaterial = THREE.MeshBasicMaterial | THREE.MeshStandardMaterial;
+
 // Available HDRI options (same as editor-client)
 export const HDRI_OPTIONS_FALLBACK = [
   { id: "__studio_white__", label: "Studio White" },
@@ -1702,11 +1709,17 @@ export class ExtractorSceneManager {
         } else {
           child.material = child.material.clone();
         }
-        // Re-apply bumper shader mask — material.clone() drops onBeforeCompile
-        const mat = child.material as THREE.MeshPhysicalMaterial;
-        if (mat.emissiveMap && isRubberMaterial(mat.name, child.name)) {
-          applyBumperEmissiveShaderMask(mat);
-        }
+        // Material.clone() drops onBeforeCompile, so restore the laser shaders.
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        materials.forEach((material) => {
+          const mat = material as THREE.MeshPhysicalMaterial;
+          if (!mat.emissiveMap) return;
+          if (isRubberMaterial(mat.name, child.name)) {
+            applyBumperEmissiveShaderMask(mat);
+          } else if (isTopCapFaceMaterial(mat.name) || isTopCapMaterial(mat.name, child.name)) {
+            applyLogoToExistingMaterial(mat, "topCapFace", (mat.userData.__logoId as import("@/types/product").CueLogoId | undefined) ?? "uni");
+          }
+        });
       }
     });
 
@@ -2287,8 +2300,15 @@ export class ExtractorSceneManager {
     // Build frame overlay planes for interactive scene view
     const wallImages2 = await preloadFrameImages(config.wallSurface.frames);
     const tableImages2 = await preloadFrameImages(config.tableSurface.frames);
-    this.wallFramePlanes = this.buildFramePlanes(config.wallSurface, this.backdrop!, false, wallImages2);
-    this.tableFramePlanes = this.buildFramePlanes(config.tableSurface, this.tableSurface!, true, tableImages2);
+    // Frame planes follow the same lighting rule as the surfaces they sit on:
+    // studio lights shade the background image unless surface influence is disabled.
+    const framesLit = !config.surfaceLightDisabled;
+    this.wallFramePlanes = this.buildFramePlanes(
+      config.wallSurface, this.backdrop!, false, wallImages2, framesLit, surfaceEnv
+    );
+    this.tableFramePlanes = this.buildFramePlanes(
+      config.tableSurface, this.tableSurface!, true, tableImages2, framesLit, surfaceEnv
+    );
 
     // Single L-shaped shadow receiver spanning wall + table seamlessly
     if (config.shadow.enabled) {
@@ -2341,13 +2361,23 @@ export class ExtractorSceneManager {
     this.setupCueInstances(config.cueConfig);
   }
 
-  /** Create material for a frame plane based on its content */
+  /**
+   * Create material for a frame plane based on its content.
+   *
+   * When `lit` is true the plane uses a MeshStandardMaterial so studio lights and
+   * the surface env map affect the background image exactly like they affect the
+   * bare wall/table. When false (the "disable light influence on surfaces" toggle)
+   * it falls back to an unlit MeshBasicMaterial, so lights only shape the cue.
+   */
   private createFramePlaneMaterial(
     frame: BackgroundFrame,
     loadedImages?: Map<string, HTMLImageElement>,
     planeW = 1,
-    planeH = 1
-  ): THREE.MeshBasicMaterial {
+    planeH = 1,
+    lit = false,
+    surfaceEnv?: THREE.Texture | null,
+    surfaceRoughness?: number
+  ): THREE.MeshBasicMaterial | THREE.MeshStandardMaterial {
     const opts: THREE.MeshBasicMaterialParameters = {
       transparent: true,
       opacity: frame.opacity,
@@ -2355,10 +2385,30 @@ export class ExtractorSceneManager {
       depthWrite: false,
     };
 
-    // Compute canvas dimensions that match the plane's aspect ratio (max side = 1024).
-    // This ensures textures are never stretched when mapped to non-square planes.
-    const MAX_TEX = 1024;
+    // Compute canvas dimensions that match the plane's aspect ratio.
+    // Matching the aspect ratio ensures textures are never stretched on non-square planes.
+    //
+    // The max side is driven by the source image's native resolution so a high-res
+    // photo (e.g. 5472x3648) is not pre-downsampled to a small canvas before it ever
+    // reaches the GPU. It is clamped to the GPU's max texture size (typically 8192-16384)
+    // so we never exceed what WebGL can allocate.
+    const gpuMaxTex = this.renderer.capabilities.maxTextureSize ?? 4096;
+    const HARD_MAX_TEX = Math.min(gpuMaxTex, 8192);
+    const BASE_MAX_TEX = 1024;
+
+    // Largest source-image dimension across whatever this frame draws
+    let srcMaxSide = 0;
+    if (frame.imageUrl && loadedImages) {
+      const srcImg = loadedImages.get(frame.imageUrl);
+      if (srcImg) srcMaxSide = Math.max(srcImg.naturalWidth, srcImg.naturalHeight);
+    }
+
     const planeAR = planeW / Math.max(planeH, 0.001);
+    const desiredMaxSide = srcMaxSide > 0
+      ? Math.max(BASE_MAX_TEX, srcMaxSide)
+      : BASE_MAX_TEX;
+    const MAX_TEX = Math.min(desiredMaxSide, HARD_MAX_TEX);
+
     const canvasW = planeAR >= 1 ? MAX_TEX : Math.max(1, Math.round(MAX_TEX * planeAR));
     const canvasH = planeAR < 1 ? MAX_TEX : Math.max(1, Math.round(MAX_TEX / planeAR));
 
@@ -2385,6 +2435,9 @@ export class ExtractorSceneManager {
       canvas.width = canvasW;
       canvas.height = canvasH;
       const ctx = canvas.getContext("2d")!;
+      // High-quality resampling when the source image is scaled into the canvas
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
 
       if (frame.type) {
         // Legacy format
@@ -2443,11 +2496,42 @@ export class ExtractorSceneManager {
       const tex = new THREE.CanvasTexture(canvas);
       // Mark as sRGB so THREE.js correctly converts to linear on sampling
       tex.colorSpace = THREE.SRGBColorSpace;
+      // Trilinear mipmapping + max anisotropy keeps fine grain (e.g. wall texture
+      // speckle) crisp when the plane is viewed at an angle or minified, instead of
+      // degrading to the blurry/aliased look of an unfiltered high-res texture.
+      tex.generateMipmaps = true;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
       tex.needsUpdate = true;
       return tex;
     };
 
-    const mat = new THREE.MeshBasicMaterial({ ...opts, map: renderToCanvas() });
+    const map = renderToCanvas();
+
+    if (lit) {
+      // Lit path: studio lights and the surface env map shade the background image
+      // just like the bare wall/table surface.
+      const litMat = new THREE.MeshStandardMaterial({
+        map,
+        transparent: true,
+        opacity: frame.opacity,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        roughness: surfaceRoughness ?? 0.95,
+        metalness: 0,
+      });
+      if (surfaceEnv) {
+        litMat.envMap = surfaceEnv;
+        litMat.envMapIntensity = 0.6;
+      }
+      // Tone mapping stays ENABLED here: a lit surface must go through the same
+      // tone-mapping curve as the rest of the scene, otherwise its response to
+      // light intensity would not match the wall it sits on.
+      return litMat;
+    }
+
+    const mat = new THREE.MeshBasicMaterial({ ...opts, map });
     // Disable tone mapping so frames display original colors regardless of renderer settings
     mat.toneMapped = false;
     return mat;
@@ -2458,7 +2542,9 @@ export class ExtractorSceneManager {
     surface: SurfaceConfig,
     parentMesh: THREE.Mesh,
     isTable: boolean,
-    loadedImages?: Map<string, HTMLImageElement>
+    loadedImages?: Map<string, HTMLImageElement>,
+    lit = false,
+    surfaceEnv?: THREE.Texture | null
   ): THREE.Mesh[] {
     const planes: THREE.Mesh[] = [];
     const enabledFrames = surface.frames.filter(f => f.enabled);
@@ -2471,9 +2557,13 @@ export class ExtractorSceneManager {
         const tableDepth = 12;
         const pw = frame.width * tableWidth;
         const pd = frame.height * tableDepth;
-        const material = this.createFramePlaneMaterial(frame, loadedImages, pw, pd);
+        const material = this.createFramePlaneMaterial(
+          frame, loadedImages, pw, pd, lit, surfaceEnv, surface.roughness ?? 0.35
+        );
         const geo = new THREE.PlaneGeometry(pw, pd);
         const mesh = new THREE.Mesh(geo, material);
+        // A lit frame stands in for the table surface, so it must catch shadows too
+        mesh.receiveShadow = lit;
 
         const tablePos = parentMesh.position;
         mesh.rotation.x = -Math.PI / 2;
@@ -2491,9 +2581,13 @@ export class ExtractorSceneManager {
         const wallHeight = 24;
         const pw = frame.width * wallWidth;
         const ph = frame.height * wallHeight;
-        const material = this.createFramePlaneMaterial(frame, loadedImages, pw, ph);
+        const material = this.createFramePlaneMaterial(
+          frame, loadedImages, pw, ph, lit, surfaceEnv, surface.roughness ?? 0.95
+        );
         const geo = new THREE.PlaneGeometry(pw, ph);
         const mesh = new THREE.Mesh(geo, material);
+        // A lit frame stands in for the wall surface, so it must catch shadows too
+        mesh.receiveShadow = lit;
 
         const wallPos = parentMesh.position;
         mesh.position.set(
@@ -2516,7 +2610,7 @@ export class ExtractorSceneManager {
     for (const mesh of [...this.wallFramePlanes, ...this.tableFramePlanes]) {
       this.scene.remove(mesh);
       mesh.geometry.dispose();
-      const mat = mesh.material as THREE.MeshBasicMaterial;
+      const mat = mesh.material as FramePlaneMaterial;
       if (mat.map) mat.map.dispose();
       mat.dispose();
     }
@@ -2545,7 +2639,7 @@ export class ExtractorSceneManager {
         const ph = frame.height * wallHeight;
         mesh.scale.set(pw / (mesh.geometry as THREE.PlaneGeometry).parameters.width,
                        ph / (mesh.geometry as THREE.PlaneGeometry).parameters.height, 1);
-        (mesh.material as THREE.MeshBasicMaterial).opacity = frame.opacity;
+        (mesh.material as FramePlaneMaterial).opacity = frame.opacity;
       }
     }
 
@@ -2568,7 +2662,7 @@ export class ExtractorSceneManager {
         const pd = frame.height * tableDepth;
         mesh.scale.set(pw / (mesh.geometry as THREE.PlaneGeometry).parameters.width,
                        pd / (mesh.geometry as THREE.PlaneGeometry).parameters.height, 1);
-        (mesh.material as THREE.MeshBasicMaterial).opacity = frame.opacity;
+        (mesh.material as FramePlaneMaterial).opacity = frame.opacity;
       }
     }
 
@@ -4514,7 +4608,7 @@ export class ExtractorSceneManager {
           // regardless of envMap/lighting. Safe to call unconditionally —
           // emissive doesn't affect the existing diffuse map.
           if (isTopCapFaceMaterial(physMat.name)) {
-            applyLogoToExistingMaterial(physMat, "topCapFace");
+            applyLogoToExistingMaterial(physMat, "topCapFace", (physMat.userData.__logoId as import("@/types/product").CueLogoId | undefined) ?? "uni");
           }
           return cloned;
         });
@@ -4525,7 +4619,7 @@ export class ExtractorSceneManager {
           applyBumperEmissiveShaderMask(physMat);
         }
         if (isTopCapFaceMaterial(physMat.name)) {
-          applyLogoToExistingMaterial(physMat, "topCapFace");
+          applyLogoToExistingMaterial(physMat, "topCapFace", (physMat.userData.__logoId as import("@/types/product").CueLogoId | undefined) ?? "uni");
         }
         child.material = cloned;
       }

@@ -126,17 +126,18 @@ export function BulkImageTab({ products }: Props) {
       const sm = new SceneManager(container);
       try {
         await sm.loadModel(MODEL_PATHS[product.type]);
+        const productConfig = await fetchProductConfig(product.id);
         await sm.applySurface({
           surfaceUrl: product.surface_url,
           productType: product.type,
           leatherColor: product.color as LeatherColor | null,
           leatherTexture: product.texture_type as LeatherTextureType | null,
-          textureScale: 1,
+          textureScale: productConfig?.textureScale ?? 1,
+          logoId: productConfig?.logoId ?? "uni",
         });
 
         // Apply product-specific material settings so joint roughness/metalness
         // matches the editor render (otherwise joint defaults to roughness=1.0 → flat black).
-        const productConfig = await fetchProductConfig(product.id);
         if (productConfig) {
           sm.updateBodyRoughness(productConfig.bodyRoughness);
           sm.updateJointConfig({

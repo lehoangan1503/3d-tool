@@ -14,6 +14,21 @@ export type LeatherTextureType = "crocodile" | "cowhide" | "snake" | "custom";
 
 export type LeatherColor = "black" | "chestnut" | "chocolate" | "darkBrown" | "whiskey" | "tan";
 
+export const CUE_LOGO_OPTIONS = [
+  { id: "uni", label: "UNI", path: "/logos/uni.png" },
+  { id: "novera", label: "Novera", path: "/logos/novera.jpg" },
+  { id: "procue", label: "Procue", path: "/logos/procue.jpg" },
+  { id: "w-logo", label: "W", path: "/logos/w-logo.jpg" },
+  { id: "novryx", label: "Novryx", path: "/logos/novryx.jpg" },
+  { id: "xcue", label: "XCue", path: "/logos/xcue.jpg" },
+] as const;
+
+export type CueLogoId = (typeof CUE_LOGO_OPTIONS)[number]["id"];
+
+export function isCueLogoId(value: unknown): value is CueLogoId {
+  return CUE_LOGO_OPTIONS.some((option) => option.id === value);
+}
+
 // Assignable roles stored on user_profiles, granted by the superadmin from
 // /admin/dashboard/accounts. null = normal user.
 //
@@ -103,6 +118,60 @@ export interface ShaftConfig {
   proLux: ShaftPreviewImageConfig;
 }
 
+/**
+ * Camera/model pose of the deployed 2D mockup image, written to the
+ * custom.preview_pose metafield.
+ *
+ * The storefront product page shows a static product image and then silently
+ * swaps a 3D canvas over it. That swap is only invisible if the 3D camera
+ * reproduces the pose that rendered the image, so these values are copied
+ * verbatim from the CueSettings of the rendered reference frame and re-applied
+ * by SceneManager.applyPose() using the same formulas as the render pipeline:
+ *   camera at (0, distance*cos(phi), distance*sin(phi)), fov = 50 / zoom.
+ */
+/**
+ * One image-based-lighting layer of a preview pose, mirroring the renderer's
+ * HdriLayer. Rotation is in degrees and is applied by shifting the
+ * equirectangular texture, so it must be carried alongside the camera —
+ * the same HDRI file at a different rotation lights the cue completely
+ * differently and the 2D/3D swap would show a lighting jump.
+ */
+export interface PreviewPoseHdri {
+  /** HDRI filename or absolute URL. */
+  hdriType: string;
+  /** Vertical rotation in degrees (shifts the texture on Y). */
+  rotationX: number;
+  /** Horizontal rotation in degrees (shifts the texture on X). */
+  rotationY: number;
+  /** Layer intensity multiplier (1 = unchanged). */
+  intensity: number;
+}
+
+export interface PreviewPose {
+  version: 1;
+  /** Model Y-axis rotation in radians (turntable spin). */
+  spinY: number;
+  /** Camera polar angle in radians (PI/2 = side view). */
+  phi: number;
+  /** Zoom multiplier; the renderer maps it to fov = 50 / zoom. */
+  zoom: number;
+  /** Model translation in scene units. */
+  offsetX: number;
+  offsetY: number;
+  /** Camera orbit radius. The render pipeline uses 2. */
+  distance: number;
+  /**
+   * Lighting used for this render, in the renderer's own layer order. The
+   * storefront applies the first enabled layer (it blends only one env map),
+   * so index 0 is the one that matters most.
+   */
+  hdri?: PreviewPoseHdri[];
+  /** Which rendered image this pose belongs to (e.g. "Mockup-Web-1"). */
+  imageName?: string | null;
+  /** Public URL of that image, so the theme can show the exact same file. */
+  imageUrl?: string | null;
+}
+
 export interface Product {
   id: string;
   user_id: string;
@@ -180,6 +249,9 @@ export interface ShopifyFormData {
   // IDs of the AI skills last used for this product (re-selected on reopen).
   skillIds: string[];
   shaftConfig?: ShaftConfig | null;
+  // Camera pose of the main rendered mockup. Persisted so a re-deploy keeps
+  // the storefront's 2D → 3D swap aligned even if the render is not repeated.
+  previewPose?: PreviewPose | null;
 }
 
 // Full Shopify deployment record (shopify_deployments table).
@@ -248,6 +320,7 @@ export interface ProductConfig {
   leatherSheen: number; // 0-100 range (hidden but in JSON)
   normalStrength: number; // 0-10 range
   textureScale: number; // 1-8 range - how many times to tile the texture
+  logoId: CueLogoId; // Single laser-engraved logo used on both cue ends
   // Joint Top settings (isolated per-part config)
   jointRoughness: number; // 0-255 range
   jointClearcoat: number; // 0-100 range
@@ -281,6 +354,7 @@ export interface ThreeJSSettingsJson {
     textureScale: number;
     silverCoating?: boolean; // "Phủ bạc" metallic-flake overlay (default false)
     silverGrainDensity?: number; // "Mật độ hạt" flake density 0-100 (default 50)
+    logoId?: CueLogoId;
   };
   joint?: {
     roughness: number;
@@ -318,6 +392,7 @@ export function configToSettingsJson(config: ProductConfig): ThreeJSSettingsJson
       textureScale: config.textureScale,
       silverCoating: config.silverCoating,
       silverGrainDensity: config.silverGrainDensity,
+      logoId: config.logoId,
     },
     joint: {
       roughness: config.jointRoughness,
@@ -353,6 +428,7 @@ export function settingsJsonToConfig(json: ThreeJSSettingsJson): ProductConfig {
     leatherSheen: json.material.sheen,
     normalStrength: json.material.normalStrength,
     textureScale: json.material.textureScale ?? 1,
+    logoId: isCueLogoId(json.material.logoId) ? json.material.logoId : "uni",
     jointRoughness: json.joint?.roughness ?? 255,
     jointClearcoat: json.joint?.clearcoat ?? 0,
     jointMetalness: json.joint?.metalness ?? 1,
@@ -425,6 +501,7 @@ export const DEFAULT_SMOOTH_CONFIG: ProductConfig = {
   leatherSheen: 0, // Not used for smooth cue
   normalStrength: 0, // Not used for smooth cue
   textureScale: 1, // Not used for smooth cue
+  logoId: "uni",
   jointRoughness: 120,
   jointClearcoat: 0,
   jointMetalness: 1,
@@ -453,6 +530,7 @@ export const DEFAULT_LEATHER_CONFIG: ProductConfig = {
   leatherSheen: 80, // Leather sheen
   normalStrength: 3.0, // Leather normal map strength
   textureScale: 1, // Texture tiling (1 = no repeat, 2+ = tiled)
+  logoId: "uni",
   jointRoughness: 120,
   jointClearcoat: 0,
   jointMetalness: 1,

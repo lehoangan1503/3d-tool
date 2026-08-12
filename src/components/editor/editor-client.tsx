@@ -44,8 +44,8 @@ import {
   LayoutTemplate,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import type { Product, ProductConfig, LeatherColor, LeatherTextureType, ShopifyDeploymentSummary } from "@/types/product";
-import { DEFAULT_PRODUCT_CONFIG, configToSettingsJson, isLeatherLikeType } from "@/types/product";
+import type { Product, ProductConfig, LeatherColor, LeatherTextureType, ShopifyDeploymentSummary, CueLogoId } from "@/types/product";
+import { CUE_LOGO_OPTIONS, DEFAULT_PRODUCT_CONFIG, configToSettingsJson, isLeatherLikeType } from "@/types/product";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { uploadToStorage, uploadProductAssetViaServer } from "@/lib/supabase/upload";
 import { useStoreOptional } from "@/components/shopify/store-switcher";
@@ -72,6 +72,19 @@ interface EditorClientProps {
 interface PendingFiles {
   surface: { file: File; preview: string } | null;
   customTexture: { file: File; preview: string } | null;
+}
+
+function CueLogoOption({ option }: { option: (typeof CUE_LOGO_OPTIONS)[number] }) {
+  return (
+    <span className="flex items-center gap-3">
+      <span
+        aria-hidden="true"
+        className="h-9 w-9 shrink-0 rounded-md border border-white/15 bg-neutral-700 bg-contain bg-center bg-no-repeat"
+        style={{ backgroundImage: `url(${option.path})` }}
+      />
+      <span>{option.label}</span>
+    </span>
+  );
 }
 
 export function EditorClient({
@@ -540,6 +553,7 @@ export function EditorClient({
           "https://cdn.shopify.com/s/files/1/0728/7314/8553/files/bloem_train_track_clear_2k.hdr",
         ],
         textureScale: config.textureScale,
+        logoId: config.logoId,
         joint: {
           roughness: config.jointRoughness,
           clearcoat: config.jointClearcoat,
@@ -782,6 +796,22 @@ export function EditorClient({
                     <Badge variant="outline" className="ml-2">{product.surface_slots?.slots.length}</Badge>
                   )}
                 </Button>
+                <div className="mt-4 flex flex-col gap-2">
+                  <Label htmlFor="cueLogo-mobile">Logo khắc laser</Label>
+                  <Select value={config.logoId} onValueChange={(value) => updateConfig({ logoId: value as CueLogoId })}>
+                    <SelectTrigger id="cueLogo-mobile">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CUE_LOGO_OPTIONS.map((option) => (
+                        <SelectItem key={option.id} value={option.id} className="py-2.5">
+                          <CueLogoOption option={option} />
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">Áp dụng một logo cho cả đầu joint và bumper.</p>
+                </div>
                 {/* Phủ bạc — silver metallic-flake overlay (Pro line blank) */}
                 <label
                   htmlFor="silverCoating-mobile"
@@ -1274,6 +1304,22 @@ export function EditorClient({
                   <Badge variant="outline" className="ml-2">{product.surface_slots?.slots.length}</Badge>
                 )}
               </Button>
+              <div className="mt-4 flex flex-col gap-2">
+                <Label htmlFor="cueLogo">Logo khắc laser</Label>
+                <Select value={config.logoId} onValueChange={(value) => updateConfig({ logoId: value as CueLogoId })}>
+                  <SelectTrigger id="cueLogo">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CUE_LOGO_OPTIONS.map((option) => (
+                      <SelectItem key={option.id} value={option.id} className="py-2.5">
+                        <CueLogoOption option={option} />
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">Áp dụng một logo cho cả đầu joint và bumper.</p>
+              </div>
               {/* Phủ bạc — silver metallic-flake overlay (Pro line blank) */}
               <label
                 htmlFor="silverCoating"

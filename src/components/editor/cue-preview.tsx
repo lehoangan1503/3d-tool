@@ -33,7 +33,7 @@ export function CuePreview({ product, config, settings, onSceneReady }: CuePrevi
   
   // Helper to create surface key (include textureScale)
   const getSurfaceKey = useCallback((p: Product, c?: ProductConfig) => 
-    `${p.surface_url}|${p.color}|${p.texture_type}|${c?.textureScale ?? 1}`, []);
+    `${p.surface_url}|${p.color}|${p.texture_type}|${c?.textureScale ?? 1}|${c?.logoId ?? "uni"}`, []);
   
   // Helper to create surface options
   const getSurfaceOptions = useCallback((p: Product, c?: ProductConfig): SurfaceOptions => ({
@@ -42,6 +42,7 @@ export function CuePreview({ product, config, settings, onSceneReady }: CuePrevi
     leatherColor: p.color,
     leatherTexture: p.texture_type,
     textureScale: c?.textureScale ?? 1,
+    logoId: c?.logoId ?? "uni",
   }), []);
 
   // Initialize scene ONCE on mount
@@ -155,7 +156,7 @@ export function CuePreview({ product, config, settings, onSceneReady }: CuePrevi
       appliedSurfaceKeyRef.current = currentKey;
       manager.applySurface(options).catch(console.error);
     }
-  }, [product.surface_url, product.color, product.texture_type, product.type, config?.textureScale, manager, getSurfaceKey, getSurfaceOptions]);
+  }, [product.surface_url, product.color, product.texture_type, product.type, config?.textureScale, config?.logoId, manager, getSurfaceKey, getSurfaceOptions]);
 
   const handleRetry = () => {
     if (manager) {

@@ -9,6 +9,7 @@ import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import { renderReferenceToBlob } from "@/components/editor/image-extractor";
 import { uploadBlobToStorage } from "@/lib/supabase/upload";
 import { parseProductTitle } from "@/lib/shopify/parse-title";
+import { buildPreviewPose } from "@/lib/shopify/preview-pose";
 import { ensureFullConfig, type VideoStudioConfig } from "@/types/video-studio";
 import type { AutoDeployConfig } from "./types";
 
@@ -239,16 +240,17 @@ export async function runProductDeploy(
 
   try {
     await sm.loadModel(MODEL_PATHS[product.type]);
+    const productConfig = await fetchProductConfig(product.id, signal);
     await sm.applySurface({
       surfaceUrl: product.surface_url,
       productType: product.type,
       leatherColor: product.color as LeatherColor | null,
       leatherTexture: product.texture_type as LeatherTextureType | null,
-      textureScale: 1,
+      textureScale: productConfig?.textureScale ?? 1,
+      logoId: productConfig?.logoId ?? "uni",
     });
 
     // Match the editor render: apply per-product joint/body material settings.
-    const productConfig = await fetchProductConfig(product.id, signal);
     if (productConfig) {
       sm.updateBodyRoughness(productConfig.bodyRoughness);
       sm.updateJointConfig({
@@ -341,6 +343,13 @@ export async function runProductDeploy(
     surfaceSlots: product.surface_slots,
     surfaceImageUrl: product.surface_url ?? null,
     shaftConfig: product.shaft_config ?? null,
+    // Pose of the main gallery mockup, so the storefront can swap a 3D canvas
+    // over it at the identical angle. imageNames/imageUrls stay index-aligned
+    // with `references` here, so the primary reference maps to its real URL.
+    previewPose: buildPreviewPose(
+      references,
+      new Map(imageNames.map((name, i) => [name.trim().toLowerCase(), imageUrls[i]])),
+    ),
   };
 
   const res = await fetch("/api/shopify/create-product", {

@@ -8,16 +8,47 @@ import { LEATHER_CONFIG, RUBBER_CONFIG, TOP_CAP_CONFIG, getLeatherTexturePath, i
 import { LEATHER_FRAME } from "./leather-frame";
 import { createLeatherRoughnessMap, createLeatherClearcoatMap } from "./leather-overlay";
 import { generateLeatherBumpMap, type LeatherBumpResult } from "./procedural";
+import { CUE_LOGO_OPTIONS, type CueLogoId } from "@/types/product";
 
 // =====================================================
 // LOGO IMAGES
 // =====================================================
 
-let bumperLogoImage: HTMLImageElement | null = null;
-let bumperLogoPromise: Promise<HTMLImageElement | null> | null = null;
+type LogoImageSource = HTMLImageElement | HTMLCanvasElement;
 
-let topCapLogoImage: HTMLImageElement | null = null;
-let topCapLogoPromise: Promise<HTMLImageElement | null> | null = null;
+let bumperLogoImage: LogoImageSource | null = null;
+let bumperLogoPromise: Promise<LogoImageSource | null> | null = null;
+
+let topCapLogoImage: LogoImageSource | null = null;
+let topCapLogoPromise: Promise<LogoImageSource | null> | null = null;
+
+const logoImageCache = new Map<string, Promise<HTMLImageElement | null>>();
+const logoImages = new Map<CueLogoId, HTMLImageElement>();
+const materialLogoTextures = new WeakMap<THREE.Material, THREE.Texture>();
+
+function loadLogoImage(logoId: CueLogoId, overridePath?: string): Promise<HTMLImageElement | null> {
+  const option = CUE_LOGO_OPTIONS.find((item) => item.id === logoId) ?? CUE_LOGO_OPTIONS[0];
+  const path = overridePath || option.path;
+  const cacheKey = `${logoId}|${path}`;
+  const cached = logoImageCache.get(cacheKey);
+  if (cached) return cached;
+
+  const promise = new Promise<HTMLImageElement | null>((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      logoImages.set(logoId, img);
+      resolve(img);
+    };
+    img.onerror = () => {
+      console.warn("[Logo] Unable to load", path);
+      resolve(null);
+    };
+    img.src = path;
+  });
+  logoImageCache.set(cacheKey, promise);
+  return promise;
+}
 
 // =====================================================
 // PROCEDURAL LEATHER TEXTURE CACHE
@@ -498,25 +529,12 @@ export function createStandardMaterial(mapTexture: THREE.Texture): THREE.MeshPhy
 /**
  * Load bumper logo image
  */
-export function loadBumperLogo(): Promise<HTMLImageElement | null> {
+export function loadBumperLogo(logoId: CueLogoId = "uni"): Promise<LogoImageSource | null> {
   if (!RUBBER_CONFIG.logo.enabled) return Promise.resolve(null);
-  if (bumperLogoPromise) return bumperLogoPromise;
-
-  const logoPath = RUBBER_CONFIG.logo.path + "?v=" + Date.now();
-
-  bumperLogoPromise = new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
-      bumperLogoImage = img;
-      console.log("[Rubber] ✅ Bumper logo loaded:", img.width, "x", img.height);
-      resolve(img);
-    };
-    img.onerror = () => {
-      console.warn("[Rubber] ⚠️ Bumper logo not found at:", logoPath);
-      resolve(null);
-    };
-    img.src = logoPath;
+  const overridePath = logoId === "uni" && RUBBER_CONFIG.logo.path !== "/logo.png" ? RUBBER_CONFIG.logo.path : undefined;
+  bumperLogoPromise = loadLogoImage(logoId, overridePath).then((img) => {
+    bumperLogoImage = img ? prepareLogoSource(img, logoId) : null;
+    return bumperLogoImage;
   });
 
   return bumperLogoPromise;
@@ -614,25 +632,12 @@ function drawRubberLogoOnCanvas(ctx: CanvasRenderingContext2D, width: number, he
 /**
  * Load top cap logo image
  */
-export function loadTopCapLogo(): Promise<HTMLImageElement | null> {
+export function loadTopCapLogo(logoId: CueLogoId = "uni"): Promise<LogoImageSource | null> {
   if (!TOP_CAP_CONFIG.logo.enabled) return Promise.resolve(null);
-  if (topCapLogoPromise) return topCapLogoPromise;
-
-  const logoPath = TOP_CAP_CONFIG.logo.path + "?v=" + Date.now();
-
-  topCapLogoPromise = new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
-      topCapLogoImage = img;
-      console.log("[TopCap] ✅ Logo loaded:", img.width, "x", img.height);
-      resolve(img);
-    };
-    img.onerror = () => {
-      console.warn("[TopCap] ⚠️ Logo not found at:", logoPath);
-      resolve(null);
-    };
-    img.src = logoPath;
+  const overridePath = logoId === "uni" && TOP_CAP_CONFIG.logo.path !== "/logo.png" ? TOP_CAP_CONFIG.logo.path : undefined;
+  topCapLogoPromise = loadLogoImage(logoId, overridePath).then((img) => {
+    topCapLogoImage = img ? prepareLogoSource(img, logoId) : null;
+    return topCapLogoImage;
   });
 
   return topCapLogoPromise;
@@ -820,38 +825,212 @@ function renderCompressedTextureToCanvas(
  * the image data is a CompressedTexture. Instead, we render the texture
  * to a canvas first using WebGL, or create a new texture with just the logo.
  */
-export function applyLogoToExistingMaterial(mat: THREE.Material, type: "rubber" | "topCapFace"): void {
+function prepareLogoSource(image: HTMLImageElement, logoId: CueLogoId): LogoImageSource {
+  // UNI is already a transparent PNG and must go through the exact original
+  // renderer unchanged.
+  if (logoId === "uni") return image;
+
+  const naturalWidth = image.naturalWidth || image.width;
+  const naturalHeight = image.naturalHeight || image.height;
+  const scale = Math.min(1, 1024 / Math.max(naturalWidth, naturalHeight));
+  const source = document.createElement("canvas");
+  source.width = Math.max(1, Math.round(naturalWidth * scale));
+  source.height = Math.max(1, Math.round(naturalHeight * scale));
+  const ctx = source.getContext("2d", { willReadFrequently: true })!;
+  ctx.drawImage(image, 0, 0, source.width, source.height);
+  const pixels = ctx.getImageData(0, 0, source.width, source.height);
+  const corners = [0, (source.width - 1) * 4, (source.height - 1) * source.width * 4, (source.width * source.height - 1) * 4];
+  const background = corners.reduce((sum, index) => (
+    sum + (pixels.data[index] + pixels.data[index + 1] + pixels.data[index + 2]) / 3
+  ), 0) / corners.length;
+
+  let minX = source.width;
+  let minY = source.height;
+  let maxX = 0;
+  let maxY = 0;
+  for (let y = 0; y < source.height; y++) {
+    for (let x = 0; x < source.width; x++) {
+      const index = (y * source.width + x) * 4;
+      const luminance = (pixels.data[index] + pixels.data[index + 1] + pixels.data[index + 2]) / 3;
+      const mask = Math.min(1, Math.abs(luminance - background) / 96);
+      const alpha = Math.round(mask * 255);
+      pixels.data[index] = 255;
+      pixels.data[index + 1] = 255;
+      pixels.data[index + 2] = 255;
+      pixels.data[index + 3] = alpha;
+      if (mask > 0.08) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+  }
+  ctx.putImageData(pixels, 0, 0);
+
+  const cropWidth = Math.max(1, maxX - minX + 1);
+  const cropHeight = Math.max(1, maxY - minY + 1);
+  const cutout = document.createElement("canvas");
+  cutout.width = 1024;
+  cutout.height = 1024;
+  const cutoutCtx = cutout.getContext("2d")!;
+  const fittedScale = Math.min(920 / cropWidth, 920 / cropHeight);
+  const width = cropWidth * fittedScale;
+  const height = cropHeight * fittedScale;
+  cutoutCtx.drawImage(source, minX, minY, cropWidth, cropHeight, (1024 - width) / 2, (1024 - height) / 2, width, height);
+  return cutout;
+}
+
+function createLaserLogoMask(
+  image: LogoImageSource,
+  width: number,
+  height: number,
+  boxScale: number,
+  centerX: number,
+  centerY: number,
+  flipY: boolean,
+): THREE.CanvasTexture {
+  const source = document.createElement("canvas");
+  const naturalWidth = image instanceof HTMLImageElement ? (image.naturalWidth || image.width) : image.width;
+  const naturalHeight = image instanceof HTMLImageElement ? (image.naturalHeight || image.height) : image.height;
+  const sourceScale = Math.min(1, 1024 / Math.max(naturalWidth, naturalHeight));
+  source.width = Math.max(1, Math.round(naturalWidth * sourceScale));
+  source.height = Math.max(1, Math.round(naturalHeight * sourceScale));
+  const sourceCtx = source.getContext("2d", { willReadFrequently: true })!;
+  sourceCtx.drawImage(image, 0, 0);
+  const pixels = sourceCtx.getImageData(0, 0, source.width, source.height);
+
+  const corners = [
+    0,
+    (source.width - 1) * 4,
+    (source.height - 1) * source.width * 4,
+    (source.height * source.width - 1) * 4,
+  ];
+  const background = corners.reduce((sum, index) => (
+    sum + (pixels.data[index] + pixels.data[index + 1] + pixels.data[index + 2]) / 3
+  ), 0) / corners.length;
+
+  let minX = source.width;
+  let minY = source.height;
+  let maxX = 0;
+  let maxY = 0;
+  for (let y = 0; y < source.height; y++) {
+    for (let x = 0; x < source.width; x++) {
+      const index = (y * source.width + x) * 4;
+      const alpha = pixels.data[index + 3] / 255;
+      const luminance = (pixels.data[index] + pixels.data[index + 1] + pixels.data[index + 2]) / 3;
+      const hasTransparency = alpha < 0.98;
+      const mask = hasTransparency ? alpha : Math.min(1, Math.abs(luminance - background) / 96);
+      const value = Math.round(mask * 255);
+      pixels.data[index] = value;
+      pixels.data[index + 1] = value;
+      pixels.data[index + 2] = value;
+      pixels.data[index + 3] = 255;
+      if (mask > 0.08) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+  }
+  sourceCtx.putImageData(pixels, 0, 0);
+
+  const cropWidth = Math.max(1, maxX - minX + 1);
+  const cropHeight = Math.max(1, maxY - minY + 1);
+  const boxSize = Math.min(width, height) * boxScale;
+  const fittedScale = Math.min(boxSize / cropWidth, boxSize / cropHeight);
+  const drawWidth = cropWidth * fittedScale;
+  const drawHeight = cropHeight * fittedScale;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, width, height);
+  ctx.save();
+  ctx.translate(centerX * width, centerY * height);
+  ctx.scale(1, flipY ? -1 : 1);
+  ctx.drawImage(source, minX, minY, cropWidth, cropHeight, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+  ctx.restore();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.NoColorSpace;
+  texture.flipY = false;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function applyLaserLogo(
+  mat: THREE.Material,
+  type: "rubber" | "topCapFace",
+  logoId: CueLogoId,
+): void {
+  const image = logoImages.get(logoId) ?? (type === "rubber" ? bumperLogoImage : topCapLogoImage);
+  if (!image) return;
+
+  const physMat = mat as THREE.MeshPhysicalMaterial;
+  const originalMap = physMat.map;
+  const width = type === "rubber" ? 1024 : 2048;
+  const height = type === "rubber" ? 1024 : 2048;
+  const texture = createLaserLogoMask(
+    image,
+    width,
+    height,
+    type === "rubber" ? RUBBER_CONFIG.logo.scale : TOP_CAP_CONFIG.logo.scale,
+    type === "rubber" ? 0.5 : 0.25,
+    type === "rubber" ? 0.5 : 0.75,
+    type === "rubber" ? RUBBER_CONFIG.logo.flipY : false,
+  );
+
+  if (type === "rubber") {
+    texture.channel = originalMap?.channel ?? 1;
+    texture.flipY = originalMap?.flipY ?? false;
+    texture.wrapS = originalMap?.wrapS ?? THREE.RepeatWrapping;
+    texture.wrapT = originalMap?.wrapT ?? THREE.RepeatWrapping;
+  }
+
+  const oldLogoTexture = materialLogoTextures.get(physMat);
+  if (oldLogoTexture && oldLogoTexture !== texture) oldLogoTexture.dispose();
+  materialLogoTextures.set(physMat, texture);
+  physMat.userData.__logoId = logoId;
+  physMat.userData.__logoType = type;
+  physMat.emissiveMap = texture;
+  // Use the original, proven emissive-map render path. A graphite tint keeps
+  // the mark dark grey rather than the previous bright white.
+  physMat.emissive.set("#62666b");
+  physMat.emissiveIntensity = 0.65;
+  physMat.bumpMap = texture;
+  physMat.bumpScale = -0.018;
+  if (type === "rubber") applyBumperEmissiveShaderMask(physMat);
+  physMat.needsUpdate = true;
+}
+
+export function applyLogoToExistingMaterial(mat: THREE.Material, type: "rubber" | "topCapFace", logoId: CueLogoId = "uni"): void {
   const physMat = mat as THREE.MeshStandardMaterial;
 
   if (type === "topCapFace") {
     if (!topCapLogoImage || !TOP_CAP_CONFIG.logo.enabled) return;
-
-    // Always double-sided so the disc face is visible from both directions
     physMat.side = THREE.DoubleSide;
 
-    // Use emissive map instead of diffuse: the logo is always visible regardless of
-    // envMap intensity or metalness/roughness.  Black background = no emission,
-    // white logo shape = emissive at logo color (additive, doesn't affect base material).
     const width = 2048;
     const height = 2048;
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d")!;
-
     ctx.fillStyle = "#000000";
     ctx.fillRect(0, 0, width, height);
 
-    // Reuse the same UV center as drawTopCapFaceLogoOnCanvas
-    const logoScale = TOP_CAP_CONFIG.logo.scale;
-    const logoW = width * logoScale;
+    const logoW = width * TOP_CAP_CONFIG.logo.scale;
     const logoH = (topCapLogoImage.height / topCapLogoImage.width) * logoW;
-    const uvCenterX = 0.25;
-    const uvCenterY = 0.75;
-    const logoX = width * uvCenterX - logoW / 2;
-    const logoY = height * uvCenterY - logoH / 2;
-
-    // Render logo in white — physMat.emissive color tints the emission
+    const logoX = width * 0.25 - logoW / 2;
+    const logoY = height * 0.75 - logoH / 2;
     const whiteCanvas = document.createElement("canvas");
     whiteCanvas.width = topCapLogoImage.width;
     whiteCanvas.height = topCapLogoImage.height;
@@ -860,25 +1039,23 @@ export function applyLogoToExistingMaterial(mat: THREE.Material, type: "rubber" 
     whiteCtx.globalCompositeOperation = "source-in";
     whiteCtx.fillStyle = "#ffffff";
     whiteCtx.fillRect(0, 0, whiteCanvas.width, whiteCanvas.height);
-
-    ctx.save();
-    ctx.globalAlpha = TOP_CAP_CONFIG.logo.opacity || 1.0;
+    ctx.globalAlpha = TOP_CAP_CONFIG.logo.opacity || 1;
     ctx.drawImage(whiteCanvas, logoX, logoY, logoW, logoH);
-    ctx.restore();
 
     const emissiveTexture = new THREE.CanvasTexture(canvas);
     emissiveTexture.colorSpace = THREE.SRGBColorSpace;
-    emissiveTexture.flipY = false; // GLB UV convention — logo at canvas (0.25, 0.75)
+    emissiveTexture.flipY = false;
     emissiveTexture.wrapS = THREE.RepeatWrapping;
     emissiveTexture.wrapT = THREE.RepeatWrapping;
     emissiveTexture.needsUpdate = true;
-
-    const logoColor = TOP_CAP_CONFIG.logo.color || "#c0c0c0";
+    physMat.userData.__logoId = logoId;
+    physMat.userData.__logoType = type;
     physMat.emissiveMap = emissiveTexture;
-    physMat.emissive = new THREE.Color(logoColor);
-    physMat.emissiveIntensity = 0.8;
+    physMat.emissive = new THREE.Color("#80858a");
+    physMat.emissiveIntensity = 0.7;
+    physMat.bumpMap = emissiveTexture;
+    physMat.bumpScale = -0.018;
     physMat.needsUpdate = true;
-    console.log(`[applyLogo] Applied topCapFace emissive logo to "${mat.name}" (${width}x${height})`);
     return;
   }
 
@@ -1045,25 +1222,23 @@ export function applyLogoToExistingMaterial(mat: THREE.Material, type: "rubber" 
  */
 export function applyBumperEmissiveShaderMask(physMat: THREE.MeshPhysicalMaterial): void {
   physMat.onBeforeCompile = (shader: { vertexShader: string; fragmentShader: string }) => {
-    // Pass object-space normal Y as a varying — objectNormal is the raw geometry
-    // normal before any model transform, so it is unaffected by cue rotation.
     shader.vertexShader = shader.vertexShader.replace(
       "void main() {",
-      "varying float vBumperObjNormalY;\nvoid main() {"
+      "varying float vBumperObjNormalY;\nvoid main() {",
     );
     shader.vertexShader = shader.vertexShader.replace(
       "#include <begin_vertex>",
-      "#include <begin_vertex>\nvBumperObjNormalY = objectNormal.y;"
+      "#include <begin_vertex>\nvBumperObjNormalY = objectNormal.y;",
     );
     shader.fragmentShader = shader.fragmentShader.replace(
       "void main() {",
-      "varying float vBumperObjNormalY;\nvoid main() {"
+      "varying float vBumperObjNormalY;\nvoid main() {",
     );
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <emissivemap_fragment>",
       `#include <emissivemap_fragment>
       float bumperMask = 1.0 - smoothstep(-0.95, -0.85, vBumperObjNormalY);
-      totalEmissiveRadiance *= bumperMask;`
+      totalEmissiveRadiance *= bumperMask;`,
     );
   };
   physMat.customProgramCacheKey = () => "bumperEmissiveMaskV3";
@@ -1075,53 +1250,29 @@ export function applyBumperEmissiveShaderMask(physMat: THREE.MeshPhysicalMateria
  * material.color multiplies the diffuse map, but emissive is additive.
  * Uses the original map's dimensions and UV transforms to ensure correct alignment.
  */
-export function applyRubberLogoEmissive(mat: THREE.Material): void {
-  if (!bumperLogoImage || !RUBBER_CONFIG.logo.enabled) {
-    console.warn(`[applyRubberLogoEmissive] Logo not loaded or disabled, skipping`);
-    return;
-  }
-
+export function applyRubberLogoEmissive(mat: THREE.Material, logoId: CueLogoId = "uni"): void {
+  if (!bumperLogoImage || !RUBBER_CONFIG.logo.enabled) return;
   const physMat = mat as THREE.MeshPhysicalMaterial;
   const originalMap = physMat.map;
-
-  // Match original texture dimensions, or use default
   let width = 1024;
   let height = 1024;
   if (originalMap) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const isCompressed = (originalMap as any).isCompressedTexture;
-    if (isCompressed) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mipmaps = (originalMap as any).mipmaps;
-      width = mipmaps?.[0]?.width || 1024;
-      height = mipmaps?.[0]?.height || 1024;
-    } else if (originalMap.image) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      width = (originalMap.image as any).width || 1024;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      height = (originalMap.image as any).height || 1024;
-    }
+    const texture = originalMap as any;
+    width = texture.isCompressedTexture ? (texture.mipmaps?.[0]?.width || 1024) : (texture.image?.width || 1024);
+    height = texture.isCompressedTexture ? (texture.mipmaps?.[0]?.height || 1024) : (texture.image?.height || 1024);
   }
 
-  console.log(`[applyRubberLogoEmissive] Creating emissive map ${width}x${height} for "${mat.name}"`);
-
-  // Create emissive map canvas: black background (no emission) + white logo (full emission)
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d")!;
-
   ctx.fillStyle = "#000000";
   ctx.fillRect(0, 0, width, height);
-
-  // Draw logo in white — emissive color will tint it
-  const logoScale = RUBBER_CONFIG.logo.scale;
-  const logoW = width * logoScale;
+  const logoW = width * RUBBER_CONFIG.logo.scale;
   const logoH = (bumperLogoImage.height / bumperLogoImage.width) * logoW;
-  // Center logo on canvas — matches bottom face center in TEXCOORD_1
   const logoX = (width - logoW) / 2;
   const logoY = (height - logoH) / 2;
-
   const whiteCanvas = document.createElement("canvas");
   whiteCanvas.width = bumperLogoImage.width;
   whiteCanvas.height = bumperLogoImage.height;
@@ -1130,23 +1281,15 @@ export function applyRubberLogoEmissive(mat: THREE.Material): void {
   whiteCtx.globalCompositeOperation = "source-in";
   whiteCtx.fillStyle = "#ffffff";
   whiteCtx.fillRect(0, 0, whiteCanvas.width, whiteCanvas.height);
-
   ctx.save();
-  ctx.globalAlpha = RUBBER_CONFIG.logo.opacity || 1.0;
-  if (RUBBER_CONFIG.logo.flipX || RUBBER_CONFIG.logo.flipY) {
-    ctx.translate(logoX + logoW / 2, logoY + logoH / 2);
-    ctx.scale(RUBBER_CONFIG.logo.flipX ? -1 : 1, RUBBER_CONFIG.logo.flipY ? -1 : 1);
-    ctx.drawImage(whiteCanvas, -logoW / 2, -logoH / 2, logoW, logoH);
-  } else {
-    ctx.drawImage(whiteCanvas, logoX, logoY, logoW, logoH);
-  }
+  ctx.globalAlpha = RUBBER_CONFIG.logo.opacity || 1;
+  ctx.translate(logoX + logoW / 2, logoY + logoH / 2);
+  ctx.scale(RUBBER_CONFIG.logo.flipX ? -1 : 1, RUBBER_CONFIG.logo.flipY ? -1 : 1);
+  ctx.drawImage(whiteCanvas, -logoW / 2, -logoH / 2, logoW, logoH);
   ctx.restore();
 
   const emissiveTexture = new THREE.CanvasTexture(canvas);
   emissiveTexture.colorSpace = THREE.SRGBColorSpace;
-  emissiveTexture.needsUpdate = true;
-
-  // Use TEXCOORD_1 (channel 1) matching the diffuse map — logo centers naturally
   if (originalMap) {
     emissiveTexture.flipY = originalMap.flipY;
     emissiveTexture.wrapS = originalMap.wrapS;
@@ -1158,16 +1301,14 @@ export function applyRubberLogoEmissive(mat: THREE.Material): void {
     emissiveTexture.wrapT = THREE.RepeatWrapping;
     emissiveTexture.channel = 1;
   }
-
-  // Apply emissive map — use bright white emissive with intensity to control logo brightness
+  emissiveTexture.needsUpdate = true;
+  physMat.userData.__logoId = logoId;
+  physMat.userData.__logoType = "rubber";
   physMat.emissiveMap = emissiveTexture;
-  physMat.emissive = new THREE.Color("#ffffff");
-  physMat.emissiveIntensity = 0.15;
+  physMat.emissive = new THREE.Color("#80858a");
+  physMat.emissiveIntensity = 0.7;
   physMat.needsUpdate = true;
-
   applyBumperEmissiveShaderMask(physMat);
-
-  console.log(`[applyRubberLogoEmissive] Applied emissive logo to "${mat.name}" with normal-based mask (${width}x${height})`);
 }
 
 // =====================================================
@@ -1177,6 +1318,6 @@ export function applyRubberLogoEmissive(mat: THREE.Material): void {
 /**
  * Load all logo images (bumper + top cap)
  */
-export async function loadAllLogos(): Promise<void> {
-  await Promise.all([loadBumperLogo(), loadTopCapLogo()]);
+export async function loadAllLogos(logoId: CueLogoId = "uni"): Promise<void> {
+  await Promise.all([loadBumperLogo(logoId), loadTopCapLogo(logoId)]);
 }

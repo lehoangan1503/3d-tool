@@ -1,4 +1,4 @@
-import type { ShaftConfig, ShopifyFormData, ShopifyVersionName, SurfaceSlotsConfig } from "@/types/product";
+import type { PreviewPose, ShaftConfig, ShopifyFormData, ShopifyVersionName, SurfaceSlotsConfig } from "@/types/product";
 
 // The shared request body for both deploy (create-product) and save-draft.
 // Save-draft tolerates partial/incomplete values; deploy validates them.
@@ -34,6 +34,9 @@ export interface ShopifyDeployRequest {
   surfaceImageUrl?: string | null;
   /** Per-product laser shaft preview images + text frame positions. */
   shaftConfig?: ShaftConfig | null;
+  /** Camera pose of the rendered main mockup, for the storefront's silent
+   *  2D → 3D swap. Supplied by the client that rendered the images. */
+  previewPose?: PreviewPose | null;
 }
 
 // Build the full form snapshot persisted in shopify_deployments.form_data so a
@@ -61,6 +64,7 @@ export function buildFormData(body: ShopifyDeployRequest): ShopifyFormData {
     manualTags = [],
     skillIds = [],
     shaftConfig = null,
+    previewPose = null,
   } = body;
 
   const collectionList = (collections ?? "")
@@ -106,5 +110,6 @@ export function buildFormData(body: ShopifyDeployRequest): ShopifyFormData {
     manualTags,
     skillIds,
     shaftConfig,
+    previewPose,
   };
 }

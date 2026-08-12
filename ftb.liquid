@@ -1,0 +1,1114 @@
+{% if product.collections contains collections['uni-cues'] %}
+{% assign cue_tip = all_products['nishiki-premium-pool-cue-tip-brown'] %}
+{% assign weight_bolt = all_products['uni-weight-bolt-kit'] %}
+{% assign cue_case_black = all_products['evo-hard-cue-case-2x3-black-85394'] %}
+{% assign cue_case_grey = all_products['evo-hard-cue-case-2x3-grey-67297'] %}
+{% assign cue_case_blue = all_products['evo-hard-cue-case-2x3-blue-36385'] %}
+{% assign cue_case_coffee = all_products['evo-hard-cue-case-2x3-coffee-20552'] %}
+{% comment %}
+  Gia gay goc:
+  - main_price   = gia ban hien tai (da giam san trong Shopify)
+  - main_compare = gia goc (compare_at) neu co
+  Coupon card se "reveal" phan chenh lech nay khi user bam.
+{% endcomment %}
+{% assign main_price = product.selected_or_first_available_variant.price %}
+{% assign main_compare = product.selected_or_first_available_variant.compare_at_price %}
+<div class="fbt-wrapper">
+  <h3 class="fbt-heading">
+    Your Combox
+  </h3>
+  <p class="fbt-note">
+    Buy 1 accessory save 10% &bull; Buy 2 save 15% &bull; Buy 3 save 20%
+  </p>
+  <div class="fbt-items">
+    {% comment %} ===== MAIN PRODUCT (locked, always in bundle) ===== {% endcomment %}
+    <label class="fbt-item fbt-item-main is-active">
+      <input
+        type="checkbox"
+        class="fbt-checkbox main-product"
+        checked
+        disabled
+        data-price="{{ main_price }}"
+        {% if main_compare %}data-compare="{{ main_compare }}"{% endif %}>
+      <img
+        src="{{ product.featured_image | image_url: width: 120 }}"
+        alt="{{ product.title }}">
+      <div class="fbt-info">
+        <div class="fbt-title">
+          {{ product.title }}
+        </div>
+        <div class="fbt-price">
+          <span
+            class="fbt-price-sale fbt-main-price"
+            data-original="{{ main_compare | default: main_price }}"
+            data-discounted="{{ main_price }}">
+            {{ main_compare | default: main_price | money }}
+          </span>
+        </div>
+      </div>
+    </label>
+    {% if cue_tip %}
+    <label class="fbt-item">
+      <input
+        type="checkbox"
+        class="fbt-checkbox addon"
+        data-price="{{ cue_tip.selected_or_first_available_variant.price }}"
+        data-variant="{{ cue_tip.selected_or_first_available_variant.id }}">
+      <img
+        src="{{ cue_tip.featured_image | image_url: width: 120 }}"
+        alt="{{ cue_tip.title }}">
+      <div class="fbt-info">
+        <div class="fbt-title">
+          {{ cue_tip.title }}
+        </div>
+        <div class="fbt-price">
+          <span class="fbt-price-sale">
+            {{ cue_tip.selected_or_first_available_variant.price | money }}
+          </span>
+          <span class="fbt-price-compare"></span>
+          <span class="fbt-badge"></span>
+        </div>
+        <div class="fbt-custom-fields">
+          <div class="fbt-option-group">
+            <div class="fbt-option-label">
+              Tip Hardness:
+              <span class="fbt-option-current">
+                {{ cue_tip.selected_or_first_available_variant.options.last }}
+              </span>
+            </div>
+            <div class="fbt-option-buttons">
+              {% for variant in cue_tip.variants %}
+                <button
+                  type="button"
+                  class="fbt-option-btn active-check {% if variant.id == cue_tip.selected_or_first_available_variant.id %}active{% endif %}"
+                  data-option-type="variant"
+                  data-property-name="Tip Hardness"
+                  data-property-value="{{ variant.options.last }}"
+                  data-variant-id="{{ variant.id }}"
+                  data-variant-price="{{ variant.price }}">
+                  {{ variant.options.last }}
+                </button>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </label>
+    {% endif %}
+    {% if weight_bolt %}
+    <label class="fbt-item">
+      <input
+        type="checkbox"
+        class="fbt-checkbox addon"
+        data-price="{{ weight_bolt.selected_or_first_available_variant.price }}"
+        data-variant="{{ weight_bolt.selected_or_first_available_variant.id }}">
+      <img
+        src="{{ weight_bolt.featured_image | image_url: width: 120 }}"
+        alt="{{ weight_bolt.title }}">
+      <div class="fbt-info">
+        <div class="fbt-title">
+          {{ weight_bolt.title }}
+        </div>
+        <div class="fbt-price">
+          <span class="fbt-price-sale">
+            {{ weight_bolt.selected_or_first_available_variant.price | money }}
+          </span>
+          <span class="fbt-price-compare"></span>
+          <span class="fbt-badge"></span>
+        </div>
+      </div>
+    </label>
+    {% endif %}
+    {% if cue_case_black %}
+    <label class="fbt-item">
+      <input
+        type="checkbox"
+        class="fbt-checkbox addon"
+        data-price="{{ cue_case_black.selected_or_first_available_variant.price }}"
+        data-variant="{{ cue_case_black.selected_or_first_available_variant.id }}">
+      <img
+        class="fbt-case-image"
+        src="{{ cue_case_black.featured_image | image_url: width: 120 }}"
+        alt="{{ cue_case_black.title }}">
+      <div class="fbt-info">
+        <div class="fbt-title fbt-case-title">
+          {{ cue_case_black.title }}
+        </div>
+        <div class="fbt-price">
+          <span class="fbt-price-sale">
+            {{ cue_case_black.selected_or_first_available_variant.price | money }}
+          </span>
+          <span class="fbt-price-compare"></span>
+          <span class="fbt-badge"></span>
+        </div>
+        <div class="fbt-custom-fields">
+          <div class="fbt-option-group">
+            <div class="fbt-option-label">
+              Color:
+              <span class="fbt-option-current">
+                BLACK
+              </span>
+            </div>
+            <div class="fbt-option-buttons">
+              {% if cue_case_black %}
+                <button
+                  type="button"
+                  class="fbt-option-btn active-check active"
+                  data-option-type="product"
+                  data-property-name="Color"
+                  data-property-value="BLACK"
+                  data-variant-id="{{ cue_case_black.selected_or_first_available_variant.id }}"
+                  data-variant-price="{{ cue_case_black.selected_or_first_available_variant.price }}"
+                  data-product-title="{{ cue_case_black.title | escape }}"
+                  data-product-image="{{ cue_case_black.featured_image | image_url: width: 120 }}">
+                  Black
+                </button>
+              {% endif %}
+              {% if cue_case_grey %}
+                <button
+                  type="button"
+                  class="fbt-option-btn active-check"
+                  data-option-type="product"
+                  data-property-name="Color"
+                  data-property-value="GREY"
+                  data-variant-id="{{ cue_case_grey.selected_or_first_available_variant.id }}"
+                  data-variant-price="{{ cue_case_grey.selected_or_first_available_variant.price }}"
+                  data-product-title="{{ cue_case_grey.title | escape }}"
+                  data-product-image="{{ cue_case_grey.featured_image | image_url: width: 120 }}">
+                  Grey
+                </button>
+              {% endif %}
+              {% if cue_case_blue %}
+                <button
+                  type="button"
+                  class="fbt-option-btn active-check"
+                  data-option-type="product"
+                  data-property-name="Color"
+                  data-property-value="BLUE"
+                  data-variant-id="{{ cue_case_blue.selected_or_first_available_variant.id }}"
+                  data-variant-price="{{ cue_case_blue.selected_or_first_available_variant.price }}"
+                  data-product-title="{{ cue_case_blue.title | escape }}"
+                  data-product-image="{{ cue_case_blue.featured_image | image_url: width: 120 }}">
+                  Blue
+                </button>
+              {% endif %}
+              {% if cue_case_coffee %}
+                <button
+                  type="button"
+                  class="fbt-option-btn active-check"
+                  data-option-type="product"
+                  data-property-name="Color"
+                  data-property-value="COFFEE"
+                  data-variant-id="{{ cue_case_coffee.selected_or_first_available_variant.id }}"
+                  data-variant-price="{{ cue_case_coffee.selected_or_first_available_variant.price }}"
+                  data-product-title="{{ cue_case_coffee.title | escape }}"
+                  data-product-image="{{ cue_case_coffee.featured_image | image_url: width: 120 }}">
+                  Coffee
+                </button>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </label>
+    {% endif %}
+  </div>
+  {% comment %} ===== COUPON CARD (tap to reveal main product discount) ===== {% endcomment %}
+  {% if main_compare and main_compare > main_price %}
+    {% assign main_saving = main_compare | minus: main_price %}
+    <div id="fbt-coupon" class="fbt-coupon" role="button" tabindex="0"
+         data-saving="{{ main_saving }}">
+      <div class="fbt-coupon-state fbt-coupon-available">
+        <div class="fbt-coupon-icon">%</div>
+        <div class="fbt-coupon-body">
+          <div class="fbt-coupon-label">Coupon Available</div>
+          <div class="fbt-coupon-amount">
+            &minus;{{ main_saving | money }} on this item
+          </div>
+          <div class="fbt-coupon-sub">Tap to add it to your order</div>
+        </div>
+      </div>
+      <div class="fbt-coupon-state fbt-coupon-added">
+        <div class="fbt-coupon-icon fbt-coupon-icon-check">&#10003;</div>
+        <div class="fbt-coupon-body">
+          <div class="fbt-coupon-label">Coupon Added</div>
+          <div class="fbt-coupon-amount">
+            &minus;{{ main_saving | money }} applied
+          </div>
+          <div class="fbt-coupon-sub">Comes off at checkout</div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+  <div class="fbt-total-box">
+    <div class="fbt-total-label">
+      Total:
+    </div>
+    <div class="fbt-total-prices">
+      <span id="fbt-total-price" class="fbt-total-sale">
+        $0.00
+      </span>
+      <span id="fbt-total-compare" class="fbt-total-compare"></span>
+      <span id="fbt-total-badge" class="fbt-total-badge"></span>
+    </div>
+  </div>
+
+  {% comment %} ===== NUT ADD TO CART RIENG (logic combo ban cu, style vang giong theme) ===== {% endcomment %}
+  <button type="button" id="fbt-add-all" class="fbt-btn">
+    Add to cart
+  </button>
+</div>
+<style>
+:root{
+  /* vang diu hon, toi hon 1 ti so voi rgb(255 217 22) */
+  --fbt-yellow:#e0b820;
+  --fbt-yellow-soft:#fffbe9;
+  --fbt-gray-border:#d9dce1;
+}
+
+/* ===== AN 2 NUT CUA THEME ===== */
+#an-add-to-cart,
+#buy-now-card{
+  display:none !important;
+}
+
+.fbt-wrapper{
+  padding:0;
+  border:none;
+  border-radius:0;
+}
+.fbt-heading{
+  font-size:20px;
+  font-weight:700;
+  margin-bottom:4px;
+}
+.fbt-note{
+  font-size:13px;
+  color:#666;
+  margin-bottom:18px;
+}
+.fbt-items{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+.fbt-item{
+  display:flex;
+  align-items:flex-start;
+  gap:12px;
+  cursor:pointer;
+  padding:14px;
+  border:1px solid var(--fbt-gray-border);
+  border-radius:6px;
+  background:#fff;
+  transition:border-color .15s ease;
+}
+.fbt-item.is-active{
+  border-color:var(--fbt-yellow);
+}
+.fbt-item-main{
+  cursor:default;
+}
+.fbt-checkbox{
+  margin-top:24px;
+  width:18px;
+  height:18px;
+  accent-color:#05070d;
+  flex:none;
+}
+.fbt-item img{
+  width:60px;
+  height:60px;
+  object-fit:cover;
+  border-radius:6px;
+  flex:none;
+}
+.fbt-info{
+  flex:1;
+  min-width:0;
+}
+.fbt-title{
+  font-size:14px;
+  font-weight:700;
+  line-height:1.35;
+}
+.fbt-tag{
+  display:inline-block;
+  margin-left:6px;
+  vertical-align:middle;
+  background:#05070d;
+  color:#fff;
+  font-size:10px;
+  font-weight:800;
+  letter-spacing:0.03em;
+  padding:2px 6px;
+  border-radius:4px;
+}
+.fbt-price{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-top:5px;
+}
+.fbt-price-sale{
+  color:#d32f2f;
+  font-size:15px;
+  font-weight:800;
+}
+.fbt-item-main .fbt-price-sale{
+  color:#05070d;
+}
+.fbt-item-main.fbt-main-revealed .fbt-price-sale{
+  color:#d32f2f;
+}
+.fbt-price-compare{
+  color:#999;
+  text-decoration:line-through;
+  font-size:13px;
+}
+.fbt-badge{
+  background:#c83838;
+  color:white;
+  font-size:11px;
+  font-weight:800;
+  padding:3px 7px;
+  border-radius:5px;
+  display:none;
+}
+.fbt-custom-fields{
+  margin-top:10px;
+  display:block;
+}
+.fbt-item.fbt-unchecked .fbt-custom-fields{
+  display:none;
+}
+.fbt-option-group{
+  margin-top:4px;
+}
+.fbt-option-label{
+  font-size:13px;
+  color:#777;
+  font-weight:600;
+  margin-bottom:8px;
+}
+.fbt-option-current{
+  color:#333;
+  font-weight:800;
+}
+.fbt-option-buttons{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+.fbt-option-btn{
+  min-width:42px;
+  height:34px;
+  padding:0 13px;
+  border:1px solid #bfc2c7;
+  border-radius:6px;
+  background:#fff;
+  color:#333;
+  font-size:14px;
+  font-weight:800;
+  cursor:pointer;
+  line-height:1;
+}
+.fbt-option-btn.active{
+  background:#05070d;
+  border-color:#05070d;
+  color:#fff;
+}
+.fbt-option-btn:hover{
+  border-color:#05070d;
+}
+.fbt-coupon{
+  margin-top:16px;
+  padding:16px 18px;
+  border:1px dashed var(--fbt-yellow);
+  border-radius:6px;
+  background:var(--fbt-yellow-soft);
+  cursor:pointer;
+  transition:background .15s ease, border-color .15s ease;
+}
+.fbt-coupon:focus{
+  outline:none;
+}
+.fbt-coupon-state{
+  display:flex;
+  align-items:center;
+  gap:14px;
+}
+.fbt-coupon-added{
+  display:none;
+}
+.fbt-coupon.is-added .fbt-coupon-available{
+  display:none;
+}
+.fbt-coupon.is-added .fbt-coupon-added{
+  display:flex;
+}
+.fbt-coupon.is-added{
+  border-style:solid;
+  border-color:#8aa06a;
+  background:#f2f6ec;
+  cursor:default;
+}
+.fbt-coupon-icon{
+  width:42px;
+  height:42px;
+  flex:none;
+  border-radius:50%;
+  border:2px solid #b89a3a;
+  color:#b89a3a;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:18px;
+  font-weight:800;
+}
+.fbt-coupon-icon-check{
+  border-color:#4f7a3a;
+  color:#4f7a3a;
+}
+.fbt-coupon-label{
+  font-size:12px;
+  font-weight:800;
+  letter-spacing:0.06em;
+  text-transform:uppercase;
+  color:#b89a3a;
+}
+.fbt-coupon.is-added .fbt-coupon-label{
+  color:#4f7a3a;
+}
+.fbt-coupon-amount{
+  font-size:18px;
+  font-weight:800;
+  color:#1f2430;
+  margin-top:2px;
+}
+.fbt-coupon-sub{
+  font-size:13px;
+  color:#8b8f97;
+  margin-top:2px;
+}
+.fbt-total-box{
+  margin-top:22px;
+  padding:16px;
+  border-radius:6px;
+  background:#fafafa;
+  border:1px solid #eeeeee;
+}
+.fbt-total-label{
+  font-size:13px;
+  color:#666;
+  font-weight:700;
+  margin-bottom:7px;
+  text-transform:uppercase;
+  letter-spacing:0.03em;
+}
+.fbt-total-prices{
+  display:flex;
+  align-items:center;
+  gap:9px;
+  flex-wrap:wrap;
+}
+.fbt-total-sale{
+  color:#d32f2f;
+  font-size:24px;
+  line-height:1;
+  font-weight:900;
+}
+.fbt-total-compare{
+  color:#999;
+  font-size:15px;
+  font-weight:700;
+  text-decoration:line-through;
+}
+.fbt-total-badge{
+  display:none;
+  background:#d32f2f;
+  color:#fff;
+  font-size:12px;
+  font-weight:900;
+  padding:4px 8px;
+  border-radius:999px;
+}
+
+/* ===== NUT ADD TO CART: style vang giong nut theme #an-add-to-cart ===== */
+.fbt-btn{
+  width:100%;
+  margin-top:22px;
+  border:none;
+  border-radius:5px;
+  background:rgb(255 217 22);
+  color:#000;
+  font-weight:600;
+  font-size:13px;
+  line-height:50px;
+  padding:0 30px;
+  text-align:center;
+  text-transform:uppercase;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  position:relative;
+}
+.fbt-btn:hover{
+  background:rgb(255 205 0);
+}
+.fbt-btn[disabled]{
+  opacity:0.75;
+  cursor:not-allowed;
+}
+
+/* ===== LOADING SPINNER (giong nut theme) ===== */
+.fbt-btn.loading{
+  pointer-events:none;
+  color:transparent;
+}
+.fbt-btn.loading::after{
+  content:'';
+  position:absolute;
+  top:50%;
+  left:50%;
+  width:18px;
+  height:18px;
+  border:2px solid #000;
+  border-top:2px solid transparent;
+  border-radius:50%;
+  transform:translate(-50%,-50%);
+  animation:fbt-spin 0.6s linear infinite;
+}
+@keyframes fbt-spin{
+  to{ transform:translate(-50%,-50%) rotate(360deg); }
+}
+</style>
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  /* Guard: chi khoi tao 1 lan du file co bi include nhieu lan */
+  if(window.__FBT_INITED__){ return; }
+  window.__FBT_INITED__ = true;
+
+  const totalEl = document.getElementById('fbt-total-price');
+  const totalCompareEl = document.getElementById('fbt-total-compare');
+  const totalBadgeEl = document.getElementById('fbt-total-badge');
+  const couponEl = document.getElementById('fbt-coupon');
+  const fbtButton = document.getElementById('fbt-add-all');
+  let couponRevealed = false;
+  let fbtAdding = false; /* cо chong double-add o muc logic */
+
+  /* ===== SO TIEN COUPON GIAM CHO MAIN PRODUCT =====
+     Lay 1 lan tu gia Liquid ban dau: original - discounted.
+     Dung so tien tuyet doi (khong dung %) vi coupon = main_compare - main_price.
+     Moi lan sync gia theme, ta se tru DUNG so tien nay ra, thay vi ghi de
+     discounted = original (loi cu lam coupon mat tac dung). */
+  let mainCouponSaving = (function(){
+    const el = document.querySelector('.fbt-main-price');
+    if(!el){ return 0; }
+    const o = parseInt(el.dataset.original, 10);
+    const d = parseInt(el.dataset.discounted, 10);
+    return (o && d && o > d) ? (o - d) : 0;
+  })();
+
+  function getProductForm(){
+    return document.querySelector('form[action*="/cart/add"]');
+  }
+  function formatMoney(cents){
+    return '$' + (cents / 100).toFixed(2);
+  }
+  function getCheckedAddons(){
+    return document.querySelectorAll('.addon:checked');
+  }
+  function getDiscountPercent(count){
+    if(count >= 3){ return 20; }
+    if(count === 2){ return 15; }
+    if(count === 1){ return 10; }
+    return 0;
+  }
+  function getDiscountCode(count){
+    if(count >= 3){ return 'FBT20'; }
+    if(count === 2){ return 'FBT15'; }
+    if(count === 1){ return 'FBT10'; }
+    return '';
+  }
+  function syncActiveBorders(){
+    document.querySelectorAll('.fbt-item .fbt-checkbox').forEach(function(cb){
+      const row = cb.closest('.fbt-item');
+      if(cb.checked){ row.classList.add('is-active'); }
+      else{ row.classList.remove('is-active'); }
+    });
+  }
+  function toggleCustomFields(){
+    document.querySelectorAll('.addon').forEach(function(item){
+      const row = item.closest('.fbt-item');
+      if(item.checked){ row.classList.remove('fbt-unchecked'); }
+      else{ row.classList.add('fbt-unchecked'); }
+    });
+  }
+  function updateOptionFromButton(button){
+    const row = button.closest('.fbt-item');
+    const checkbox = row.querySelector('.addon');
+    const currentLabel = row.querySelector('.fbt-option-current');
+    if(!checkbox){ return; }
+    checkbox.dataset.variant = button.dataset.variantId;
+    checkbox.dataset.price = button.dataset.variantPrice;
+    row.querySelectorAll('.active-check').forEach(function(btn){
+      btn.classList.remove('active');
+    });
+    button.classList.add('active');
+    if(currentLabel){
+      currentLabel.textContent = button.dataset.propertyValue;
+    }
+    if(button.dataset.optionType === 'product'){
+      const titleEl = row.querySelector('.fbt-case-title');
+      const imageEl = row.querySelector('.fbt-case-image');
+      if(titleEl && button.dataset.productTitle){
+        titleEl.textContent = button.dataset.productTitle;
+      }
+      if(imageEl && button.dataset.productImage){
+        imageEl.src = button.dataset.productImage;
+        imageEl.alt = button.dataset.productTitle || '';
+      }
+    }
+  }
+  function updateMainPriceDisplay(){
+    const mainRow = document.querySelector('.fbt-item-main');
+    const mainPriceEl = document.querySelector('.fbt-main-price');
+    if(!mainPriceEl){ return 0; }
+    const original = parseInt(mainPriceEl.dataset.original, 10);
+    const discounted = parseInt(mainPriceEl.dataset.discounted, 10);
+    if(couponRevealed){
+      mainPriceEl.textContent = formatMoney(discounted);
+      if(mainRow){ mainRow.classList.add('fbt-main-revealed'); }
+      return discounted;
+    }else{
+      mainPriceEl.textContent = formatMoney(original);
+      if(mainRow){ mainRow.classList.remove('fbt-main-revealed'); }
+      return original;
+    }
+  }
+  function updateTotal(){
+    const checkedAddons = getCheckedAddons();
+    const count = checkedAddons.length;
+    const discount = getDiscountPercent(count);
+    const mainPriceUsed = updateMainPriceDisplay();
+    let originalTotal = 0;
+    let discountedTotal = 0;
+    const mainPriceEl = document.querySelector('.fbt-main-price');
+    if(mainPriceEl){
+      originalTotal += parseInt(mainPriceEl.dataset.original, 10);
+      discountedTotal += mainPriceUsed;
+    }
+    document.querySelectorAll('.addon').forEach(function(item){
+      const row = item.closest('.fbt-item');
+      const originalPrice = parseInt(item.dataset.price, 10);
+      const saleEl = row.querySelector('.fbt-price-sale');
+      const compareEl = row.querySelector('.fbt-price-compare');
+      const badgeEl = row.querySelector('.fbt-badge');
+      if(item.checked){
+        const discountedPrice = Math.round(originalPrice * (100 - discount) / 100);
+        originalTotal += originalPrice;
+        discountedTotal += discountedPrice;
+        saleEl.textContent = formatMoney(discountedPrice);
+        compareEl.textContent = discount > 0 ? formatMoney(originalPrice) : '';
+        badgeEl.textContent = discount + '% OFF';
+        badgeEl.style.display = discount > 0 ? 'inline-block' : 'none';
+      }else{
+        saleEl.textContent = formatMoney(originalPrice);
+        compareEl.textContent = '';
+        badgeEl.textContent = '';
+        badgeEl.style.display = 'none';
+      }
+    });
+    totalEl.textContent = formatMoney(discountedTotal);
+    if(originalTotal > discountedTotal){
+      const saving = originalTotal - discountedTotal;
+      totalCompareEl.textContent = formatMoney(originalTotal);
+      totalBadgeEl.style.display = 'inline-block';
+      totalBadgeEl.textContent = 'SAVE ' + formatMoney(saving);
+    }else{
+      totalCompareEl.textContent = '';
+      totalBadgeEl.textContent = '';
+      totalBadgeEl.style.display = 'none';
+    }
+    toggleCustomFields();
+    syncActiveBorders();
+  }
+  function getMainProductData(){
+    const form = getProductForm();
+    if(!form){
+      return { id: {{ product.selected_or_first_available_variant.id }}, quantity: 1, properties: {} };
+    }
+    const formData = new FormData(form);
+    const variantId = formData.get('id') || {{ product.selected_or_first_available_variant.id }};
+    const quantity = parseInt(formData.get('quantity') || 1, 10);
+    const properties = {};
+    for(const [key, value] of formData.entries()){
+      const match = key.match(/^properties\[(.+)\]$/);
+      if(match && value !== ''){ properties[match[1]] = value; }
+    }
+    return { id: parseInt(variantId, 10), quantity: quantity, properties: properties };
+  }
+  function getAddonProperties(addonInput){
+    const row = addonInput.closest('.fbt-item');
+    const properties = {};
+    const activeOption = row.querySelector('.fbt-option-btn.active');
+    if(activeOption){
+      const name = activeOption.dataset.propertyName;
+      const value = activeOption.dataset.propertyValue;
+      if(name && value !== ''){ properties[name] = value; }
+    }
+    return properties;
+  }
+  function revealCoupon(){
+    if(!couponEl || couponRevealed){ return; }
+    couponRevealed = true;
+    couponEl.classList.add('is-added');
+    updateTotal();
+  }
+  if(couponEl){
+    couponEl.addEventListener('click', revealCoupon);
+    couponEl.addEventListener('keydown', function(e){
+      if(e.key === 'Enter' || e.key === ' '){
+        e.preventDefault();
+        revealCoupon();
+      }
+    });
+  }
+
+  updateTotal();
+
+  document.querySelectorAll('.addon').forEach(function(item){
+    item.addEventListener('change', updateTotal);
+  });
+  document.querySelectorAll('.fbt-option-btn').forEach(function(button){
+    button.addEventListener('click', function(e){
+      e.preventDefault();
+      updateOptionFromButton(button);
+      updateTotal();
+    });
+  });
+
+  /* ===== Dong bo gia main product theo gia tren trang (.xo-price__item--accent) =====
+     Khi user chon variant (Standard/Premium) hoac custom shaft, theme cap nhat
+     phan tu gia. Ta doc gia do, chuyen ve cents, cap nhat card main product
+     cua FBT roi tinh lai total. */
+  function parsePriceToCents(text){
+    if(!text){ return null; }
+    /* Lay chuoi so (bo ky tu tien te, chu). Giu dau . va , */
+    const cleaned = String(text).replace(/[^0-9.,]/g, '').trim();
+    if(!cleaned){ return null; }
+    /* Chuan hoa: neu co ca . va , -> dau cuoi cung la thap phan */
+    let normalized = cleaned;
+    const lastDot = cleaned.lastIndexOf('.');
+    const lastComma = cleaned.lastIndexOf(',');
+    if(lastDot !== -1 && lastComma !== -1){
+      /* dau nao dung sau la thap phan, dau kia la phan cach nghin */
+      if(lastComma > lastDot){
+        normalized = cleaned.replace(/\./g, '').replace(',', '.');
+      }else{
+        normalized = cleaned.replace(/,/g, '');
+      }
+    }else if(lastComma !== -1){
+      /* chi co dau phay: coi la thap phan neu 2 so cuoi, con lai la nghin */
+      const after = cleaned.length - lastComma - 1;
+      normalized = (after === 2) ? cleaned.replace(',', '.') : cleaned.replace(/,/g, '');
+    }
+    const value = parseFloat(normalized);
+    if(isNaN(value)){ return null; }
+    return Math.round(value * 100);
+  }
+
+  function syncMainPriceFromTheme(){
+    /* Doc gia accent tren trang (bo qua gia trong widget FBT) */
+    let priceEl = null;
+    document.querySelectorAll('.xo-price__item--accent').forEach(function(el){
+      if(!priceEl && !el.closest('.fbt-wrapper')){ priceEl = el; }
+    });
+    const mainPriceEl = document.querySelector('.fbt-main-price');
+    if(!priceEl || !mainPriceEl){ return; }
+
+    const cents = parsePriceToCents(priceEl.textContent);
+    if(cents == null || cents <= 0){ return; }
+
+    /* Gia theme la gia "goc" (chua tru coupon).
+       original = gia theme.
+       discounted = gia theme - so tien coupon (khong am).
+       Khong con ghi de discounted = original nua -> coupon van co tac dung. */
+    mainPriceEl.dataset.original = cents;
+    mainPriceEl.dataset.discounted = Math.max(0, cents - mainCouponSaving);
+    updateTotal();
+  }
+
+  /* Doc gia accent tren trang (bo qua widget FBT). Tra ve cents hoac null. */
+  function readThemePriceCents(){
+    let priceEl = null;
+    document.querySelectorAll('.xo-price__item--accent').forEach(function(el){
+      if(!priceEl && !el.closest('.fbt-wrapper')){ priceEl = el; }
+    });
+    if(!priceEl){ return null; }
+    return parsePriceToCents(priceEl.textContent);
+  }
+
+  /* Dong bo lan dau: theme render gia hoi tre (~vai giay) nen thu lai
+     cho den khi doc duoc gia tu span theme. */
+  (function initSync(){
+    let tries = 0;
+    const timer = setInterval(function(){
+      tries++;
+      const cents = readThemePriceCents();
+      if(cents != null && cents > 0){
+        syncMainPriceFromTheme();
+        clearInterval(timer);
+      }else if(tries >= 20){ /* ~6s */
+        clearInterval(timer);
+      }
+    }, 300);
+  })();
+
+  /* Sau do: moi khi user doi variant / shaft -> dong bo NGAY.
+     Goi ngay lap tuc, roi lap lai vai lan ngan de bat gia theme vua doi
+     (phong khi theme cap nhat span gia sau event change mot chut). */
+  function syncNowAndFollow(){
+    syncMainPriceFromTheme();               /* ngay lap tuc */
+    let n = 0;
+    const t = setInterval(function(){
+      n++;
+      syncMainPriceFromTheme();
+      if(n >= 6){ clearInterval(t); }       /* ~300ms */
+    }, 50);
+  }
+  document.addEventListener('change', syncNowAndFollow);
+  document.addEventListener('click', function(e){
+    /* Bo qua click trong widget FBT (nut addon/option cua minh) */
+    if(e.target.closest('.fbt-wrapper')){ return; }
+    /* nut chon variant/shaft dang la <button>, khong phat change */
+    if(e.target.closest('button, [data-variant-id], [class*="option"], [class*="variant"]')){
+      syncNowAndFollow();
+    }
+  });
+
+  /* ===== NUT ADD TO CART RIENG: logic add combo ban cu (chac chan chay) ===== */
+  fbtButton.addEventListener('click', async function(e){
+    e.preventDefault();
+
+    /* Chong double-click / double-add */
+    if(fbtAdding){ return; }
+
+    /* Giu validate custom-text/upload cua theme neu co */
+    if(typeof window.validateProductForm === 'function'){
+      if(window.validateProductForm(e) === false){ return; }
+    }
+
+    fbtAdding = true;
+    fbtButton.disabled = true;
+    fbtButton.classList.add('loading');
+
+    try{
+      const mainProduct = getMainProductData();
+      const checkedAddonCount = document.querySelectorAll('.addon:checked').length;
+      const discountCode = getDiscountCode(checkedAddonCount);
+
+      const items = [
+        {
+          id: mainProduct.id,
+          quantity: mainProduct.quantity,
+          properties: mainProduct.properties
+        }
+      ];
+
+      document.querySelectorAll('.addon:checked').forEach(function(item){
+        const properties = getAddonProperties(item);
+        items.push({
+          id: parseInt(item.dataset.variant, 10),
+          quantity: 1,
+          properties: properties
+        });
+      });
+
+      /* ===== Tu them 2 upsell giong sb-cart.js (V23) =====
+         Shipping Protection + Priority Production.
+         Chi them neu CHUA co trong gio (tranh cong don). */
+      const UPSELL_IDS = ['46931441090697', '46931722240137'];
+      const UPSELL_DESC = {
+        '46931441090697': 'Protect your order from loss, theft, or damage.',
+        '46931722240137': 'Move your order to the front of our production queue.'
+      };
+      try{
+        const cartRes = await fetch('/cart.js', { credentials:'same-origin', cache:'no-store' });
+        const cart = cartRes.ok ? await cartRes.json() : { items: [] };
+        UPSELL_IDS.forEach(function(uid){
+          const already = (cart.items || []).some(function(it){
+            return String(it.variant_id) === uid;
+          });
+          if(!already){
+            items.push({
+              id: parseInt(uid, 10),
+              quantity: 1,
+              properties: UPSELL_DESC[uid] ? { _desc: UPSELL_DESC[uid] } : {}
+            });
+          }
+        });
+      }catch(err){ /* neu fetch loi thi bo qua upsell, van add combo */ }
+
+      /* Add hang KHONG kem section rendering.
+         De theme tu fetch + render + init upsells khi mo drawer. */
+      const response = await fetch('/cart/add.js', {
+        method: 'POST',
+        headers: {
+          'Content-Type':'application/json',
+          'Accept':'application/json'
+        },
+        body: JSON.stringify({ items: items })
+      });
+
+      if(!response.ok){
+        throw new Error('Cart add failed');
+      }
+
+      /* Ap discount code ngam CHAY SONG SONG (khong chan viec mo drawer) */
+      if(discountCode){
+        fetch('/discount/' + discountCode, { credentials:'same-origin' })
+          .catch(function(){ /* that bai thi bo qua */ });
+      }
+
+      /* Mo drawer: fetch lai noi dung moi roi mo (tranh empty) */
+      await openCartDrawer();
+
+      fbtButton.disabled = false;
+      fbtButton.classList.remove('loading');
+      fbtAdding = false;
+    }catch(error){
+      console.error('[FBT]', error);
+      fbtButton.disabled = false;
+      fbtButton.classList.remove('loading');
+      fbtAdding = false;
+      alert('Could not add products to cart. Please try again.');
+    }
+  });
+
+  /* ===== Cap nhat badge so luong (phong ho) ===== */
+  async function updateCartBadge(){
+    try{
+      const res = await fetch('/cart.js', { credentials:'same-origin' });
+      if(!res.ok){ return; }
+      const cart = await res.json();
+      const count = cart.item_count;
+      document.querySelectorAll('xo-cart-size').forEach(function(el){
+        el.textContent = count;
+      });
+    }catch(e){ /* bo qua */ }
+  }
+
+  /* ===== Tim section drawer va id cua no ===== */
+  function findDrawerSection(){
+    /* Uu tien class chinh xac tu screenshot: section-xo-cart-mini */
+    let el = document.querySelector('.section-xo-cart-mini');
+    if(!el){
+      el = document.querySelector('[id^="shopify-section"][id$="__cart"]');
+    }
+    if(!el){
+      /* Fallback: tim section chua modal cart */
+      const modal = document.querySelector('xo-modal[xo-name="cart"]');
+      if(modal){ el = modal.closest('[id^="shopify-section"]'); }
+    }
+    return el;
+  }
+
+  /* ===== Fetch lai noi dung drawer moi va thay vao DOM =====
+     Chi thay phan RUOT ben trong (xo-cart-mini / list item), KHONG thay
+     ca <xo-modal> de tranh pha custom element theme da khoi tao.
+     Co retry: neu server chua commit gio (van ra empty) thi thu lai.
+  */
+  async function refreshDrawerHtml(attempt){
+    attempt = attempt || 0;
+    const section = findDrawerSection();
+    if(!section || !section.id){ return; }
+    const sectionId = section.id.replace(/^shopify-section-/, '');
+    try{
+      const res = await fetch('/?sections=' + encodeURIComponent(sectionId), {
+        credentials:'same-origin',
+        cache:'no-store',
+        headers:{ 'Accept':'application/json' }
+      });
+      if(!res.ok){ return; }
+      const data = await res.json();
+      const html = data && data[sectionId];
+      if(!html){ return; }
+
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      const freshSection = tmp.querySelector('#shopify-section-' + sectionId) || tmp;
+
+      /* Thu tim dung phan tu "ruot" de thay, khong dung ca <xo-modal> */
+      const innerSelectors = [
+        'xo-cart-mini',
+        '.xo-cart-mini',
+        '.xo-side-cart',
+        '.xo-modal-content-style1',
+        'xo-cart'
+      ];
+      let replaced = false;
+      for(const sel of innerSelectors){
+        const target = section.querySelector(sel);
+        const source = freshSection.querySelector(sel);
+        if(target && source){
+          target.innerHTML = source.innerHTML;
+          replaced = true;
+          break;
+        }
+      }
+
+      /* Neu khong tim thay ruot cu the -> thay ca section (phuong an cuoi) */
+      if(!replaced){
+        const freshInner = freshSection.querySelector('#shopify-section-' + sectionId);
+        section.innerHTML = freshInner ? freshInner.innerHTML : html;
+      }
+
+      /* Kiem tra: neu van chua thay item nao va con luot -> thu lai */
+      const looksEmpty = !section.querySelector('xo-product, .xo-cart-item, [xo-product-id]');
+      if(looksEmpty && attempt < 3){
+        await new Promise(function(r){ setTimeout(r, 300); });
+        return refreshDrawerHtml(attempt + 1);
+      }
+    }catch(e){ /* bo qua */ }
+  }
+
+  /* ===== Mo cart drawer =====
+     Fetch lai noi dung drawer moi (tranh empty vi theme cache DOM cu
+     tu luc gio con rong), roi moi mo modal.
+  */
+  async function openCartDrawer(){
+    /* 1) Refresh noi dung drawer TRUOC khi mo */
+    await refreshDrawerHtml();
+
+    /* 2) Bao sb-cart.js (V23) sync toggle upsell */
+    try{
+      document.dispatchEvent(new CustomEvent('cart:refresh', { bubbles:true }));
+      document.dispatchEvent(new CustomEvent('cart:build', { bubbles:true }));
+    }catch(e){}
+
+    /* 3) Mo modal */
+    const modal = document.querySelector('xo-modal[xo-name="cart"]');
+    if(modal){
+      modal.setAttribute('xo-duration', '300');
+      try{ modal.style.setProperty('--xo-duration', '300'); }catch(e){}
+    }
+
+    const trigger = document.querySelector('xo-modal-trigger[xo-name="cart"]');
+    if(trigger){
+      trigger.click();
+    }else if(modal){
+      modal.setAttribute('xo-ready', '');
+      modal.setAttribute('xo-active', '');
+      modal.classList.add('xo-animate-active');
+    }
+
+    updateCartBadge();
+    try{ document.dispatchEvent(new CustomEvent('cart:open', { bubbles:true })); }catch(e){}
+  }
+});
+</script>
+{% endif %}

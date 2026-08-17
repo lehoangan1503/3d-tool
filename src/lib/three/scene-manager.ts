@@ -1667,6 +1667,15 @@ export class SceneManager {
   }
 
   /**
+   * Get a detached copy of the viewing camera, so a .glb export can embed the framing the
+   * user is currently looking at. Cloned rather than returned directly — the export adds it
+   * to its own scene graph, which would otherwise steal the live camera from this scene.
+   */
+  getCameraForExport(): THREE.PerspectiveCamera {
+    return this.camera.clone();
+  }
+
+  /**
    * Get current material configs for extractor
    */
   getMaterialConfigs() {

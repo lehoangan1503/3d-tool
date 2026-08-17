@@ -12,6 +12,8 @@ import { DEFAULT_SILVER_GLOBAL, type SilverGlobalConfig } from "@/lib/three/silv
 import { ImageExtractor } from "@/components/editor/image-extractor";
 import { VideoStudio } from "@/components/editor/video-studio";
 import { ShopifyDeployDialog } from "@/components/editor/shopify-deploy-dialog";
+import { buildProductGlb, downloadBlob } from "@/lib/three/export-product-3d";
+import { safeFileName } from "@/lib/three/export-glb";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -42,6 +44,7 @@ import {
   ShoppingBag,
   ExternalLink,
   LayoutTemplate,
+  Box,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { Product, ProductConfig, LeatherColor, LeatherTextureType, ShopifyDeploymentSummary, CueLogoId } from "@/types/product";
@@ -131,7 +134,10 @@ export function EditorClient({
   useEffect(() => {
     if (storeResolving || !activeStoreId) return;
     // The SSR value already reflects main; no round-trip needed.
-    if (activeStoreId === "main") { setReadyStoreId("main"); return; }
+    if (activeStoreId === "main") {
+      setReadyStoreId("main");
+      return;
+    }
     // Already reconciled for this store — nothing to do. (Checked here rather
     // than via a ref so React Strict Mode's double-invoke doesn't permanently
     // skip the fetch on the second run and leave the button stuck loading.)
@@ -144,8 +150,12 @@ export function EditorClient({
         setDeployment((json?.deployment ?? null) as ShopifyDeploymentSummary | null);
         setReadyStoreId(activeStoreId);
       })
-      .catch(() => { if (active) setReadyStoreId(activeStoreId); });
-    return () => { active = false; };
+      .catch(() => {
+        if (active) setReadyStoreId(activeStoreId);
+      });
+    return () => {
+      active = false;
+    };
   }, [activeStoreId, storeResolving, product.id, readyStoreId]);
 
   // The deploy badge/button reflect the active store only once reconciled for it.
@@ -158,17 +168,14 @@ export function EditorClient({
   // ALWAYS end up ready — even if it resolved to a null store id (no provider /
   // no stores configured), in which case the SSR main seed is the best we have.
   // Otherwise the button would spin forever.
-  const deployStateReady =
-    !storeResolving &&
-    (activeStoreId === null ||
-      activeStoreId === "main" ||
-      readyStoreId === activeStoreId);
+  const deployStateReady = !storeResolving && (activeStoreId === null || activeStoreId === "main" || readyStoreId === activeStoreId);
   const shownDeployment = deployStateReady ? deployment : null;
   const [config, setConfig] = useState<ProductConfig>(initialConfig || DEFAULT_PRODUCT_CONFIG);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [isDarkBg, setIsDarkBg] = useState(true);
   const [sceneManager, setSceneManager] = useState<SceneManager | null>(null);
+  const [isExporting3D, setIsExporting3D] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const [copied, setCopied] = useState(false);
   // Off by default — the user opts in via the auto-rotate button in the top bar.
@@ -419,9 +426,7 @@ export function EditorClient({
       // must write into the OWNER's folder, which storage RLS forbids from the
       // browser — those go through the server route instead.
       const uploadAsset = (file: File, fileType: "surface" | "texture") =>
-        isOwner
-          ? uploadToStorage(file, productToSave.id, fileType, productToSave.user_id)
-          : uploadProductAssetViaServer(file, productToSave.id, fileType);
+        isOwner ? uploadToStorage(file, productToSave.id, fileType, productToSave.user_id) : uploadProductAssetViaServer(file, productToSave.id, fileType);
 
       if (pendingFiles.surface) {
         uploadTasks.push(uploadAsset(pendingFiles.surface.file, "surface").then((url) => ({ type: "surface" as const, url })));
@@ -490,6 +495,39 @@ export function EditorClient({
     } catch (error) {
       console.error("Save error:", error);
       alert("Không thể lưu thay đổi");
+    }
+  };
+
+  /** Exports the cue currently on screen as a .glb bundled with its HDRI. */
+  const handleExport3D = async () => {
+    if (!sceneManager || isExporting3D) return;
+
+    const model = sceneManager.getModelForClone();
+    if (!model) {
+      alert("Model 3D chưa tải xong, vui lòng thử lại.");
+      return;
+    }
+
+    setIsExporting3D(true);
+    try {
+      // One self-contained .glb: surface textures at full quality, a light rig fitted to the
+      // current HDRI, and the camera the user is looking through. Everything glTF is able to
+      // carry, so the file needs no sidecars.
+      const hdriFile = sceneManager.getCurrentHdriUrl().split("/").pop() ?? null;
+      const result = await buildProductGlb(model, {
+        shadow: false,
+        hdriFile,
+        embedLights: true,
+        hdriRotationY: config.hdriRotationY,
+        camera: sceneManager.getCameraForExport(),
+        maxTextureSize: 4096,
+      });
+      downloadBlob(result.glb, `${safeFileName(product.name)}.glb`);
+    } catch (error) {
+      console.error("[EditorClient] 3D export failed:", error);
+      alert("Không thể xuất file 3D. Vui lòng thử lại.");
+    } finally {
+      setIsExporting3D(false);
     }
   };
 
@@ -607,9 +645,7 @@ export function EditorClient({
               ) : (
                 <span>
                   Sở hữu bởi: <span className="font-medium text-foreground">{ownerProfile?.nickname || ownerProfile?.email || "Người dùng"}</span>
-                  {isAdminEditing && (
-                    <span className="ml-1 normal-case text-sky-500">· đang sửa với quyền Admin</span>
-                  )}
+                  {isAdminEditing && <span className="ml-1 normal-case text-sky-500">· đang sửa với quyền Admin</span>}
                 </span>
               )}
             </p>
@@ -634,6 +670,17 @@ export function EditorClient({
           <Button variant="ghost" size="icon" onClick={() => setShowVideoExtractor(true)} title="Quay video" className="h-8 w-8 sm:h-10 sm:w-10">
             <Video className="h-4 w-4 sm:h-5 sm:w-5" />
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleExport3D}
+            disabled={isExporting3D || !sceneManager}
+            title="Tải file 3D (.glb)"
+            className="h-8 sm:h-10 px-2 sm:px-3 text-xs sm:text-sm gap-1.5"
+          >
+            {isExporting3D ? <Loader2 className="h-4 w-4 sm:h-5 sm:w-5 animate-spin" /> : <Box className="h-4 w-4 sm:h-5 sm:w-5" />}
+            <span className="hidden sm:inline">{isExporting3D ? "Đang xuất..." : "Tải file 3D"}</span>
+          </Button>
 
           {canDeploy && (
             <Button
@@ -641,27 +688,11 @@ export function EditorClient({
               size="sm"
               onClick={() => setShowShopifyDeploy(true)}
               disabled={!deployStateReady}
-              title={
-                !deployStateReady
-                  ? "Đang tải trạng thái Shopify..."
-                  : shownDeployment?.shopify_product_id
-                    ? "Cập nhật Shopify"
-                    : "Triển khai Shopify"
-              }
+              title={!deployStateReady ? "Đang tải trạng thái Shopify..." : shownDeployment?.shopify_product_id ? "Cập nhật Shopify" : "Triển khai Shopify"}
               className="h-8 sm:h-10 px-2 sm:px-3 text-xs sm:text-sm gap-1.5 text-green-400 hover:text-green-300 hover:bg-green-500/10"
             >
-              {!deployStateReady ? (
-                <Loader2 className="h-4 w-4 sm:h-5 sm:w-5 animate-spin" />
-              ) : (
-                <ShoppingBag className="h-4 w-4 sm:h-5 sm:w-5" />
-              )}
-              <span className="hidden sm:inline">
-                {!deployStateReady
-                  ? "Đang tải..."
-                  : shownDeployment?.shopify_product_id
-                    ? "Cập nhật Shopify"
-                    : "Triển khai Shopify"}
-              </span>
+              {!deployStateReady ? <Loader2 className="h-4 w-4 sm:h-5 sm:w-5 animate-spin" /> : <ShoppingBag className="h-4 w-4 sm:h-5 sm:w-5" />}
+              <span className="hidden sm:inline">{!deployStateReady ? "Đang tải..." : shownDeployment?.shopify_product_id ? "Cập nhật Shopify" : "Triển khai Shopify"}</span>
             </Button>
           )}
           {canEdit ? (
@@ -769,7 +800,8 @@ export function EditorClient({
               )}
               {isAdminEditing && (
                 <div className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-600 dark:text-sky-400 leading-relaxed">
-                  <span className="font-semibold">Quyền Admin.</span> Bạn đang sửa cue của người khác — nhấn <span className="font-semibold">Lưu</span> sẽ ghi trực tiếp lên sản phẩm của họ.
+                  <span className="font-semibold">Quyền Admin.</span> Bạn đang sửa cue của người khác — nhấn <span className="font-semibold">Lưu</span> sẽ ghi trực tiếp lên sản
+                  phẩm của họ.
                 </div>
               )}
               {/* Surface Upload */}
@@ -793,7 +825,9 @@ export function EditorClient({
                   <LayoutTemplate className="mr-1.5 h-4 w-4" />
                   Khung tùy chỉnh (Slots)
                   {(Array.isArray(product.surface_slots?.slots) ? product.surface_slots.slots.length : 0) > 0 && (
-                    <Badge variant="outline" className="ml-2">{product.surface_slots?.slots.length}</Badge>
+                    <Badge variant="outline" className="ml-2">
+                      {product.surface_slots?.slots.length}
+                    </Badge>
                   )}
                 </Button>
                 <div className="mt-4 flex flex-col gap-2">
@@ -813,25 +847,14 @@ export function EditorClient({
                   <p className="text-xs text-muted-foreground">Áp dụng một logo cho cả đầu joint và bumper.</p>
                 </div>
                 {/* Phủ bạc — silver metallic-flake overlay (Pro line blank) */}
-                <label
-                  htmlFor="silverCoating-mobile"
-                  className="mt-4 flex cursor-pointer items-start justify-between gap-3"
-                >
+                <label htmlFor="silverCoating-mobile" className="mt-4 flex cursor-pointer items-start justify-between gap-3">
                   <span className="flex flex-col gap-0.5">
                     <span className="text-sm font-medium">Phủ bạc</span>
-                    <span className="text-xs text-muted-foreground">
-                      Hiệu ứng phôi phủ bạc lấp lánh nhẹ (dòng Pro)
-                    </span>
+                    <span className="text-xs text-muted-foreground">Hiệu ứng phôi phủ bạc lấp lánh nhẹ (dòng Pro)</span>
                   </span>
-                  <Checkbox
-                    id="silverCoating-mobile"
-                    checked={config.silverCoating}
-                    onCheckedChange={(v) => updateConfig({ silverCoating: v === true })}
-                  />
+                  <Checkbox id="silverCoating-mobile" checked={config.silverCoating} onCheckedChange={(v) => updateConfig({ silverCoating: v === true })} />
                 </label>
-                {config.silverCoating && (
-                  <SilverTuningPanel value={silverConfig} onChange={handleSilverConfig} idSuffix="-mobile" />
-                )}
+                {config.silverCoating && <SilverTuningPanel value={silverConfig} onChange={handleSilverConfig} idSuffix="-mobile" />}
               </CollapsibleCard>
 
               {/* HDRI Exposure Control */}
@@ -1251,8 +1274,8 @@ export function EditorClient({
             {isAdminEditing && (
               <div className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-600 dark:text-sky-400 leading-relaxed">
                 <span className="font-semibold">Quyền Admin.</span> Bạn đang sửa cue của{" "}
-                <span className="font-medium">{ownerProfile?.nickname || ownerProfile?.email || "người dùng khác"}</span>. Nhấn{" "}
-                <span className="font-semibold">Lưu</span> sẽ ghi trực tiếp lên sản phẩm của họ.
+                <span className="font-medium">{ownerProfile?.nickname || ownerProfile?.email || "người dùng khác"}</span>. Nhấn <span className="font-semibold">Lưu</span> sẽ ghi
+                trực tiếp lên sản phẩm của họ.
               </div>
             )}
             {/* 3D Controls */}
@@ -1301,7 +1324,9 @@ export function EditorClient({
                 <LayoutTemplate className="mr-1.5 h-4 w-4" />
                 Khung tùy chỉnh (Slots)
                 {(Array.isArray(product.surface_slots?.slots) ? product.surface_slots.slots.length : 0) > 0 && (
-                  <Badge variant="outline" className="ml-2">{product.surface_slots?.slots.length}</Badge>
+                  <Badge variant="outline" className="ml-2">
+                    {product.surface_slots?.slots.length}
+                  </Badge>
                 )}
               </Button>
               <div className="mt-4 flex flex-col gap-2">
@@ -1321,25 +1346,14 @@ export function EditorClient({
                 <p className="text-xs text-muted-foreground">Áp dụng một logo cho cả đầu joint và bumper.</p>
               </div>
               {/* Phủ bạc — silver metallic-flake overlay (Pro line blank) */}
-              <label
-                htmlFor="silverCoating"
-                className="mt-4 flex cursor-pointer items-start justify-between gap-3"
-              >
+              <label htmlFor="silverCoating" className="mt-4 flex cursor-pointer items-start justify-between gap-3">
                 <span className="flex flex-col gap-0.5">
                   <span className="text-sm font-medium">Phủ bạc</span>
-                  <span className="text-xs text-muted-foreground">
-                    Hiệu ứng phôi phủ bạc lấp lánh nhẹ (dòng Pro)
-                  </span>
+                  <span className="text-xs text-muted-foreground">Hiệu ứng phôi phủ bạc lấp lánh nhẹ (dòng Pro)</span>
                 </span>
-                <Checkbox
-                  id="silverCoating"
-                  checked={config.silverCoating}
-                  onCheckedChange={(v) => updateConfig({ silverCoating: v === true })}
-                />
+                <Checkbox id="silverCoating" checked={config.silverCoating} onCheckedChange={(v) => updateConfig({ silverCoating: v === true })} />
               </label>
-              {config.silverCoating && (
-                <SilverTuningPanel value={silverConfig} onChange={handleSilverConfig} />
-              )}
+              {config.silverCoating && <SilverTuningPanel value={silverConfig} onChange={handleSilverConfig} />}
             </CollapsibleCard>
 
             {/* HDRI Exposure Control */}
@@ -1783,7 +1797,14 @@ export function EditorClient({
           </div>
         </div>
       </div>
-      <ImageExtractor sceneManager={sceneManager} productName={product.name} productType={product.type} productSurfaceUrl={product.surface_url} open={showImageExtractor} onClose={() => setShowImageExtractor(false)} />
+      <ImageExtractor
+        sceneManager={sceneManager}
+        productName={product.name}
+        productType={product.type}
+        productSurfaceUrl={product.surface_url}
+        open={showImageExtractor}
+        onClose={() => setShowImageExtractor(false)}
+      />
       <VideoStudio sceneManager={sceneManager} productName={product.name} productId={product.id} open={showVideoExtractor} onClose={() => setShowVideoExtractor(false)} />
       {showShopifyDeploy && canDeploy && (
         <ShopifyDeployDialog

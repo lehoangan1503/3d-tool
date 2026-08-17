@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Search, Package, Loader2, Copy, CheckSquare, Square, Download } from "lucide-react";
+import { Search, Package, Loader2, Copy, CheckSquare, Square, Download, Box } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { CreateProductDialog } from "@/components/products/create-product-dialog";
 import { ProductCard } from "@/components/products/product-card";
 import { BulkExportDialog } from "@/components/products/bulk-export-dialog";
+import { bulkExport3D } from "@/lib/three/bulk-export-3d";
+import { downloadBlob } from "@/lib/three/export-product-3d";
 import type { Product, ProductType } from "@/types/product";
 import { productPrefix, NO_CODE_GROUP } from "@/lib/auto-deploy/group-products";
 import { useStore } from "@/components/shopify/store-switcher";
@@ -30,6 +32,9 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
   const [isCloningBulk, setIsCloningBulk] = useState(false);
   const [cloneProgress, setCloneProgress] = useState({ done: 0, total: 0 });
   const [bulkExportOpen, setBulkExportOpen] = useState(false);
+  const [isExporting3D, setIsExporting3D] = useState(false);
+  const [export3DProgress, setExport3DProgress] = useState({ done: 0, total: 0 });
+  const cancel3DRef = useRef(false);
   const [isBulkRecording, setIsBulkRecording] = useState(false);
   const [search, setSearchRaw] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -264,6 +269,46 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
     }
   }, [selectedIds, fetchPage, debouncedSearch, typeFilter, sortOrder, myOnly]);
 
+  /** Exports the selected products as .glb files in one .zip. */
+  const handleExport3DSelected = useCallback(async () => {
+    const selected = products.filter((p) => selectedIds.has(p.id));
+    if (selected.length === 0) return;
+
+    cancel3DRef.current = false;
+    setIsExporting3D(true);
+    setExport3DProgress({ done: 0, total: selected.length });
+
+    try {
+      const { zip, failed, exported } = await bulkExport3D(selected, {
+        // Self-contained .glb per product, matching the single-product export in the editor:
+        // full-quality textures plus an embedded light rig fitted to the default HDRI.
+        shadow: false,
+        embedLights: true,
+        onProgress: ({ done, total }) => setExport3DProgress({ done, total }),
+        isCancelled: () => cancel3DRef.current,
+      });
+
+      if (zip) {
+        downloadBlob(zip, `cue_3d_models_${exported}.zip`);
+      }
+
+      if (failed.length > 0) {
+        alert(
+          `Đã xuất ${exported}/${selected.length} sản phẩm.\n\nKhông xuất được:\n` +
+            failed.map((f) => `• ${f.name}: ${f.error}`).join("\n")
+        );
+      } else if (!zip) {
+        alert("Không xuất được sản phẩm nào.");
+      }
+    } catch (error) {
+      console.error("[ProductsGrid] Bulk 3D export failed:", error);
+      alert("Không thể xuất file 3D. Vui lòng thử lại.");
+    } finally {
+      setIsExporting3D(false);
+      setExport3DProgress({ done: 0, total: 0 });
+    }
+  }, [products, selectedIds]);
+
   const filters: { value: FilterType; label: string }[] = [
     { value: "all", label: "Tất Cả" },
     { value: "smooth", label: "Trơn" },
@@ -307,6 +352,29 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
         <div className="flex items-center justify-between gap-3 pt-4">
           <h2 className="text-2xl font-bold shrink-0">{myOnly ? "Bản Của Tôi" : "Tất Cả Sản Phẩm"}</h2>
           <div className="flex items-center gap-2">
+            {/* Bulk 3D model download */}
+            {selectedIds.size > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExport3DSelected}
+                disabled={isExporting3D}
+                title="Tải model .glb cho các sản phẩm đã chọn"
+                className="gap-1.5 border-zinc-600 text-zinc-200 hover:bg-zinc-700"
+              >
+                {isExporting3D ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    {export3DProgress.done}/{export3DProgress.total}
+                  </>
+                ) : (
+                  <>
+                    <Box className="h-3.5 w-3.5" />
+                    Tải {selectedIds.size} file 3D
+                  </>
+                )}
+              </Button>
+            )}
             {/* Bulk clone action */}
             {selectedIds.size > 0 && (
               <Button

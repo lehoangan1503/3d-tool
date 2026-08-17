@@ -63,6 +63,114 @@ export interface GlbExportOptions {
 }
 
 /**
+ * Collapses every material onto UV channel 0.
+ *
+ * glTF lets each texture slot pick its own UV set via `texCoord`, and the source cue models
+ * genuinely use two: `leather_mat.002` and `Plastic Black 4` sample base/normal/metalRough
+ * from `TEXCOORD_1`, while the joint and body stay on `TEXCOORD_0`. three.js and Blender
+ * both honour that, which is why the export looks right in Blender.
+ *
+ * After Effects' Advanced 3D glTF importer only reads `TEXCOORD_0`. Faced with
+ * `texCoord: 1` it does not fall back to UV0 — it drops the texture outright, so the leather
+ * and bumper arrive untextured even though the image data is present in the file.
+ *
+ * Rather than re-authoring the models, the export rewrites the geometry: where a material
+ * samples UV1, the `uv1` attribute is copied over `uv`, and every texture is pointed back at
+ * channel 0. The coordinates are unchanged, so the mapping stays pixel-identical — only the
+ * slot it lives in moves. Meshes already on UV0 are left untouched.
+ *
+ * This is safe because each mesh here carries a single material; a mesh whose materials
+ * disagreed about which UV set to use could not be collapsed this way, so those are skipped
+ * and reported rather than silently corrupted.
+ */
+function collapseToSingleUvChannel(root: THREE.Object3D): void {
+  root.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+
+    const materials: THREE.Material[] = Array.isArray(child.material) ? child.material : [child.material];
+
+    // Which UV channels does this mesh's texture set actually reference?
+    const channels = new Set<number>();
+    for (const material of materials) {
+      const mat = material as TexturedMaterial;
+      for (const slot of TEXTURE_SLOTS) {
+        const texture = mat[slot];
+        if (texture) channels.add(texture.channel ?? 0);
+      }
+    }
+
+    if (channels.size === 0 || (channels.size === 1 && channels.has(0))) return;
+
+    if (channels.size > 1) {
+      console.warn(
+        `[export-glb] Mesh "${child.name}" mixes UV channels ${[...channels].join(", ")}; ` +
+          "leaving it as-is because collapsing would move some maps off their own UV set."
+      );
+      return;
+    }
+
+    const [sourceChannel] = [...channels];
+    const geometry = child.geometry as THREE.BufferGeometry;
+    const sourceAttribute = geometry.getAttribute(`uv${sourceChannel}`);
+
+    if (!sourceAttribute) {
+      console.warn(
+        `[export-glb] Mesh "${child.name}" samples UV${sourceChannel} but has no matching ` +
+          "attribute; leaving it as-is."
+      );
+      return;
+    }
+
+    geometry.setAttribute("uv", sourceAttribute.clone());
+
+    for (const material of materials) {
+      const mat = material as TexturedMaterial;
+      for (const slot of TEXTURE_SLOTS) {
+        const texture = mat[slot];
+        if (texture) texture.channel = 0;
+      }
+      material.needsUpdate = true;
+    }
+  });
+}
+
+/**
+ * Verifies that no material still references a UV channel other than 0.
+ *
+ * Runs after `collapseToSingleUvChannel` as a build-time guard: a regression here is
+ * invisible in Blender and only shows up as missing leather in After Effects, so it is worth
+ * catching at export time rather than by eye. Reports every offender instead of throwing —
+ * a mis-mapped texture is still a more useful download than no download at all.
+ */
+function reportRemainingUvChannels(root: THREE.Object3D): void {
+  const offenders: string[] = [];
+
+  root.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+
+    const materials: THREE.Material[] = Array.isArray(child.material) ? child.material : [child.material];
+    for (const material of materials) {
+      const mat = material as TexturedMaterial;
+      const channels = new Set<number>();
+      for (const slot of TEXTURE_SLOTS) {
+        const texture = mat[slot];
+        if (texture) channels.add(texture.channel ?? 0);
+      }
+      if (channels.size > 0 && !(channels.size === 1 && channels.has(0))) {
+        offenders.push(`"${material.name || child.name}" -> UV ${[...channels].join(", ")}`);
+      }
+    }
+  });
+
+  if (offenders.length > 0) {
+    console.warn(
+      "[export-glb] These materials still sample a non-zero UV channel and will lose their " +
+        `textures in After Effects: ${offenders.join("; ")}`
+    );
+  }
+}
+
+/**
  * Replaces every canvas-backed texture on `root` with an equivalent image-backed one.
  *
  * A `CanvasTexture` points at a live `<canvas>`; once the SceneManager that drew it is
@@ -156,13 +264,19 @@ export async function exportModelToGlb(
   clone.scale.setScalar(1);
   root.add(clone);
 
-  // `Object3D.clone()` shares material instances with the source, so the texture swaps
-  // performed below would otherwise reach into the live editor scene and repoint its maps
-  // at our baked copies — which are disposed as soon as the export finishes, blanking the
-  // on-screen cue. Give the export its own materials.
+  // `Object3D.clone()` shares both material and geometry instances with the source, so the
+  // texture swaps and the UV rewrite below would otherwise reach into the live editor scene —
+  // repointing its maps at baked copies that get disposed the moment the export finishes, and
+  // overwriting its `uv` attribute. Give the export its own materials and geometry.
   const clonedMaterials: THREE.Material[] = [];
+  const clonedGeometries: THREE.BufferGeometry[] = [];
   clone.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return;
+
+    const geometry = child.geometry.clone();
+    clonedGeometries.push(geometry);
+    child.geometry = geometry;
+
     if (Array.isArray(child.material)) {
       child.material = child.material.map((m: THREE.Material) => {
         const copy = m.clone();
@@ -175,6 +289,11 @@ export async function exportModelToGlb(
       child.material = copy;
     }
   });
+
+  // After Effects' glTF importer only reads TEXCOORD_0, so fold everything onto UV0 before
+  // the exporter writes any `texCoord` values.
+  collapseToSingleUvChannel(clone);
+  reportRemainingUvChannels(clone);
 
   // Strip the engraved logos. They are drawn as an emissive map masked by an
   // `onBeforeCompile` shader, and glTF has no way to carry that shader — the mask is lost on
@@ -247,6 +366,7 @@ export async function exportModelToGlb(
   } finally {
     disposeBaked();
     clonedMaterials.forEach((material) => material.dispose());
+    clonedGeometries.forEach((geometry) => geometry.dispose());
   }
 }
 

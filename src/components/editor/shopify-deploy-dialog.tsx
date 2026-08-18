@@ -767,7 +767,8 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       config.cameraEnd,
       config.cameraSpeed,
       "xyz",
-      isCameraFixed(config.cameraStart, config.cameraEnd) ? config.fixedCameraDuration : undefined
+      isCameraFixed(config.cameraStart, config.cameraEnd, config.cameraPath) ? config.fixedCameraDuration : undefined,
+      config.cameraPath
     );
     const fmt = (s: number) => (s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`);
 

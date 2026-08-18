@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import fixWebmDuration from 'fix-webm-duration';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { createCameraPathSampler, getCameraPathPoints, getCameraSpanPoints } from './camera-path';
 import type {
   ImageExtractorConfig,
   VideoExtractorConfig,
@@ -25,7 +26,7 @@ import {
   findTexturePack,
   loadPBRTexturePack,
 } from './studio-background';
-import type { VideoStudioConfig, CameraKeyframe, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig, CueHdriConfig } from '@/types/video-studio';
+import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig, CueHdriConfig } from '@/types/video-studio';
 import { computeVideoDuration, createEasingFunction, applyDirection, isCameraFixed, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI, getRecordingDimensions } from '@/types/video-studio';
 import { compositeSurfaceFrames, preloadFrameImages } from './background-compositor';
 import { applyBumperEmissiveShaderMask, applyLogoToExistingMaterial } from './leather-material';
@@ -195,6 +196,14 @@ export class ExtractorSceneManager {
 
   // Camera gizmo for scene view selection
   private cameraGizmo: THREE.Group | null = null;
+  /** Dimmed overlay line tracing the whole shape curve in scene view. */
+  private cameraPathLine: THREE.Line | null = null;
+  /** Bright overlay line covering only the recorded start→end span. */
+  private cameraSpanLine: THREE.Line | null = null;
+  /** Draggable sphere per waypoint, index-tagged via userData. */
+  private cameraWaypointGizmos: THREE.Mesh[] = [];
+  /** When true the whole curve is selected and drags move every waypoint together. */
+  private _cameraPathSelectAll = false;
 
   // Minimap: render camera view to a separate canvas at low frequency
   private _minimapCanvas: HTMLCanvasElement | null = null;
@@ -596,6 +605,9 @@ export class ExtractorSceneManager {
     }
     if (this.cameraHelper) this.cameraHelper.visible = visible;
     if (this.cameraGizmo) this.cameraGizmo.visible = visible;
+    if (this.cameraPathLine) this.cameraPathLine.visible = visible;
+    if (this.cameraSpanLine) this.cameraSpanLine.visible = visible;
+    for (const g of this.cameraWaypointGizmos) g.visible = visible;
   }
 
   // ---------------------------------------------------------------------------
@@ -2783,11 +2795,18 @@ export class ExtractorSceneManager {
     // from jumping back to the stored keyframe while the user has moved it via gizmo.
     // _cameraPlacementMode is intentionally NOT checked here — it was previously blocking
     // template camera loading when the user was in "camera" view mode.
-    const camKey = `${config.cameraStart.x},${config.cameraStart.y},${config.cameraStart.z},${config.cameraStart.rotationX ?? 0},${config.cameraStart.rotationY ?? 0},${config.cameraStart.rotationZ ?? 0}`;
+    // With a curve path the opening frame comes from the path's own span, so the preview
+    // matches what will be recorded even if cameraStart drifted.
+    const previewStart = this.resolveStartKeyframe(config);
+    const camKey = `${previewStart.x},${previewStart.y},${previewStart.z},${previewStart.rotationX ?? 0},${previewStart.rotationY ?? 0},${previewStart.rotationZ ?? 0}`;
     if (camKey !== this._lastAppliedCameraStartKey) {
       this._lastAppliedCameraStartKey = camKey;
-      this.setCameraFromKeyframe(config.cameraStart);
+      this.setCameraFromKeyframe(previewStart);
     }
+
+    // Keep the scene-view path overlay in step with the config (preset switches, waypoint
+    // edits, curve-type changes all land here via the debounced config sync).
+    this.updateCameraPathVisuals(config);
   }
 
   /** Apply shadow config via HDRI-driven shadow lights */
@@ -2898,7 +2917,7 @@ export class ExtractorSceneManager {
       this.camera.updateProjectionMatrix();
 
       this.setupStudioFromStudioConfig(config).then(async () => {
-        this.setCameraFromKeyframe(config.cameraStart);
+        this.setCameraFromKeyframe(this.resolveStartKeyframe(config));
         this.camera.fov = 50;
         this.camera.updateProjectionMatrix();
 
@@ -2975,18 +2994,22 @@ export class ExtractorSceneManager {
     // Reset camera to the recorded start position. The warmup renders in startStudioRecording
     // run with async yields, during which stale orbit event handlers could have moved the camera.
     // This guarantees the canvas shows the correct start frame when mediaRecorder.start() fires.
-    this.setCameraFromKeyframe(config.cameraStart);
+    // Derived from the path (not cameraStart) so a curve always opens on its span's first point.
+    this.setCameraFromKeyframe(this.resolveStartKeyframe(config));
 
     // Diagnostic: log actual values used for this recording
     const _diagEnd = applyDirection(config.cameraStart, config.cameraEnd, "xyz");
-    const _fixedDur = isCameraFixed(config.cameraStart, config.cameraEnd) ? config.fixedCameraDuration : undefined;
-    const _diagDur = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz", _fixedDur);
+    const _fixedDur = isCameraFixed(config.cameraStart, config.cameraEnd, config.cameraPath) ? config.fixedCameraDuration : undefined;
+    const _diagDur = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz", _fixedDur, config.cameraPath);
     console.log('[VideoStudio] recording', {
       start: { x: config.cameraStart.x?.toFixed(2), y: config.cameraStart.y?.toFixed(2), z: config.cameraStart.z?.toFixed(2) },
       end: { x: _diagEnd.x?.toFixed(2), y: _diagEnd.y?.toFixed(2), z: _diagEnd.z?.toFixed(2) },
       speed: config.cameraSpeed,
       duration: `${_diagDur.toFixed(1)}s`,
       fixed: _fixedDur !== undefined,
+      path: config.cameraPath?.mode === "spline" && config.cameraPath.waypoints.length > 0
+        ? { waypoints: config.cameraPath.waypoints.length, curve: config.cameraPath.curveType, closed: config.cameraPath.closed, look: config.cameraPath.lookMode }
+        : "straight",
     });
 
     // Hide all helpers/gizmos so they don't appear in the recorded video
@@ -3037,7 +3060,7 @@ export class ExtractorSceneManager {
     const effectiveEnd = applyDirection(config.cameraStart, config.cameraEnd, "xyz");
 
     // Compute duration from path + speed (or fixed duration when camera is static)
-    const duration = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz", isCameraFixed(config.cameraStart, config.cameraEnd) ? config.fixedCameraDuration : undefined);
+    const duration = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz", isCameraFixed(config.cameraStart, config.cameraEnd, config.cameraPath) ? config.fixedCameraDuration : undefined, config.cameraPath);
     const easingFn = createEasingFunction(config.easing);
 
     // Compute wall-clock duration in ms before MediaRecorder setup so the onstop closure can use it
@@ -3073,7 +3096,7 @@ export class ExtractorSceneManager {
 
     // Whether the camera is fixed (start == end position). Hoisted here so both
     // the onstop handler and the animate loop can share the same value.
-    const isFixed = isCameraFixed(config.cameraStart, config.cameraEnd);
+    const isFixed = isCameraFixed(config.cameraStart, config.cameraEnd, config.cameraPath);
 
     // For fixed camera, the warmup (ENCODER_WARMUP_MS) is included in the final
     // file, so we record only (durationMs - ENCODER_WARMUP_MS) of animation to
@@ -3281,18 +3304,20 @@ export class ExtractorSceneManager {
       rotationY: start.rotationY ?? 0,
       rotationZ: start.rotationZ ?? 0,
     };
-    const startRX = start.rotationX ?? 0, endRX = end.rotationX ?? 0;
-    const startRY = start.rotationY ?? 0, endRY = end.rotationY ?? 0;
-    const startRZ = start.rotationZ ?? 0, endRZ = end.rotationZ ?? 0;
+
+    // Camera path sampler. With no custom path this is the legacy straight start→end lerp;
+    // with waypoints it is an arc-length-parameterised Catmull-Rom spline. Built once here
+    // (the arc-length LUT is precomputed) so sampling stays allocation-free per frame.
+    const pathSampler = createCameraPathSampler(
+      start,
+      end,
+      config.cameraPath,
+      this.getCuePathLookTarget()
+    );
 
     const renderFrame = (t: number) => {
-      // Mutate pre-allocated object to avoid per-frame heap allocation.
-      kf.x = start.x + (end.x - start.x) * t;
-      kf.y = start.y + (end.y - start.y) * t;
-      kf.z = start.z + (end.z - start.z) * t;
-      kf.rotationX = startRX + (endRX - startRX) * t;
-      kf.rotationY = startRY + (endRY - startRY) * t;
-      kf.rotationZ = startRZ + (endRZ - startRZ) * t;
+      // Mutates the pre-allocated kf to avoid per-frame heap allocation.
+      pathSampler.sample(t, kf);
       // Lightweight camera update for recording: skip gizmo sync, helper update,
       // and updateProjectionMatrix (FOV is constant throughout recording).
       this.camera.position.set(kf.x, kf.y, kf.z);
@@ -4173,6 +4198,9 @@ export class ExtractorSceneManager {
       this.cameraHelper.visible = this.isSceneView;
     }
     if (this.cameraGizmo) this.cameraGizmo.visible = this.isSceneView;
+    if (this.cameraPathLine) this.cameraPathLine.visible = this.isSceneView;
+    if (this.cameraSpanLine) this.cameraSpanLine.visible = this.isSceneView;
+    for (const g of this.cameraWaypointGizmos) g.visible = this.isSceneView;
 
     if (mode === "camera") {
       // Camera view is now a static snapshot in the UI; disable any active orbit so
@@ -4213,6 +4241,331 @@ export class ExtractorSceneManager {
     }
     if (box.isEmpty()) return null;
     return box.getCenter(new THREE.Vector3());
+  }
+
+  // ---------------------------------------------------------------------------
+  // Camera path overlay — path line + draggable waypoint gizmos (scene view only)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Invoked immediately before waypoint gizmo meshes are disposed, so the caller can
+   * detach TransformControls. Without this, deleting a waypoint while its gizmo is
+   * selected leaves the transform gizmo attached to a disposed, unparented mesh —
+   * which throws "object must be part of the scene graph" on the next interaction.
+   */
+  private _onCameraWaypointGizmosInvalidated: (() => void) | null = null;
+
+  setCameraWaypointGizmoInvalidatedHandler(handler: (() => void) | null): void {
+    this._onCameraWaypointGizmosInvalidated = handler;
+  }
+
+  /** Remove and dispose every camera-path overlay object. */
+  private clearCameraPathVisuals(): void {
+    if (this.cameraWaypointGizmos.length > 0) {
+      this._onCameraWaypointGizmosInvalidated?.();
+    }
+    for (const line of [this.cameraPathLine, this.cameraSpanLine]) {
+      if (!line) continue;
+      this.scene.remove(line);
+      line.geometry.dispose();
+      (line.material as THREE.Material).dispose();
+    }
+    this.cameraPathLine = null;
+    this.cameraSpanLine = null;
+    for (const g of this.cameraWaypointGizmos) {
+      this.scene.remove(g);
+      g.geometry.dispose();
+      (g.material as THREE.Material).dispose();
+    }
+    this.cameraWaypointGizmos = [];
+  }
+
+  /** Create or update one overlay line, reusing its buffer when the vertex count matches. */
+  private _syncOverlayLine(
+    existing: THREE.Line | null,
+    points: THREE.Vector3[],
+    color: number,
+    opacity: number,
+    renderOrder: number
+  ): THREE.Line | null {
+    if (points.length === 0) {
+      if (existing) {
+        this.scene.remove(existing);
+        existing.geometry.dispose();
+        (existing.material as THREE.Material).dispose();
+      }
+      return null;
+    }
+    const attr = existing?.geometry.getAttribute("position");
+    if (existing && attr && attr.count === points.length) {
+      for (let i = 0; i < points.length; i++) {
+        attr.setXYZ(i, points[i].x, points[i].y, points[i].z);
+      }
+      attr.needsUpdate = true;
+      existing.geometry.computeBoundingSphere();
+      (existing.material as THREE.LineBasicMaterial).color.setHex(color);
+      (existing.material as THREE.LineBasicMaterial).opacity = opacity;
+      return existing;
+    }
+    if (existing) {
+      this.scene.remove(existing);
+      existing.geometry.dispose();
+      (existing.material as THREE.Material).dispose();
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(points);
+    const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthTest: false });
+    const line = new THREE.Line(geo, mat);
+    // Overlays must never be depth-occluded by the cue or the backdrop, or the path
+    // disappears behind the model exactly when the user needs to see it.
+    line.renderOrder = renderOrder;
+    line.visible = this.isSceneView;
+    this.scene.add(line);
+    return line;
+  }
+
+  /**
+   * Rebuild the scene-view camera-path overlay from the current config.
+   *
+   * Draws two lines: the full shape curve, dimmed, plus the recorded start→end span in
+   * bright orange on top — so the user can see at a glance which stretch of the shape ends
+   * up in the video. Waypoint spheres are colour-coded: green for start, red for end,
+   * amber for points inside the span, and dark grey for points outside it.
+   *
+   * Gizmos carry `userData.type = "cameraWaypoint"` plus their index, which is what lets the
+   * existing TransformControls selection machinery pick them up with no special-casing.
+   */
+  updateCameraPathVisuals(config: VideoStudioConfig): void {
+    const path = config.cameraPath;
+    if (!path || !path.enabled || path.waypoints.length < 2) {
+      this.clearCameraPathVisuals();
+      return;
+    }
+
+    // Full shape, dimmed. In "select all" mode it turns green to signal that dragging
+    // moves the entire curve rather than a single point.
+    const selectAll = this._cameraPathSelectAll;
+    this.cameraPathLine = this._syncOverlayLine(
+      this.cameraPathLine,
+      getCameraPathPoints(path, 200),
+      selectAll ? 0x22cc66 : 0xff6600,
+      selectAll ? 0.95 : 0.28,
+      999
+    );
+
+    // Recorded span, bright. Hidden in select-all mode so the green full curve reads clean.
+    this.cameraSpanLine = this._syncOverlayLine(
+      this.cameraSpanLine,
+      selectAll ? [] : getCameraSpanPoints(path, 160),
+      0xff6600,
+      1,
+      1001
+    );
+
+    // Rebuild waypoint gizmos when the count changes; otherwise reposition + recolour.
+    const waypoints = path.waypoints;
+    if (this.cameraWaypointGizmos.length !== waypoints.length) {
+      if (this.cameraWaypointGizmos.length > 0) {
+        this._onCameraWaypointGizmosInvalidated?.();
+      }
+      for (const g of this.cameraWaypointGizmos) {
+        this.scene.remove(g);
+        g.geometry.dispose();
+        (g.material as THREE.Material).dispose();
+      }
+      this.cameraWaypointGizmos = waypoints.map((_, index) => {
+        const mesh = new THREE.Mesh(
+          new THREE.SphereGeometry(0.28, 16, 12),
+          new THREE.MeshBasicMaterial({ depthTest: false })
+        );
+        mesh.renderOrder = 1002;
+        mesh.userData = { type: "cameraWaypoint", waypointIndex: index };
+        mesh.visible = this.isSceneView;
+        this.scene.add(mesh);
+        return mesh;
+      });
+    }
+
+    const spanIndices = this._cameraPathSpanIndices(path);
+    for (let i = 0; i < waypoints.length; i++) {
+      const gizmo = this.cameraWaypointGizmos[i];
+      if (!gizmo) continue;
+      gizmo.position.set(waypoints[i].x, waypoints[i].y, waypoints[i].z);
+      // Scene view keeps matrixAutoUpdate on, but recording freezes the graph — set the
+      // matrix explicitly so a drag is reflected even on the frame it happens.
+      gizmo.updateMatrixWorld(true);
+      const mat = gizmo.material as THREE.MeshBasicMaterial;
+      if (selectAll) {
+        mat.color.setHex(0x22cc66);
+        mat.opacity = 1;
+      } else if (i === path.startIndex) {
+        mat.color.setHex(0x22cc66); // start — green
+        mat.opacity = 1;
+      } else if (i === path.endIndex) {
+        mat.color.setHex(0xff3355); // end — red
+        mat.opacity = 1;
+      } else if (spanIndices.has(i)) {
+        mat.color.setHex(0xffaa33); // inside the recorded span — amber
+        mat.opacity = 1;
+      } else {
+        mat.color.setHex(0x666666); // outside the span — dimmed grey
+        mat.opacity = 0.55;
+      }
+      mat.transparent = mat.opacity < 1;
+      // Start and end read as the important handles, so draw them larger.
+      const emphasis = i === path.startIndex || i === path.endIndex ? 1.45 : 1;
+      gizmo.scale.setScalar(emphasis);
+    }
+  }
+
+  /** Indices covered by the recorded span, including wrap-around on a closed loop. */
+  private _cameraPathSpanIndices(path: CameraPathConfig): Set<number> {
+    const n = path.waypoints.length;
+    const out = new Set<number>();
+    if (n === 0) return out;
+    const a = Math.max(0, Math.min(n - 1, path.startIndex));
+    const b = Math.max(0, Math.min(n - 1, path.endIndex));
+    if (a === b) { out.add(a); return out; }
+    if (a < b) {
+      for (let i = a; i <= b; i++) out.add(i);
+    } else if (path.closed) {
+      for (let i = a; i < n; i++) out.add(i);
+      for (let i = 0; i <= b; i++) out.add(i);
+    } else {
+      for (let i = b; i <= a; i++) out.add(i);
+    }
+    return out;
+  }
+
+  /**
+   * Toggle "select all" mode. While on, the whole curve highlights green and the caller
+   * drags every waypoint together instead of one at a time.
+   */
+  setCameraPathSelectAll(active: boolean): void {
+    this._cameraPathSelectAll = active;
+  }
+
+  isCameraPathSelectAll(): boolean {
+    return this._cameraPathSelectAll;
+  }
+
+  /** Live world position of a waypoint gizmo — read back after a TransformControls drag. */
+  getCameraWaypointPosition(index: number): { x: number; y: number; z: number } | null {
+    const gizmo = this.cameraWaypointGizmos[index];
+    if (!gizmo) return null;
+    return { x: gizmo.position.x, y: gizmo.position.y, z: gizmo.position.z };
+  }
+
+  /** Waypoint gizmos, so scene-view controls can register them as selectable. */
+  getCameraWaypointGizmos(): THREE.Mesh[] {
+    return this.cameraWaypointGizmos;
+  }
+
+  /**
+   * Redraw the overlay lines from the gizmos' live positions — called during a drag, before
+   * the React config has round-tripped, so the curve follows the pointer.
+   */
+  refreshCameraPathLineFromGizmos(config: VideoStudioConfig): void {
+    const path = config.cameraPath;
+    if (!path || this.cameraWaypointGizmos.length !== path.waypoints.length) return;
+    const live: CameraPathConfig = {
+      ...path,
+      waypoints: this.cameraWaypointGizmos.map((g, i) => ({
+        ...path.waypoints[i],
+        x: g.position.x,
+        y: g.position.y,
+        z: g.position.z,
+      })),
+    };
+    const selectAll = this._cameraPathSelectAll;
+    this.cameraPathLine = this._syncOverlayLine(
+      this.cameraPathLine,
+      getCameraPathPoints(live, 200),
+      selectAll ? 0x22cc66 : 0xff6600,
+      selectAll ? 0.95 : 0.28,
+      999
+    );
+    this.cameraSpanLine = this._syncOverlayLine(
+      this.cameraSpanLine,
+      selectAll ? [] : getCameraSpanPoints(live, 160),
+      0xff6600,
+      1,
+      1001
+    );
+  }
+
+  /**
+   * Snap every waypoint gizmo onto the given positions.
+   *
+   * Used by the whole-curve rotate, where all points move at once and there is no single
+   * dragged handle to derive a delta from.
+   */
+  applyCameraWaypointPositions(waypoints: readonly { x: number; y: number; z: number }[]): void {
+    for (let i = 0; i < this.cameraWaypointGizmos.length; i++) {
+      const wp = waypoints[i];
+      const g = this.cameraWaypointGizmos[i];
+      if (!wp || !g) continue;
+      g.position.set(wp.x, wp.y, wp.z);
+      g.updateMatrixWorld(true);
+    }
+  }
+
+  /**
+   * "Select all" drag: the user drags one handle, and every other gizmo follows by the same
+   * delta so the curve's shape is preserved and only its placement changes.
+   *
+   * `draggedIndex` is the handle under the pointer; its position is authoritative, and the
+   * siblings are re-derived from the config snapshot each frame rather than accumulated, so
+   * repeated calls during one drag can't drift.
+   */
+  syncCameraWaypointGroupDrag(config: VideoStudioConfig, draggedIndex: number): void {
+    const path = config.cameraPath;
+    const dragged = this.cameraWaypointGizmos[draggedIndex];
+    const anchor = path?.waypoints[draggedIndex];
+    if (!path || !dragged || !anchor) return;
+    const dx = dragged.position.x - anchor.x;
+    const dy = dragged.position.y - anchor.y;
+    const dz = dragged.position.z - anchor.z;
+    for (let i = 0; i < this.cameraWaypointGizmos.length; i++) {
+      if (i === draggedIndex) continue;
+      const wp = path.waypoints[i];
+      const g = this.cameraWaypointGizmos[i];
+      if (!wp || !g) continue;
+      g.position.set(wp.x + dx, wp.y + dy, wp.z + dz);
+      g.updateMatrixWorld(true);
+    }
+  }
+
+  /**
+   * The keyframe the camera must sit at for frame 0.
+   *
+   * With a curve path this is derived from the path itself (its span's first point), not
+   * from `config.cameraStart` — so a template whose stored cameraStart drifted out of sync
+   * still opens on the correct frame. Falls back to cameraStart when there is no path.
+   */
+  private resolveStartKeyframe(config: VideoStudioConfig): CameraKeyframe {
+    const sampler = createCameraPathSampler(
+      config.cameraStart,
+      config.cameraEnd,
+      config.cameraPath,
+      this.getCuePathLookTarget()
+    );
+    const kf: CameraKeyframe = { x: 0, y: 0, z: 0, rotationX: 0, rotationY: 0, rotationZ: 0 };
+    sampler.sample(0, kf);
+    return kf;
+  }
+
+  /**
+   * World point the camera aims at when a custom path uses lookMode "target".
+   *
+   * Uses the main cue instance (the one flagged isMain, else the first), which is what the
+   * user is framing. Returns undefined when no cue config is loaded yet, in which case the
+   * sampler falls back to the world origin.
+   */
+  private getCuePathLookTarget(): THREE.Vector3 | undefined {
+    const instances = this.currentCueConfig?.instances;
+    if (!instances || instances.length === 0) return undefined;
+    const main = instances.find(i => i.isMain) ?? instances[0];
+    return new THREE.Vector3(main.positionX, main.positionY, main.positionZ);
   }
 
   /** Position studio camera from a CameraKeyframe — uses absolute world coordinates, preserves rotation */
@@ -4389,6 +4742,7 @@ export class ExtractorSceneManager {
   getSelectableObjects(): THREE.Object3D[] {
     const objects: THREE.Object3D[] = [];
     if (this.cameraGizmo) objects.push(this.cameraGizmo);
+    objects.push(...this.cameraWaypointGizmos);
     if (this.backdrop) objects.push(this.backdrop);
     if (this.tableSurface) objects.push(this.tableSurface);
     // shadowFloor is intentionally excluded — it is not selectable/interactive
@@ -4876,6 +5230,7 @@ export class ExtractorSceneManager {
       this.scene.remove(this.cameraGizmo);
       this.cameraGizmo = null;
     }
+    this.clearCameraPathVisuals();
     this.godCamera = null;
 
     // Clean up minimap

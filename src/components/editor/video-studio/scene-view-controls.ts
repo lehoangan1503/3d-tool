@@ -14,6 +14,7 @@ export interface SelectionInfo {
     | "wallFrame"
     | "tableFrame"
     | "hdriLight"
+    | "cameraWaypoint"
     | null;
   frameId?: string;
   lightId?: string;
@@ -23,6 +24,8 @@ export interface SelectionInfo {
   object?: THREE.Object3D;
   /** Index of the cue (in CueConfig.instances) that was hit. Only set when type="cue". */
   cueIndex?: number;
+  /** Index into CameraPathConfig.waypoints. Only set when type="cameraWaypoint". */
+  waypointIndex?: number;
 }
 
 const CLICK_THRESHOLD_PX = 5;
@@ -36,6 +39,7 @@ const TRANSFORMABLE_TYPES = new Set([
   "wallFrame",
   "tableFrame",
   "hdriLight",
+  "cameraWaypoint",
 ]);
 
 /** Types that cannot be transformed at all (no gizmo, no G/R/S hotkeys) */
@@ -85,7 +89,21 @@ export class SceneViewControls {
     ) => void,
     private onTransformModeChange?: (mode: "translate" | "rotate" | "scale") => void,
     private onDragStart?: () => void,
-    private onDragEnd?: () => void
+    private onDragEnd?: () => void,
+    /**
+     * Fired while a camera waypoint is being dragged, to re-tessellate the path line.
+     * Receives the dragged waypoint's index so the caller can move sibling gizmos when
+     * the whole curve is selected.
+     */
+    private onCameraPathLiveUpdate?: (index: number | undefined) => void,
+    /**
+     * Rotate the whole camera curve around its centroid. Fired during an R-hotkey drag while
+     * "select all" is active; `angle` is absolute from the drag's start, so the caller
+     * recomputes from the pre-drag snapshot instead of accumulating (no drift).
+     */
+    private onCameraPathRotate?: (axis: "x" | "y" | "z", angle: number) => void,
+    /** Whether whole-curve selection is on — gates the rotate-all behaviour. */
+    private isCameraPathSelectAll?: () => boolean
   ) {
     const godCam = esm.getGodCamera();
     if (godCam) {
@@ -157,6 +175,11 @@ export class SceneViewControls {
         // Keep frustum lines in sync when camera gizmo is dragged
         if (this.currentSelection.type === "camera") {
           this.esm.syncCameraFromGizmo();
+        }
+        // Re-tessellate the path curve live so it follows the pointer, rather than
+        // waiting for the debounced React config round-trip.
+        if (this.currentSelection.type === "cameraWaypoint") {
+          this.onCameraPathLiveUpdate?.(this.currentSelection.waypointIndex);
         }
       });
     }
@@ -238,11 +261,27 @@ export class SceneViewControls {
               layerIndex: ud.layerIndex as number | undefined,
               object: current,
             };
+          case "cameraWaypoint":
+            return {
+              type: "cameraWaypoint",
+              waypointIndex: ud.waypointIndex as number | undefined,
+              object: current,
+            };
         }
       }
       current = current.parent;
     }
     return null;
+  }
+
+  /**
+   * Programmatically select a scene object (used by the waypoint list, so clicking a row
+   * attaches the transform gizmo to that point). Resolves the object's own userData, so it
+   * follows exactly the same path as a real click.
+   */
+  selectObject(object: THREE.Object3D): void {
+    const info = this.resolveHit(object);
+    if (info) this.setSelection(info);
   }
 
   private setSelection(info: SelectionInfo): void {
@@ -389,6 +428,13 @@ export class SceneViewControls {
     // G/R/S hotkey — activate immediate drag mode
     if ((key === "g" || key === "r" || key === "s") && this.currentSelection.object) {
       if (key === "s" && this.currentSelection.type === "camera") return;
+      // A waypoint is a bare position — rotating or scaling one marker means nothing.
+      // The exception is R while the whole curve is selected: that rotates the curve about
+      // its centroid, which is a real operation.
+      if (this.currentSelection.type === "cameraWaypoint") {
+        if (key === "s") return;
+        if (key === "r" && !this.isCameraPathSelectAll?.()) return;
+      }
       // Wall and table are click-to-select only — no transforms
       if (this.currentSelection.type && NON_TRANSFORMABLE_TYPES.has(this.currentSelection.type)) return;
       const mode = key === "g" ? "translate" : key === "r" ? "rotate" : "scale";
@@ -418,6 +464,12 @@ export class SceneViewControls {
 
     // Escape → cancel hotkey drag or deselect
     if (key === "escape") {
+      // Cancel a curve rotate by replaying angle 0, which restores the caller's snapshot.
+      if (this.isRotatingCameraPath()) {
+        this.onCameraPathRotate?.(this.hotkeyAxisLock ?? "y", 0);
+        this.endHotkeyDrag(false);
+        return;
+      }
       if (this.activeHotkey && this.currentSelection.object) {
         // Cancel — restore original transform
         const obj = this.currentSelection.object;
@@ -468,6 +520,13 @@ export class SceneViewControls {
       // Clamp using actual bounding box so geometry can't penetrate wall/table
       if (this.currentSelection.type === "cue") this.clampCueObject(obj);
     } else if (this.activeHotkey === "r") {
+      // Whole-curve rotate: spin every waypoint's POSITION about the curve's centroid,
+      // rather than spinning one marker's own orientation (which would be a no-op visually).
+      if (this.currentSelection.type === "cameraWaypoint" && this.isCameraPathSelectAll?.()) {
+        const angle = -dy * Math.PI * 2;
+        this.onCameraPathRotate?.(this.hotkeyAxisLock ?? "y", angle);
+        return;
+      }
       // Rotate around world axis using quaternions (matches TransformControls behavior)
       const angle = -dy * Math.PI * 2;
       const axis = this.hotkeyAxisLock ?? "y";
@@ -506,9 +565,34 @@ export class SceneViewControls {
     if (this.currentSelection.type === "camera") {
       this.esm.syncCameraFromGizmo();
     }
+    if (this.currentSelection.type === "cameraWaypoint") {
+      this.onCameraPathLiveUpdate?.(this.currentSelection.waypointIndex);
+    }
+  }
+
+  /** True while an R-drag is rotating the whole curve (handled outside onObjectTransform). */
+  private isRotatingCameraPath(): boolean {
+    return (
+      this.activeHotkey === "r" &&
+      this.currentSelection.type === "cameraWaypoint" &&
+      this.isCameraPathSelectAll?.() === true
+    );
   }
 
   private endHotkeyDrag(commit: boolean): void {
+    // A curve rotate is committed by onCameraPathRotate as it goes. Firing the generic
+    // transform callback here would push the dragged gizmo's stale position into config and
+    // translate the whole curve, wiping out the rotation.
+    if (this.isRotatingCameraPath()) {
+      this.onDragEnd?.();
+      this.activeHotkey = null;
+      this.hotkeyAxisLock = null;
+      this.hotkeyDragging = false;
+      this.esm.resumeSpin();
+      if (this.transformControls) this.transformControls.enabled = true;
+      if (this.orbitControls) this.orbitControls.enabled = this._enabled;
+      return;
+    }
     if (this.hotkeyDragging && commit) {
       // Fire final transform to ensure config is fully synced before drag end
       if (this.currentSelection.object) {

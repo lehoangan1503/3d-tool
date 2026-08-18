@@ -165,7 +165,8 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
       const config = ensureFullConfig(item.template.config);
       const totalDuration = computeVideoDuration(
         config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz",
-        isCameraFixed(config.cameraStart, config.cameraEnd) ? config.fixedCameraDuration : undefined
+        isCameraFixed(config.cameraStart, config.cameraEnd, config.cameraPath) ? config.fixedCameraDuration : undefined,
+        config.cameraPath
       );
 
       // Throttle React state updates: at most every 100ms to avoid re-rendering

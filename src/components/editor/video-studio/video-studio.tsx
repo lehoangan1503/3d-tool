@@ -37,10 +37,12 @@ import {
 } from "lucide-react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager, HDRI_OPTIONS_FALLBACK } from "@/lib/three/extractor-scene-manager";
-import type { VideoStudioConfig, CameraKeyframe, CueHdriConfig, VideoRatio } from "@/types/video-studio";
+import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CameraShapeParams, CameraWaypoint, CueHdriConfig, VideoRatio } from "@/types/video-studio";
 import {
   DEFAULT_STUDIO_CONFIG,
   DEFAULT_CUE_HDRI,
+  DEFAULT_CAMERA_PATH,
+  MAX_CAMERA_WAYPOINTS,
   VIDEO_QUALITY_PRESETS,
   VIDEO_RATIO_PRESETS,
   getRecordingDimensions,
@@ -50,6 +52,18 @@ import {
   isCameraFixed,
 } from "@/types/video-studio";
 import { createDefaultHdriLayer, STUDIO_WHITE_HDRI } from "@/types/extractor";
+import {
+  applyWaypointsEuler,
+  cameraKeyframeLookingAt,
+  getWaypointsCenter,
+  getWaypointsRadius,
+  insertWaypointOnLongestSegment,
+  regenerateShape,
+  rotateWaypoints,
+  scaleWaypoints,
+  translateWaypoints,
+  trimPathToSpan,
+} from "@/lib/three/camera-path";
 import { CameraControlsPanel } from "./camera-controls-panel";
 import { CueSetupPanel } from "./cue-setup-panel";
 import { BackgroundPanel } from "./background-panel";
@@ -221,6 +235,14 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   const [transformMode, setTransformMode] = useState<"translate" | "rotate" | "scale">("translate");
   const [hotkeyAxis, setHotkeyAxis] = useState<"x" | "y" | "z" | null>(null);
   // Captured positions for display — only update on "Đặt" click, never from config changes
+  /** Whole-curve selection: green highlight + drags move every waypoint together. */
+  const [selectAllActive, setSelectAllActive] = useState(false);
+  /**
+   * Waypoints as they were when the current R-drag began. The rotate callback receives an
+   * ABSOLUTE angle each mouse-move, so it must rebuild from this snapshot rather than
+   * compounding rotations — otherwise the curve creeps and never returns on cancel.
+   */
+  const rotateSnapshotRef = useRef<CameraWaypoint[] | null>(null);
   const [capturedStart, setCapturedStart] = useState<CameraKeyframe | null>(null);
   const [capturedEnd, setCapturedEnd] = useState<CameraKeyframe | null>(null);
   // Track which section was auto-opened by selection (so we can close it on deselect)
@@ -253,6 +275,13 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   // Flag shared with the sceneViewAnimate loop to pause controls.update() during
   // recording. Avoids a competing rAF callback doing layout/transform work.
   const isRecordingRef = useRef(false);
+
+  // The SceneViewControls drag callback is created once at mount, so it must read
+  // select-all through a ref — a captured state value would always be stale.
+  const selectAllActiveRef = useRef(false);
+  useEffect(() => {
+    selectAllActiveRef.current = selectAllActive;
+  }, [selectAllActive]);
 
   // Keep a ref to config so SceneViewControls callback always reads latest
   const configRef = useRef(config);
@@ -366,6 +395,92 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     });
   }, []);
 
+  /**
+   * Un-transformed curve geometry that the panel's absolute rotation/scale fields are
+   * applied to. Rotation and scale in that panel are absolute values, not deltas, so
+   * re-applying must start from a fixed base — otherwise typing 90 twice keeps rotating.
+   * Captured when whole-curve selection is turned on.
+   */
+  const curveBaseRef = useRef<{ waypoints: CameraWaypoint[]; radius: number } | null>(null);
+
+  /**
+   * Re-capture the curve base + reset the panel to 0°/1.
+   *
+   * Any regeneration (preset switch, size slider) replaces the waypoints, which makes the
+   * previous snapshot stale — applying an absolute rotation against it would spring the
+   * curve back to the old geometry.
+   */
+  const rebaseCurveTransform = useCallback((waypoints: CameraWaypoint[]) => {
+    if (!selectAllActiveRef.current || waypoints.length === 0) return;
+    const center = getWaypointsCenter(waypoints);
+    curveBaseRef.current = {
+      waypoints: waypoints.map((w) => ({ ...w })),
+      radius: getWaypointsRadius(waypoints, center),
+    };
+    setTransformValues({
+      position: { x: center.x, y: center.y, z: center.z },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    });
+  }, []);
+
+  /**
+   * Apply the transform panel's values to the whole curve:
+   *   position — move the centroid there (translates every point)
+   *   rotation — absolute Euler about the centroid, rebuilt from the base snapshot
+   *   scale    — uniform size about the centroid, relative to the base radius
+   */
+  const applyCurveTransform = useCallback(
+    (values: {
+      position: { x: number; y: number; z: number };
+      rotation: { x: number; y: number; z: number };
+      scale: { x: number; y: number; z: number };
+    }) => {
+      const extractor = extractorRef.current;
+      const path = configRef.current.cameraPath;
+      if (!extractor || !path || path.waypoints.length === 0) return;
+
+      const base = curveBaseRef.current;
+      if (!base) return;
+      const baseCenter = getWaypointsCenter(base.waypoints);
+
+      // 1. Absolute rotation about the base centroid.
+      let next = applyWaypointsEuler(base.waypoints, baseCenter, {
+        x: THREE.MathUtils.degToRad(values.rotation.x),
+        y: THREE.MathUtils.degToRad(values.rotation.y),
+        z: THREE.MathUtils.degToRad(values.rotation.z),
+      });
+
+      // 2. Uniform scale. The three fields are kept in lockstep because a non-uniform
+      //    scale of a path is a shear the shape presets cannot round-trip; the average
+      //    lets any of the three inputs drive it.
+      const factor = (values.scale.x + values.scale.y + values.scale.z) / 3;
+      if (Math.abs(factor - 1) > 1e-6) {
+        next = scaleWaypoints(next, baseCenter, Math.max(0.01, factor));
+      }
+
+      // 3. Translate so the centroid lands on the requested position.
+      const cur = getWaypointsCenter(next);
+      next = translateWaypoints(
+        next,
+        values.position.x - cur.x,
+        values.position.y - cur.y,
+        values.position.z - cur.z
+      );
+
+      setConfig((prev) => ({
+        ...prev,
+        cameraPath: { ...(prev.cameraPath ?? DEFAULT_CAMERA_PATH), waypoints: next },
+      }));
+      extractor.applyCameraWaypointPositions(next);
+      extractor.refreshCameraPathLineFromGizmos({
+        ...configRef.current,
+        cameraPath: { ...path, waypoints: next },
+      });
+    },
+    []
+  );
+
   const applyTransformValue = useCallback(
     (axis: "x" | "y" | "z", prop: "position" | "rotation" | "scale", value: number) => {
       if (!transformValues || !sceneViewControlsRef.current) return;
@@ -373,11 +488,21 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       newValues[prop][axis] = value;
       setTransformValues(newValues);
 
+      // Whole-curve editing: the fields describe the CURVE (centroid position, absolute
+      // rotation about it, uniform size), not the one marker the gizmo happens to hold.
+      // Editing that marker would move a single point and leave the panel lying.
+      if (selectAllActiveRef.current) {
+        applyCurveTransform(newValues);
+        return;
+      }
+
       const pos = new THREE.Vector3(newValues.position.x, newValues.position.y, newValues.position.z);
       const rot = new THREE.Euler(THREE.MathUtils.degToRad(newValues.rotation.x), THREE.MathUtils.degToRad(newValues.rotation.y), THREE.MathUtils.degToRad(newValues.rotation.z));
       const scl = new THREE.Vector3(newValues.scale.x, newValues.scale.y, newValues.scale.z);
       sceneViewControlsRef.current.applyTransform(pos, rot, scl);
     },
+    // applyCurveTransform is declared below and is stable (useCallback with no deps).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [transformValues]
   );
 
@@ -505,6 +630,10 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
           // Selection change → update selection info + auto-expand transform + matching section
           (info) => {
             setSelectionInfo(info);
+            // In whole-curve mode the panel shows curve-level values, set by
+            // handleToggleSelectAll. Overwriting them with the marker's own transform would
+            // put the marker's emphasis scale and stale rotation into the fields.
+            if (info.type === "cameraWaypoint" && selectAllActiveRef.current) return;
             if (info.type && info.object) {
               const obj = info.object;
               setTransformValues({
@@ -525,6 +654,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                 wallFrame: "background",
                 tableFrame: "background",
                 hdriLight: "lights",
+                cameraWaypoint: "camera",
               };
               const matchedSection = sectionMap[info.type];
               setExpandedSections((prev) => {
@@ -555,6 +685,24 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
           },
           // Object transform → sync 3D position back to config
           (info, position, rotation, scale) => {
+            if (info.type === "cameraWaypoint" && selectAllActiveRef.current) {
+              // Whole-curve drag: report the CURVE's new centroid, keeping rotation/scale as
+              // typed. The dragged marker's own transform is not a curve property.
+              setTransformValues((prev) => {
+                const anchor = configRef.current.cameraPath?.waypoints[info.waypointIndex ?? 0];
+                const center = getWaypointsCenter(configRef.current.cameraPath?.waypoints ?? []);
+                if (!anchor) return prev;
+                return {
+                  position: {
+                    x: center.x + (position.x - anchor.x),
+                    y: center.y + (position.y - anchor.y),
+                    z: center.z + (position.z - anchor.z),
+                  },
+                  rotation: prev?.rotation ?? { x: 0, y: 0, z: 0 },
+                  scale: prev?.scale ?? { x: 1, y: 1, z: 1 },
+                };
+              });
+            } else {
             setTransformValues({
               position: { x: position.x, y: position.y, z: position.z },
               rotation: {
@@ -564,6 +712,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               },
               scale: { x: scale.x, y: scale.y, z: scale.z },
             });
+            }
             if (info.type === "camera") {
               // Sync recording camera position into config so "Lưu Mẫu" captures the current position.
               // position/rotation come from the camera gizmo, which is about to be synced to the
@@ -579,6 +728,37 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                   rotationZ: rotation.z,
                 },
               }));
+            } else if (info.type === "cameraWaypoint") {
+              // Write the dragged gizmo position back into the waypoint(s). The path line
+              // already followed the pointer live via onCameraPathLiveUpdate; this makes
+              // the change durable so it is saved with the template.
+              const index = info.waypointIndex;
+              if (index !== undefined) {
+                setConfig((prev) => {
+                  const path = prev.cameraPath;
+                  if (!path || !path.waypoints[index]) return prev;
+                  // "Select all": the dragged handle's delta shifts the entire curve, so the
+                  // shape is preserved and only its placement changes.
+                  if (selectAllActiveRef.current) {
+                    const anchor = path.waypoints[index];
+                    const waypoints = translateWaypoints(
+                      path.waypoints,
+                      position.x - anchor.x,
+                      position.y - anchor.y,
+                      position.z - anchor.z
+                    );
+                    return { ...prev, cameraPath: { ...path, waypoints } };
+                  }
+                  const waypoints = [...path.waypoints];
+                  waypoints[index] = {
+                    ...waypoints[index],
+                    x: position.x,
+                    y: position.y,
+                    z: position.z,
+                  };
+                  return { ...prev, cameraPath: { ...path, waypoints } };
+                });
+              }
             } else if (info.type === "cue") {
               // Immediately move shadow lights without waiting for the debounced config update
               extractorRef.current?.directUpdateCueShadowPosition(position.x, position.z);
@@ -684,14 +864,87 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
           // Drag end: commit final state to history
           () => {
             isDraggingRef.current = false;
+            rotateSnapshotRef.current = null;
+            // Re-base the panel: the committed geometry becomes the new zero for absolute
+            // rotation/scale, so the fields reset to 0°/1 rather than re-applying the
+            // rotation that is already baked into the waypoints.
+            if (selectAllActiveRef.current) {
+              const wps = configRef.current.cameraPath?.waypoints ?? [];
+              if (wps.length > 0) {
+                const center = getWaypointsCenter(wps);
+                curveBaseRef.current = {
+                  waypoints: wps.map((w) => ({ ...w })),
+                  radius: getWaypointsRadius(wps, center),
+                };
+                setTransformValues({
+                  position: { x: center.x, y: center.y, z: center.z },
+                  rotation: { x: 0, y: 0, z: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                });
+              }
+            }
             setHotkeyAxis(null);
             if (historyDebounceRef.current) clearTimeout(historyDebounceRef.current);
             configHistoryRef.current = [...configHistoryRef.current.slice(-4), configRef.current];
             configFutureRef.current = [];
-          }
+          },
+          // Camera waypoint drag: re-tessellate the path curve from the live gizmo positions
+          // so the orange line tracks the pointer instead of lagging behind the debounced
+          // config sync.
+          (draggedIndex) => {
+            const extractor = extractorRef.current;
+            if (!extractor) return;
+            // In select-all mode the siblings must follow the dragged handle before the
+            // line is re-tessellated, or only one sphere appears to move.
+            if (selectAllActiveRef.current && draggedIndex !== undefined) {
+              extractor.syncCameraWaypointGroupDrag(configRef.current, draggedIndex);
+            }
+            extractor.refreshCameraPathLineFromGizmos(configRef.current);
+          },
+          // Rotate the whole curve around its centroid (R + optional X/Y/Z while
+          // "select all" is on).
+          (axis, angle) => {
+            const path = configRef.current.cameraPath;
+            if (!path) return;
+            // First move of this drag — snapshot the pre-rotation geometry.
+            if (!rotateSnapshotRef.current) {
+              rotateSnapshotRef.current = path.waypoints.map((w) => ({ ...w }));
+            }
+            const base = rotateSnapshotRef.current;
+            const center = getWaypointsCenter(base);
+            const waypoints = angle === 0 ? base.map((w) => ({ ...w })) : rotateWaypoints(base, center, axis, angle);
+            setConfig((prev) => ({
+              ...prev,
+              cameraPath: { ...(prev.cameraPath ?? DEFAULT_CAMERA_PATH), waypoints },
+            }));
+            // Mirror the live angle into the transform panel so the two stay in agreement.
+            const deg = THREE.MathUtils.radToDeg(angle);
+            setTransformValues((prev) => ({
+              position: prev?.position ?? { x: center.x, y: center.y, z: center.z },
+              rotation: { x: axis === "x" ? deg : 0, y: axis === "y" ? deg : 0, z: axis === "z" ? deg : 0 },
+              scale: prev?.scale ?? { x: 1, y: 1, z: 1 },
+            }));
+            // Move the gizmos + line immediately; the debounced config sync is too slow to
+            // track a live drag.
+            extractorRef.current?.applyCameraWaypointPositions(waypoints);
+            extractorRef.current?.refreshCameraPathLineFromGizmos({
+              ...configRef.current,
+              cameraPath: { ...path, waypoints },
+            });
+          },
+          () => selectAllActiveRef.current
         );
         localSceneViewControls = controls;
         sceneViewControlsRef.current = controls;
+
+        // Waypoint gizmos are disposed and rebuilt whenever the waypoint count changes.
+        // Drop the selection first so TransformControls is never left attached to a
+        // disposed mesh (which throws on the next interaction).
+        extractor.setCameraWaypointGizmoInvalidatedHandler(() => {
+          if (sceneViewControlsRef.current?.getSelection().type === "cameraWaypoint") {
+            sceneViewControlsRef.current.deselect();
+          }
+        });
       }
 
       if (isCancelled) {
@@ -749,6 +1002,9 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       sceneViewLoopRef.current = null;
       // Dispose exactly what this effect instance created — avoids stale-ref issues
       // when the effect re-runs before the async setup completes.
+      // Clear before disposing: dispose() tears down the path gizmos, which would
+      // otherwise fire the invalidation handler against already-disposed controls.
+      localExtractor?.setCameraWaypointGizmoInvalidatedHandler(null);
       localSceneViewControls?.dispose();
       if (sceneViewControlsRef.current === localSceneViewControls) sceneViewControlsRef.current = null;
       localExtractor?.stopVideoPreview();
@@ -936,6 +1192,225 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     setCapturedEnd(kf);
   }, []);
 
+  // ── Camera path handlers ──────────────────────────────────────────────────
+
+  /** Cue centre — every shape is generated around this, never around the camera. */
+  const getCueCenter = useCallback((): THREE.Vector3 => {
+    const instances = configRef.current.cueConfig.instances;
+    const main = instances.find((i) => i.isMain) ?? instances[0];
+    return main
+      ? new THREE.Vector3(main.positionX, main.positionY, main.positionZ)
+      : new THREE.Vector3(0, 5.5, 0);
+  }, []);
+
+  /**
+   * Move the recording camera onto a waypoint and aim it per the path's lookMode.
+   * This is what makes picking a start point feel direct — the viewport immediately shows
+   * the frame the recording will open on.
+   */
+  const placeCameraAtWaypoint = useCallback(
+    (path: CameraPathConfig, index: number) => {
+      const extractor = extractorRef.current;
+      const wp = path.waypoints[index];
+      if (!extractor || !wp) return;
+      const kf = cameraKeyframeLookingAt(wp, path.lookMode, getCueCenter());
+      extractor.invalidateCameraStartKey();
+      extractor.setCameraFromKeyframe(kf);
+      setConfig((prev) => ({ ...prev, cameraStart: kf }));
+      setCapturedStart(kf);
+    },
+    [getCueCenter]
+  );
+
+  /** Turn curve mode on/off. Turning it on seeds the current shape around the cue. */
+  const handlePathEnabledChange = useCallback(
+    (enabled: boolean) => {
+      if (!enabled) {
+        extractorRef.current?.setCameraPathSelectAll(false);
+        setSelectAllActive(false);
+        setConfig((prev) => ({
+          ...prev,
+          cameraPath: { ...(prev.cameraPath ?? DEFAULT_CAMERA_PATH), enabled: false },
+        }));
+        return;
+      }
+      const prevPath = configRef.current.cameraPath ?? DEFAULT_CAMERA_PATH;
+      const shaped = regenerateShape(prevPath.shapeId, getCueCenter(), prevPath.shapeParams);
+      if (!shaped) return;
+      const next: CameraPathConfig = { ...prevPath, ...shaped, enabled: true, mode: "spline" };
+      setConfig((prev) => ({ ...prev, cameraPath: next }));
+      rebaseCurveTransform(next.waypoints);
+      placeCameraAtWaypoint(next, next.startIndex);
+    },
+    [getCueCenter, placeCameraAtWaypoint, rebaseCurveTransform]
+  );
+
+  /** Switch shape. Regenerates the whole curve around the cue at the current size. */
+  const handleApplyPathPreset = useCallback(
+    (presetId: string) => {
+      const prevPath = configRef.current.cameraPath ?? DEFAULT_CAMERA_PATH;
+      const shaped = regenerateShape(presetId, getCueCenter(), prevPath.shapeParams);
+      if (!shaped) return;
+      const next: CameraPathConfig = {
+        ...prevPath,
+        ...shaped,
+        shapeId: presetId,
+        enabled: true,
+        mode: "spline",
+        // A new shape invalidates the old picks — record the whole thing by default.
+        startIndex: 0,
+        endIndex: Math.max(0, shaped.waypoints.length - 1),
+      };
+      setConfig((prev) => ({ ...prev, cameraPath: next }));
+      rebaseCurveTransform(next.waypoints);
+      placeCameraAtWaypoint(next, next.startIndex);
+    },
+    [getCueCenter, placeCameraAtWaypoint, rebaseCurveTransform]
+  );
+
+  const handlePathChange = useCallback((patch: Partial<CameraPathConfig>) => {
+    setConfig((prev) => ({
+      ...prev,
+      cameraPath: { ...(prev.cameraPath ?? DEFAULT_CAMERA_PATH), ...patch },
+    }));
+  }, []);
+
+  /** Resize the shape — regenerates the curve so sliders reshape it live. */
+  const handleShapeParamChange = useCallback(
+    (key: keyof CameraShapeParams, value: number) => {
+      const prevPath = configRef.current.cameraPath ?? DEFAULT_CAMERA_PATH;
+      const shapeParams = { ...prevPath.shapeParams, [key]: value };
+      const shaped = regenerateShape(
+        prevPath.shapeId,
+        getCueCenter(),
+        shapeParams,
+        prevPath.startIndex,
+        prevPath.endIndex
+      );
+      if (!shaped) return;
+      setConfig((prev) => ({
+        ...prev,
+        cameraPath: { ...prevPath, ...shaped, shapeParams },
+      }));
+      rebaseCurveTransform(shaped.waypoints);
+    },
+    [getCueCenter, rebaseCurveTransform]
+  );
+
+  /** Pick the span start, and move the camera there so the opening frame is visible. */
+  const handleSetStartIndex = useCallback(
+    (index: number) => {
+      const prevPath = configRef.current.cameraPath ?? DEFAULT_CAMERA_PATH;
+      const next: CameraPathConfig = { ...prevPath, startIndex: index };
+      setConfig((prev) => ({ ...prev, cameraPath: next }));
+      placeCameraAtWaypoint(next, index);
+    },
+    [placeCameraAtWaypoint]
+  );
+
+  const handleSetEndIndex = useCallback(
+    (index: number) => {
+      const prevPath = configRef.current.cameraPath ?? DEFAULT_CAMERA_PATH;
+      const wp = prevPath.waypoints[index];
+      if (!wp) return;
+      // Keep cameraEnd in step so template saves and the duration read the right endpoint.
+      const kf = cameraKeyframeLookingAt(wp, prevPath.lookMode, getCueCenter());
+      setConfig((prev) => ({
+        ...prev,
+        cameraPath: { ...(prev.cameraPath ?? DEFAULT_CAMERA_PATH), endIndex: index },
+        cameraEnd: kf,
+      }));
+      setCapturedEnd(kf);
+    },
+    [getCueCenter]
+  );
+
+  /** Delete every waypoint outside the picked span. */
+  const handleTrimToSpan = useCallback(() => {
+    setConfig((prev) => {
+      const path = prev.cameraPath ?? DEFAULT_CAMERA_PATH;
+      return { ...prev, cameraPath: trimPathToSpan(path) };
+    });
+  }, []);
+
+  const handleAddWaypoint = useCallback(() => {
+    setConfig((prev) => {
+      const path = prev.cameraPath ?? DEFAULT_CAMERA_PATH;
+      if (path.waypoints.length >= MAX_CAMERA_WAYPOINTS) return prev;
+      const waypoints = insertWaypointOnLongestSegment(path.waypoints);
+      return {
+        ...prev,
+        cameraPath: {
+          ...path,
+          waypoints,
+          // Inserting shifts indices after the insertion point; keep the span covering
+          // the whole curve rather than silently pointing at the wrong points.
+          endIndex: Math.max(path.endIndex, waypoints.length - 1),
+        },
+      };
+    });
+  }, []);
+
+  const handleRemoveWaypoint = useCallback((id: string) => {
+    setConfig((prev) => {
+      const path = prev.cameraPath ?? DEFAULT_CAMERA_PATH;
+      const waypoints = path.waypoints.filter((w) => w.id !== id);
+      const last = Math.max(0, waypoints.length - 1);
+      return {
+        ...prev,
+        cameraPath: {
+          ...path,
+          waypoints,
+          startIndex: Math.min(path.startIndex, last),
+          endIndex: Math.min(path.endIndex, last),
+          // Fewer than two points can't be travelled — fall back to legacy placement.
+          enabled: waypoints.length >= 2 ? path.enabled : false,
+        },
+      };
+    });
+  }, []);
+
+  /** Select a waypoint's gizmo in the 3D scene so it can be dragged immediately. */
+  const handleFocusWaypoint = useCallback((index: number) => {
+    const gizmo = extractorRef.current?.getCameraWaypointGizmos()[index];
+    if (gizmo) sceneViewControlsRef.current?.selectObject(gizmo);
+  }, []);
+
+  /** Toggle whole-curve selection: green highlight, and drags move every point together. */
+  const handleToggleSelectAll = useCallback((active: boolean) => {
+    const extractor = extractorRef.current;
+    if (!extractor) return;
+    extractor.setCameraPathSelectAll(active);
+    setSelectAllActive(active);
+    // Keep the ref in step immediately — selectObject() below fires the selection callback
+    // synchronously, which needs to know we are already in whole-curve mode.
+    selectAllActiveRef.current = active;
+    if (active) {
+      const path = configRef.current.cameraPath;
+      const waypoints = path?.waypoints ?? [];
+      const center = getWaypointsCenter(waypoints);
+      // Snapshot the un-rotated geometry that the panel's absolute rotation/scale apply to.
+      curveBaseRef.current = {
+        waypoints: waypoints.map((w) => ({ ...w })),
+        radius: getWaypointsRadius(waypoints, center),
+      };
+      // Attach the transform gizmo to the first waypoint; its delta drives the whole curve.
+      const first = extractor.getCameraWaypointGizmos()[0];
+      if (first) sceneViewControlsRef.current?.selectObject(first);
+      // Show CURVE-level values, not the marker's own — the marker's rotation and its
+      // start/end emphasis scale are meaningless as curve properties.
+      setTransformValues({
+        position: { x: center.x, y: center.y, z: center.z },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      });
+    } else {
+      curveBaseRef.current = null;
+      sceneViewControlsRef.current?.deselect();
+    }
+    extractor.updateCameraPathVisuals(configRef.current);
+  }, []);
+
   const handleRecord = async () => {
     if (!extractorRef.current) return;
     if (!capturedStart || !capturedEnd) return;
@@ -978,7 +1453,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       // For fixed cameras, silently persist the current config (including
       // fixedCameraDuration) back to the selected template so "Tải xuống nhiều"
       // can read the correct duration without the user manually clicking "Lưu".
-      if (isCameraFixed(recordConfig.cameraStart, recordConfig.cameraEnd)) {
+      if (isCameraFixed(recordConfig.cameraStart, recordConfig.cameraEnd, recordConfig.cameraPath)) {
         templateSelectorRef.current?.silentSave();
       }
 
@@ -1212,7 +1687,8 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                             capturedEnd ?? config.cameraEnd,
                             config.cameraSpeed,
                             "xyz",
-                            isCameraFixed(capturedStart ?? config.cameraStart, capturedEnd ?? config.cameraEnd) ? config.fixedCameraDuration : undefined
+                            isCameraFixed(capturedStart ?? config.cameraStart, capturedEnd ?? config.cameraEnd, config.cameraPath) ? config.fixedCameraDuration : undefined,
+                            config.cameraPath
                           );
                           const elapsed = (progress / 100) * total;
                           const fmt = (s: number) => {
@@ -1465,6 +1941,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                                 <CameraControlsPanel
                                   cameraStart={capturedStart ?? config.cameraStart}
                                   cameraEnd={capturedEnd ?? config.cameraEnd}
+                                  cameraPath={config.cameraPath ?? DEFAULT_CAMERA_PATH}
                                   cameraSpeed={config.cameraSpeed}
                                   easing={config.easing}
                                   fixedCameraDuration={config.fixedCameraDuration}
@@ -1475,6 +1952,18 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                                   onFixedDurationChange={(d) => updateConfig("fixedCameraDuration", d)}
                                   onSetStart={handleSetStart}
                                   onSetEnd={handleSetEnd}
+                                  onPathEnabledChange={handlePathEnabledChange}
+                                  onApplyPathPreset={handleApplyPathPreset}
+                                  onPathChange={handlePathChange}
+                                  onShapeParamChange={handleShapeParamChange}
+                                  onSetStartIndex={handleSetStartIndex}
+                                  onSetEndIndex={handleSetEndIndex}
+                                  onTrimToSpan={handleTrimToSpan}
+                                  onAddWaypoint={handleAddWaypoint}
+                                  onRemoveWaypoint={handleRemoveWaypoint}
+                                  onFocusWaypoint={handleFocusWaypoint}
+                                  onToggleSelectAll={handleToggleSelectAll}
+                                  selectAllActive={selectAllActive}
                                   startPositionSet={capturedStart !== null}
                                   endPositionSet={capturedEnd !== null}
                                 />
@@ -1890,7 +2379,8 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                         capturedEnd,
                         config.cameraSpeed,
                         "xyz",
-                        isCameraFixed(capturedStart, capturedEnd) ? config.fixedCameraDuration : undefined
+                        isCameraFixed(capturedStart, capturedEnd, config.cameraPath) ? config.fixedCameraDuration : undefined,
+                        config.cameraPath
                       );
                       const m = Math.floor(sec / 60);
                       const s = Math.round(sec % 60);

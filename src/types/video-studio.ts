@@ -24,6 +24,158 @@ export const DEFAULT_CAMERA_END: CameraKeyframe = {
   z: 2,
 };
 
+// ── Camera Path (custom shapes: curve, circle, zigzag, …) ──
+
+/** A waypoint is a full keyframe (position + rotation) plus a stable id for React keys. */
+export interface CameraWaypoint extends CameraKeyframe {
+  id: string;
+}
+
+/** "linear" reproduces the legacy straight start→end lerp. "spline" runs the waypoint curve. */
+export type CameraPathMode = "linear" | "spline";
+
+/**
+ * Catmull-Rom parameterisation.
+ *   centripetal — no self-intersecting loops on sharp turns (best default)
+ *   chordal     — spacing-proportional, smoother through uneven point spacing
+ *   catmullrom  — uniform, honours `tension`
+ *   linear      — straight segments between points (zigzag with hard corners)
+ */
+export type CameraCurveType = "centripetal" | "chordal" | "catmullrom" | "linear";
+
+/**
+ * How the camera is oriented while travelling the path. Both modes aim at the cue; they
+ * differ only in whether the camera is allowed to tilt.
+ *
+ *   level  — the camera stays perfectly horizontal (no pitch/roll) and yaws toward the cue
+ *            axis at its OWN height, so the shot's horizon never tips. On a vertical curve
+ *            the camera rises alongside the shaft looking straight at it.
+ *   center — aim at the cue's center point, tilting up or down as needed.
+ *
+ * "interpolate" and "path" are retained only so templates saved with them keep loading;
+ * both migrate to "level".
+ */
+export type CameraLookMode = "level" | "center" | "interpolate" | "path";
+
+/** Look modes offered in the UI. The other two exist only for backward compatibility. */
+export const CAMERA_LOOK_MODES: readonly { id: CameraLookMode; label: string }[] = [
+  { id: "level",  label: "Theo từng góc điểm (luôn ngang)" },
+  { id: "center", label: "Luôn hướng center cue" },
+];
+
+/** Collapse legacy look modes onto the two supported ones. */
+export function normalizeLookMode(mode: CameraLookMode | undefined): CameraLookMode {
+  return mode === "center" ? "center" : "level";
+}
+
+/**
+ * Per-shape size controls. Every preset reads only the fields it needs, so one flat object
+ * covers all shapes without a discriminated union in saved templates.
+ */
+export interface CameraShapeParams {
+  /** Radius / half-width of the shape, in world units. Circle, spiral, figure-8. */
+  radius: number;
+  /** Height of the shape's plane above the world floor. All shapes. */
+  height: number;
+  /** How far a "cong" bows away from straight, and zigzag's lateral swing. 0–1. */
+  amplitude: number;
+  /** Number of back-and-forth segments in a zigzag. */
+  segments: number;
+  /** Turns for the spiral. */
+  turns: number;
+  /** Vertical rise across the spiral, in world units. */
+  rise: number;
+}
+
+export const DEFAULT_CAMERA_SHAPE_PARAMS: CameraShapeParams = {
+  radius: 8,
+  height: 5.5,
+  amplitude: 0.35,
+  segments: 5,
+  turns: 1.5,
+  // Tall enough that the climb reads as the dominant motion: at the default radius 8 the
+  // helix spans 16 units laterally, so rise must exceed that or it looks like a flat orbit
+  // drifting upward rather than a vertical spiral.
+  rise: 20,
+};
+
+export interface CameraPathConfig {
+  mode: CameraPathMode;
+  /**
+   * When true, the camera follows the shape curve and its start/end are chosen ON the
+   * curve. When false the studio uses the legacy two-button placement (free camera →
+   * "Đặt") and no curve exists.
+   */
+  enabled: boolean;
+  /** Which shape preset generated the current waypoints ("curve" | "circle" | …). */
+  shapeId: string;
+  /** Size controls for the active shape. */
+  shapeParams: CameraShapeParams;
+  /**
+   * Every point of the curve, in order. Unlike the earlier design these are the WHOLE
+   * path — the camera's start and end are picked from this list via startIndex/endIndex
+   * rather than living outside it. The shape is generated around the cue, independent of
+   * wherever the camera happens to be, so a circle comes out perfectly round.
+   */
+  waypoints: CameraWaypoint[];
+  /** Index into `waypoints` where the recorded move begins. */
+  startIndex: number;
+  /** Index into `waypoints` where the recorded move ends. */
+  endIndex: number;
+  curveType: CameraCurveType;
+  /** 0–1, only meaningful when curveType === "catmullrom" */
+  tension: number;
+  /** Loop the path back to the start — turns an arc into a full circle / orbit. */
+  closed: boolean;
+  lookMode: CameraLookMode;
+}
+
+export const DEFAULT_CAMERA_PATH: CameraPathConfig = {
+  mode: "linear",
+  enabled: false,
+  shapeId: "circle",
+  shapeParams: { ...DEFAULT_CAMERA_SHAPE_PARAMS },
+  waypoints: [],
+  startIndex: 0,
+  endIndex: 0,
+  curveType: "centripetal",
+  tension: 0.5,
+  closed: false,
+  lookMode: "level",
+};
+
+/** Max waypoints on a path — keeps the curve LUT and the UI list manageable. */
+export const MAX_CAMERA_WAYPOINTS = 24;
+
+/**
+ * True when the camera should follow the shape curve.
+ *
+ * Requires the toggle on AND at least two points to travel between — a single point has
+ * no direction, so it falls back to the legacy straight path.
+ */
+export function isCameraPathActive(path?: CameraPathConfig): boolean {
+  return !!path && path.enabled && path.waypoints.length >= 2;
+}
+
+/**
+ * The waypoints actually recorded: the span from startIndex to endIndex.
+ *
+ * On a closed path the span may wrap past the end of the array (e.g. start at 6, end at 2
+ * on an 8-point circle), which is what lets a user record any arc of an orbit.
+ */
+export function getCameraPathSpan(path: CameraPathConfig): CameraWaypoint[] {
+  const n = path.waypoints.length;
+  if (n === 0) return [];
+  const start = Math.max(0, Math.min(n - 1, path.startIndex));
+  const end = Math.max(0, Math.min(n - 1, path.endIndex));
+  if (start === end) return [path.waypoints[start]];
+  if (start < end) return path.waypoints.slice(start, end + 1);
+  // Wrapping span — only meaningful on a closed loop.
+  if (path.closed) return [...path.waypoints.slice(start), ...path.waypoints.slice(0, end + 1)];
+  // Open path picked backwards: walk from end to start instead of wrapping.
+  return path.waypoints.slice(end, start + 1).reverse();
+}
+
 // ── Camera Direction ──
 
 export type CameraDirection = "fixed" | "x" | "y" | "z" | "xy" | "xz" | "yz" | "xyz";
@@ -279,6 +431,9 @@ export interface VideoStudioConfig {
   cameraDirection: CameraDirection;
   cameraStart: CameraKeyframe;
   cameraEnd: CameraKeyframe;
+  /** Optional custom camera path (curve / circle / zigzag …). Absent or mode:"linear"
+   *  with no waypoints reproduces the legacy straight start→end interpolation exactly. */
+  cameraPath?: CameraPathConfig;
   cameraSpeed: number;
   lockDistance: boolean;      // Deprecated — kept for backward compatibility with saved templates
   easing: EasingConfig;
@@ -310,6 +465,7 @@ export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
   cameraDirection: "yz",
   cameraStart: { ...DEFAULT_CAMERA_START },
   cameraEnd: { ...DEFAULT_CAMERA_END },
+  cameraPath: { ...DEFAULT_CAMERA_PATH, waypoints: [] },
   cameraSpeed: 0.25,
   lockDistance: false,
   easing: { ...DEFAULT_EASING },
@@ -383,8 +539,20 @@ export function getRecordingDimensions(
 
 // ── Utility: Compute video duration from camera path ──
 
-/** Returns true when start and end positions are identical (fixed / static camera). */
-export function isCameraFixed(start: CameraKeyframe, end: CameraKeyframe): boolean {
+/**
+ * Returns true when the camera never moves (fixed / static shot).
+ *
+ * A custom path is NEVER fixed even when start === end: a *closed* path (circle, orbit,
+ * figure-8) loops back to its own start point, so comparing endpoints alone would
+ * mis-classify every circular orbit as a static shot.
+ */
+export function isCameraFixed(
+  start: CameraKeyframe,
+  end: CameraKeyframe,
+  path?: CameraPathConfig
+): boolean {
+  // A curve path is fixed only when its recorded span collapses to a single point.
+  if (isCameraPathActive(path)) return getCameraPathSpan(path!).length < 2;
   const EPS = 1e-6;
   return Math.abs(start.x - end.x) < EPS && Math.abs(start.y - end.y) < EPS && Math.abs(start.z - end.z) < EPS;
 }
@@ -408,23 +576,51 @@ export function applyDirection(
   };
 }
 
+/**
+ * Duration = path length / speed.
+ *
+ * For a custom path the length is the polyline length through every waypoint (a cheap,
+ * dependency-free approximation of the spline arc length — within a few percent for
+ * typical waypoint spacing, and it needs no THREE import so this module stays pure).
+ * The exact arc length is available from the sampler in `lib/three/camera-path.ts`;
+ * this estimate only drives the duration, so a few percent is immaterial.
+ */
 export function computeVideoDuration(
   start: CameraKeyframe,
   end: CameraKeyframe,
   cameraSpeed: number,
   direction: CameraDirection = "xyz",
-  fixedDuration?: number
+  fixedDuration?: number,
+  path?: CameraPathConfig
 ): number {
-  if (isCameraFixed(start, end) && fixedDuration !== undefined) {
+  if (isCameraFixed(start, end, path) && fixedDuration !== undefined) {
     return Math.max(3, Math.min(300, fixedDuration));
   }
-  const effectiveEnd = applyDirection(start, end, direction);
-  const dX = effectiveEnd.x - start.x;
-  const dY = effectiveEnd.y - start.y;
-  const dZ = effectiveEnd.z - start.z;
-  const pathLength = Math.sqrt(dX * dX + dY * dY + dZ * dZ);
+
+  let pathLength: number;
+  if (isCameraPathActive(path)) {
+    // Walk only the recorded span (startIndex → endIndex), which is what the camera
+    // actually travels — the untrimmed remainder of a shape must not inflate duration.
+    const pts = getCameraPathSpan(path!);
+    pathLength = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const dX = pts[i].x - pts[i - 1].x;
+      const dY = pts[i].y - pts[i - 1].y;
+      const dZ = pts[i].z - pts[i - 1].z;
+      pathLength += Math.sqrt(dX * dX + dY * dY + dZ * dZ);
+    }
+  } else {
+    const effectiveEnd = applyDirection(start, end, direction);
+    const dX = effectiveEnd.x - start.x;
+    const dY = effectiveEnd.y - start.y;
+    const dZ = effectiveEnd.z - start.z;
+    pathLength = Math.sqrt(dX * dX + dY * dY + dZ * dZ);
+  }
+
   const duration = pathLength / Math.max(0.01, cameraSpeed);
-  return Math.max(3, Math.min(60, duration));
+  // Cap matches the fixed-camera cap (300s): a long spiral at low speed easily exceeds
+  // 60s, and a lower cap would make the speed slider stop having any effect.
+  return Math.max(3, Math.min(300, duration));
 }
 
 // ── Utility: Parse easing to interpolation function ──
@@ -502,6 +698,20 @@ export function createCueInstance(offsetX = 2): CueInstance {
   };
 }
 
+// ── Factory: Create a camera waypoint ──
+
+export function createCameraWaypoint(kf: CameraKeyframe): CameraWaypoint {
+  return {
+    id: crypto.randomUUID(),
+    x: kf.x,
+    y: kf.y,
+    z: kf.z,
+    rotationX: kf.rotationX ?? 0,
+    rotationY: kf.rotationY ?? 0,
+    rotationZ: kf.rotationZ ?? 0,
+  };
+}
+
 // ── Migration: Upgrade old SurfaceConfig to new format ──
 
 /** Migrate a SurfaceConfig from baseColor format to texturePreset format */
@@ -527,6 +737,12 @@ export function ensureFullConfig(partial: Partial<VideoStudioConfig>): VideoStud
     cueConfig: { ...d.cueConfig, ...partial.cueConfig },
     cameraStart: { ...d.cameraStart, ...partial.cameraStart },
     cameraEnd: { ...d.cameraEnd, ...partial.cameraEnd },
+    cameraPath: {
+      ...DEFAULT_CAMERA_PATH,
+      ...partial.cameraPath,
+      shapeParams: { ...DEFAULT_CAMERA_SHAPE_PARAMS, ...partial.cameraPath?.shapeParams },
+      waypoints: partial.cameraPath?.waypoints?.map(w => ({ ...w })) ?? [],
+    },
     easing: { ...d.easing, ...partial.easing },
     wallSurface: { ...d.wallSurface, ...partial.wallSurface },
     tableSurface: { ...d.tableSurface, ...partial.tableSurface },
@@ -565,6 +781,27 @@ export function migrateVideoStudioConfig(config: VideoStudioConfig): VideoStudio
   // Migrate old configs without cueHdri
   if (!migrated.cueHdri) {
     migrated.cueHdri = { ...DEFAULT_CUE_HDRI };
+  }
+  // Templates saved before custom camera paths existed have no cameraPath — default to
+  // the legacy straight line so their recordings are unchanged.
+  if (!migrated.cameraPath) {
+    migrated.cameraPath = { ...DEFAULT_CAMERA_PATH, waypoints: [] };
+  } else {
+    const wps = migrated.cameraPath.waypoints?.map(w => ({ ...w })) ?? [];
+    migrated.cameraPath = {
+      ...DEFAULT_CAMERA_PATH,
+      ...migrated.cameraPath,
+      shapeParams: { ...DEFAULT_CAMERA_SHAPE_PARAMS, ...migrated.cameraPath.shapeParams },
+      waypoints: wps,
+      // Templates from the first path implementation have no start/end indices; default to
+      // the full span so their recorded move is unchanged.
+      startIndex: migrated.cameraPath.startIndex ?? 0,
+      endIndex: migrated.cameraPath.endIndex ?? Math.max(0, wps.length - 1),
+      // That implementation had no `enabled` flag — infer it from whether waypoints exist.
+      enabled: migrated.cameraPath.enabled ?? wps.length >= 2,
+      // Retired look modes ("interpolate" / "path") collapse onto "level".
+      lookMode: normalizeLookMode(migrated.cameraPath.lookMode),
+    };
   }
   // Migrate old "hd" quality to "2k"
   if ((migrated.quality as string) === "hd") {

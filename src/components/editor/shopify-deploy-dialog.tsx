@@ -57,6 +57,7 @@ import { createClient } from "@/lib/supabase/client";
 import { parseProductTitle } from "@/lib/shopify/parse-title";
 import { getProductCodeFormat, isValidProductCode } from "@/lib/shopify/product-code";
 import { useDeployTemplates } from "@/components/shopify/use-deploy-templates";
+import { PriceTablesEditor } from "@/components/shopify/price-tables-editor";
 import { priceVariants } from "@/lib/shopify/pricing";
 import { ShaftConfigEditor } from "@/components/editor/shaft-config-editor";
 import { buildPreviewPose } from "@/lib/shopify/preview-pose";
@@ -474,7 +475,11 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     template: priceTemplate,
     pricing: activePricing,
     loading: loadingPriceTemplates,
+    canEdit: canEditPriceTables,
+    reload: reloadPriceTables,
   } = useDeployTemplates(deployTemplateId || null);
+  // Admin-only inline editor, so prices can be fixed without leaving the deploy.
+  const [priceEditorOpen, setPriceEditorOpen] = useState(false);
 
   // ── Selection ──
   const [selectedGroupId, setSelectedGroupId] = useState("");
@@ -1552,36 +1557,6 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-2">
         {/* ── LEFT: Assets + Product config ── */}
         <div className="overflow-y-auto p-6 space-y-6 border-r border-white/10">
-          {/* 0. Price template — just a named price table. */}
-          <Section title="0. Bảng giá">
-            <p className="text-[11px] text-white/40 -mt-1">
-              Chọn bảng giá dùng cho lần đăng này. Tạo/sửa bảng giá ở Admin → Bảng giá.
-            </p>
-            <Select
-              value={deployTemplateId || undefined}
-              onValueChange={(v) => {
-                // "__none__" is the explicit "no template" pick — Select cannot
-                // use "" as an item value.
-                setDeployTemplateId(v === "__none__" ? "" : v);
-              }}
-            >
-              <SelectTrigger className="border-white/20 bg-white/5 text-white">
-                <SelectValue
-                  placeholder={loadingPriceTemplates ? "Đang tải..." : "-- Bảng giá mặc định --"}
-                />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">-- Bảng giá mặc định --</SelectItem>
-                {priceTemplates.map((t) => (
-                  <SelectItem key={t.id} value={t.id}>
-                    {t.name}
-                    {t.vendor ? ` · ${t.vendor}` : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Section>
-
           {/* 1. Image group */}
           <Section title="1. Nhóm ảnh mockup">
             <p className="text-[11px] text-white/40 -mt-1">
@@ -2003,7 +1978,47 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
                 </div>
               )}
 
-              {/* Price preview — from the (brand x store) price table */}
+              {/* Price table picker — sits with the variant preview it drives.
+                  Admins get an inline editor; everyone else just picks. */}
+              <div>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <Label className="text-white/70 text-xs">Bảng giá</Label>
+                  {canEditPriceTables && (
+                    <button
+                      type="button"
+                      onClick={() => setPriceEditorOpen(true)}
+                      className="text-[11px] text-blue-400 hover:text-blue-300"
+                    >
+                      + Thêm / Sửa bảng giá
+                    </button>
+                  )}
+                </div>
+                <Select
+                  value={deployTemplateId || undefined}
+                  onValueChange={(v) => {
+                    // "__none__" is the explicit "no table" pick — Select cannot
+                    // use "" as an item value.
+                    setDeployTemplateId(v === "__none__" ? "" : v);
+                  }}
+                >
+                  <SelectTrigger className="border-white/20 bg-white/5 text-white">
+                    <SelectValue
+                      placeholder={loadingPriceTemplates ? "Đang tải..." : "-- Bảng giá mặc định --"}
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">-- Bảng giá mặc định --</SelectItem>
+                    {priceTemplates.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}
+                        {t.vendor ? ` · ${t.vendor}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Price preview — from the picked price table */}
               <div className="rounded-lg bg-white/5 border border-white/10 p-3 text-xs text-white/50 space-y-1">
                 <div className="flex items-center justify-between mb-2 gap-2">
                   <p className="text-white/30 font-medium">Biến thể sẽ được tạo:</p>
@@ -2499,6 +2514,44 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
           </Section>
         </div>
       </div>
+
+      {/* Price table editor — the same controls as Admin → Bảng giá, so prices
+          can be added/fixed mid-deploy without losing the form. */}
+      {priceEditorOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-3xl max-h-[85vh] overflow-y-auto rounded-xl border border-white/10 bg-[#0f1115] p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-semibold text-white">Bảng giá</h3>
+              <button
+                type="button"
+                onClick={() => setPriceEditorOpen(false)}
+                className="text-white/50 hover:text-white"
+                aria-label="Đóng"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <PriceTablesEditor
+              initialSelectedId={deployTemplateId || null}
+              onChanged={(selectedId) => {
+                // Refresh the picker, and follow the editor's selection so a
+                // newly-created table is immediately the one being deployed.
+                void reloadPriceTables();
+                setDeployTemplateId(selectedId ?? "");
+              }}
+            />
+            <div className="mt-5 flex justify-end">
+              <Button
+                variant="outline"
+                onClick={() => setPriceEditorOpen(false)}
+                className="border-white/20 text-white/70 hover:text-white"
+              >
+                Đóng
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {skillModalOpen && (
         <SkillModal

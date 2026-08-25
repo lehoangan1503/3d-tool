@@ -3,7 +3,7 @@
  * up_web_python/app/services/trello_shopify_service.py (process_card).
  *
  * After a product is created we:
- *   1. Map laser-shaft variant images (Yes → Mockup-Web-5, others → Mockup-Web-1)
+ *   1. Map laser-shaft variant images (Yes → 5th gallery image, others → 1st)
  *   2. Promote Details/Package images to product metafields (custom.*), then
  *      delete those temporary images from the gallery
  *   3. Upsert product-level metafields that are inlined on first create but not

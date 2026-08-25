@@ -20,12 +20,15 @@ interface UseDeployTemplatesResult {
   pricing: ResolvedPricing;
   /** Vendor for the selected template, or null to keep the builder default. */
   vendor: string | null;
+  /** True when the signed-in user may create/edit/delete price tables (admin). */
+  canEdit: boolean;
   reload: () => Promise<void>;
 }
 
 export function useDeployTemplates(templateId: string | null): UseDeployTemplatesResult {
   const [templates, setTemplates] = useState<DeployTemplate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [canEdit, setCanEdit] = useState(false);
 
   /**
    * Fetch the list. `showSpinner` is false for the initial mount fetch so the
@@ -37,8 +40,9 @@ export function useDeployTemplates(templateId: string | null): UseDeployTemplate
     try {
       const res = await fetch("/api/shopify/deploy-templates");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { items?: DeployTemplate[] };
+      const data = (await res.json()) as { items?: DeployTemplate[]; canEdit?: boolean };
       setTemplates(data.items ?? []);
+      setCanEdit(Boolean(data.canEdit));
     } catch (error) {
       // A failed load must not block deploying: with no templates the dialog
       // falls back to the built-in default prices.
@@ -67,5 +71,5 @@ export function useDeployTemplates(templateId: string | null): UseDeployTemplate
 
   const vendor = useMemo(() => resolveVendor(template), [template]);
 
-  return { templates, loading, template, pricing, vendor, reload };
+  return { templates, loading, template, pricing, vendor, canEdit, reload };
 }

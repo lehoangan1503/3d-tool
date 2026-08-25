@@ -26,8 +26,8 @@ import {
   findTexturePack,
   loadPBRTexturePack,
 } from './studio-background';
-import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig, CueHdriConfig } from '@/types/video-studio';
-import { computeVideoDuration, createEasingFunction, applyDirection, isCameraFixed, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI, getRecordingDimensions } from '@/types/video-studio';
+import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig, CueHdriConfig, CornerFillConfig } from '@/types/video-studio';
+import { computeVideoDuration, createEasingFunction, applyDirection, isCameraFixed, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI, DEFAULT_CORNER_FILL, getRecordingDimensions } from '@/types/video-studio';
 import { compositeSurfaceFrames, preloadFrameImages } from './background-compositor';
 import { applyBumperEmissiveShaderMask, applyLogoToExistingMaterial } from './leather-material';
 import { isRubberMaterial, isTopCapMaterial, isTopCapFaceMaterial, isCylinderLeatherMaterial } from './leather-config';
@@ -576,16 +576,13 @@ export class ExtractorSceneManager {
     if (this.backdrop) this.backdrop.visible = visible;
     if (this.tableSurface) this.tableSurface.visible = visible;
     if (this.studioCornerFill) {
-      // When restoring visibility, respect whether an image frame is active
+      // When restoring visibility, re-apply the normal corner-fill rule.
       if (!visible) {
         this.studioCornerFill.visible = false;
+      } else if (this.studioConfigRef) {
+        this.syncCornerFillVisibility(this.studioConfigRef);
       } else {
-        const config = this.studioConfigRef;
-        const hasImageFrame = config ? (
-          config.wallSurface.frames.some(f => f.enabled && f.imageUrl) ||
-          config.tableSurface.frames.some(f => f.enabled && f.imageUrl)
-        ) : false;
-        this.studioCornerFill.visible = !hasImageFrame;
+        this.studioCornerFill.visible = true;
       }
     }
     for (const p of this.wallFramePlanes) p.visible = visible;
@@ -2468,6 +2465,10 @@ export class ExtractorSceneManager {
     );
 
     // Single L-shaped shadow receiver spanning wall + table seamlessly
+    const cornerFill = { ...DEFAULT_CORNER_FILL, ...config.cornerFill };
+    // radius 0 tells the shadow mesh to build a sharp 90 degree corner. Shadows still land
+    // on both faces; they simply break at the junction instead of sweeping around a cove.
+    const cornerRadius = cornerFill.enabled ? cornerFill.radius : 0;
     if (config.shadow.enabled) {
       const wallZ = -5.5;
       const shadowMesh = createLShapedShadowMesh(
@@ -2476,7 +2477,8 @@ export class ExtractorSceneManager {
         tableDepth + 2,        // floor depth
         tableY,                // corner Y (where wall meets table)
         wallZ,                 // wall Z position
-        config.shadow.intensity
+        config.shadow.intensity,
+        cornerRadius
       );
       // Offsets baked into vertices — no position adjustment needed
       this.shadowFloor = shadowMesh;
@@ -2485,37 +2487,196 @@ export class ExtractorSceneManager {
       // Restore saved manual transform for shadow floor (if any)
       this.applyShadowPlaneTransform(config);
 
-      // Curved corner fill: provides backing geometry for the shadow mesh's curved section.
-      // Material matches the surface mode: MeshStandardMaterial when studio lights affect
-      // surfaces (so the curve blends with wall/table), MeshBasicMaterial (pure white, unlit)
-      // when surface light is disabled.
-      this.studioCornerFill = createCornerFillMesh(34, tableY, wallZ, '#ffffff');
-      if (!config.surfaceLightDisabled) {
-        // Swap to MeshStandardMaterial so studio lights affect the curve the same as wall/table.
+      if (cornerFill.enabled) {
+        // Curved corner fill: backing geometry for the shadow mesh's curved section, and a
+        // visible part of the set in its own right. Its UVs continue the wall plane's UV
+        // space (see createCornerFillMesh), so cloning the wall/table material makes the
+        // texture flow across the cove at the surface's own tiling with no seam.
+        this.studioCornerFill = createCornerFillMesh(
+          34, tableY, wallZ, cornerFill.color, cornerRadius,
+          24,      // wall plane height — matches the PlaneGeometry(34, 24) backdrop
+          tableY   // wall plane bottom edge (backdrop y=10, height 24 -> bottom at -2)
+        );
         (this.studioCornerFill.material as THREE.Material).dispose();
-        this.studioCornerFill.material = new THREE.MeshStandardMaterial({
-          color: 0xffffff,
-          roughness: 0.35,
-          metalness: 0,
-          side: THREE.FrontSide,
-          envMap: surfaceEnv,
-          envMapIntensity: 0.6,
-        });
+        this.studioCornerFill.material = this.buildCornerFillMaterial(
+          cornerFill, config, wallMeshMat, surfaceEnv
+        );
+        this.studioCornerFill.userData = { type: 'corner-fill' };
+        this.scene.add(this.studioCornerFill);
       }
-      this.studioCornerFill.userData = { type: 'corner-fill' };
-      this.scene.add(this.studioCornerFill);
     }
 
-    // Hide corner fill when any surface frame with an image is active
-    if (this.studioCornerFill) {
-      const hasImageFrame =
-        config.wallSurface.frames.some(f => f.enabled && f.imageUrl) ||
-        config.tableSurface.frames.some(f => f.enabled && f.imageUrl);
-      this.studioCornerFill.visible = !hasImageFrame;
-    }
+    this.syncCornerFillVisibility(config);
 
     // Setup cue instances
     this.setupCueInstances(config.cueConfig);
+  }
+
+  /**
+   * Decide whether the corner fill should be drawn.
+   *
+   * It used to be hidden whenever ANY frame carried an image, because a white cove would
+   * cut a bright band through a photographic backdrop. That is no longer necessary for the
+   * wall: the cove now inherits the covering wall frame's own material, so it continues the
+   * image instead of interrupting it.
+   *
+   * It still hides for a *table* image frame. The cove follows the wall, so against a
+   * photographic table it would be the one surface that does not match, and there is no
+   * single material that can belong to both at once.
+   */
+  private syncCornerFillVisibility(config: VideoStudioConfig): void {
+    if (!this.studioCornerFill) return;
+    const tableHasImage = config.tableSurface.frames.some(f => f.enabled && f.imageUrl);
+    this.studioCornerFill.visible = !tableHasImage;
+  }
+
+  /**
+   * Pick the wall frame that defines what the wall actually looks like.
+   *
+   * The wall's visible appearance is often NOT its own material: a full-coverage frame
+   * plane sits 0.01 in front of the backdrop and covers it entirely. The cove must match
+   * what the viewer sees, so it follows that frame rather than the bare wall material.
+   *
+   * "Covering" means the frame spans the whole wall (>= 1.0 in both axes), is centred, is
+   * opaque, and has its background layer on. A small decorative frame fails this test and
+   * the cove correctly falls back to the wall material underneath.
+   */
+  private findCoveringWallFrame(surface: SurfaceConfig): BackgroundFrame | null {
+    const enabled = surface.frames.filter(f => f.enabled);
+    // Later frames draw on top, so the topmost covering frame wins.
+    for (let i = enabled.length - 1; i >= 0; i--) {
+      const f = enabled[i];
+      if (f.width < 1 || f.height < 1) continue;
+      if ((f.opacity ?? 1) < 1) continue;
+      if (Math.abs(f.x - 0.5) > 0.01 || Math.abs(f.y - 0.5) > 0.01) continue;
+      if ((f.rotation ?? 0) % 360 !== 0) continue;
+      // A frame whose background layer is off shows the wall through it.
+      const isLegacy = !!f.type;
+      if (isLegacy) {
+        if (f.type !== 'color' && f.type !== 'gradient' && f.type !== 'image') continue;
+      } else if (f.backgroundEnabled === false && !f.imageUrl) {
+        continue;
+      }
+      return f;
+    }
+    return null;
+  }
+
+  /**
+   * Resolve the flat colour a frame paints, when it paints one.
+   *
+   * Returns null for image or gradient frames — those have no single colour, so the cove
+   * takes a different route (it borrows the frame plane's own texture instead).
+   */
+  private resolveFrameFlatColor(frame: BackgroundFrame): string | null {
+    if (frame.type) {
+      if (frame.type === 'color' && frame.color) return frame.color;
+      return null;
+    }
+    if (frame.imageUrl) return null;
+    if (frame.backgroundEnabled === false) return null;
+    if (frame.backgroundType === 'gradient') return null;
+    return frame.backgroundColor ?? '#1a1a1a';
+  }
+
+  /**
+   * Build the material for the curved corner fill so it reads as a continuation of the
+   * wall rather than a separate strip.
+   *
+   * The cove has no styling of its own — it always mirrors the wall's *visible* surface,
+   * resolved in this order:
+   *
+   *  1. A full-coverage wall frame painting a flat colour (the common case: the "Khung nền"
+   *     background-colour layer). The cove takes that exact colour, and critically copies
+   *     the frame material's `toneMapped` flag — an unlit frame plane bypasses tone
+   *     mapping, so a tone-mapped cove would render the same hex as a visibly different
+   *     shade. Matching the flag is what makes #1a1a1a actually look like #1a1a1a.
+   *  2. A full-coverage frame painting an image or gradient. The cove clones that frame
+   *     plane's material, so the same artwork continues around the curve.
+   *  3. No covering frame — clone the bare wall material (PBR texture pack or solid),
+   *     whose UV space the cove's UVs already continue.
+   *
+   * `cornerFill.color` is used only as a last-resort tint when nothing else resolves.
+   */
+  private buildCornerFillMaterial(
+    cornerFill: CornerFillConfig,
+    config: VideoStudioConfig,
+    wallMeshMat: THREE.Material,
+    surfaceEnv: THREE.Texture | null
+  ): THREE.Material {
+    const coveringFrame = this.findCoveringWallFrame(config.wallSurface);
+
+    if (coveringFrame) {
+      const framePlane = this.wallFramePlanes.find(
+        m => m.userData?.frameId === coveringFrame.id
+      );
+      const frameMat = framePlane?.material as FramePlaneMaterial | undefined;
+      const flatColor = this.resolveFrameFlatColor(coveringFrame);
+
+      if (flatColor) {
+        // Flat-colour frame: reproduce the colour AND the frame's tone-mapping behaviour.
+        if (frameMat instanceof THREE.MeshStandardMaterial) {
+          const mat = new THREE.MeshStandardMaterial({
+            color: new THREE.Color(flatColor),
+            roughness: frameMat.roughness,
+            metalness: frameMat.metalness,
+            side: THREE.FrontSide,
+          });
+          if (surfaceEnv) {
+            mat.envMap = surfaceEnv;
+            mat.envMapIntensity = frameMat.envMapIntensity;
+          }
+          mat.toneMapped = frameMat.toneMapped;
+          return mat;
+        }
+        const mat = new THREE.MeshBasicMaterial({
+          color: new THREE.Color(flatColor),
+          side: THREE.FrontSide,
+        });
+        // Unlit frame planes set toneMapped = false so colours display as authored.
+        mat.toneMapped = frameMat?.toneMapped ?? false;
+        return mat;
+      }
+
+      if (frameMat) {
+        // Image / gradient frame: clone the plane's material so the artwork continues.
+        // The frame's canvas texture spans the plane's full UV 0..1, and the cove's UVs
+        // continue the wall plane's space, so the image carries around the curve.
+        const clone = frameMat.clone();
+        clone.side = THREE.FrontSide;
+        // Frame planes are transparent with depthWrite off for layering; the cove is
+        // solid geometry that must write depth or the shadow mesh renders through it.
+        clone.transparent = false;
+        clone.opacity = 1;
+        clone.depthWrite = true;
+        clone.needsUpdate = true;
+        return clone;
+      }
+    }
+
+    // No covering frame — mirror the bare wall material.
+    const clone = wallMeshMat.clone();
+    clone.side = THREE.FrontSide;
+
+    if (clone instanceof THREE.MeshStandardMaterial) {
+      // Displacement would push the cove off its arc and reopen the seam it exists to close.
+      clone.displacementMap = null;
+      clone.displacementScale = 0;
+      if (!config.surfaceLightDisabled) {
+        clone.envMap = surfaceEnv;
+        clone.envMapIntensity = 0.6;
+      }
+      clone.needsUpdate = true;
+    } else if (clone instanceof THREE.MeshBasicMaterial) {
+      // surfaceLightDisabled path: the wall is a flat white-immune material. Honour an
+      // explicit cornerFill tint if one was set, otherwise stay identical to the wall.
+      if (cornerFill.color && cornerFill.color !== '#ffffff') {
+        clone.color = new THREE.Color(cornerFill.color);
+      }
+      clone.needsUpdate = true;
+    }
+
+    return clone;
   }
 
   /**
@@ -2824,12 +2985,7 @@ export class ExtractorSceneManager {
     }
 
     // Always sync corner fill visibility from latest config
-    if (this.studioCornerFill) {
-      const hasImageFrame =
-        config.wallSurface.frames.some(f => f.enabled && f.imageUrl) ||
-        config.tableSurface.frames.some(f => f.enabled && f.imageUrl);
-      this.studioCornerFill.visible = !hasImageFrame;
-    }
+    this.syncCornerFillVisibility(config);
   }
 
   /** Start animated preview for Video Studio (cue positioned + camera at start) */
@@ -2915,13 +3071,7 @@ export class ExtractorSceneManager {
     // Sync frame plane positions/scales from config
     this.updateFramePlaneTransforms(config);
 
-    // Hide the curved corner fill when any surface frame with an image is active
-    if (this.studioCornerFill) {
-      const hasImageFrame =
-        config.wallSurface.frames.some(f => f.enabled && f.imageUrl) ||
-        config.tableSurface.frames.some(f => f.enabled && f.imageUrl);
-      this.studioCornerFill.visible = !hasImageFrame;
-    }
+    this.syncCornerFillVisibility(config);
 
     // Apply shadow settings
     this.updateShadowFromConfig(config);
@@ -3009,13 +3159,17 @@ export class ExtractorSceneManager {
     const targets: Array<{ mesh: THREE.Mesh | null; roughness?: number }> = [
       { mesh: this.backdrop, roughness: config.wallSurface.roughness },
       { mesh: this.tableSurface, roughness: config.tableSurface.roughness },
-      // Corner fill curve must match surface tint so it blends seamlessly with wall/table.
-      { mesh: this.studioCornerFill },
+      // The corner fill always mirrors the wall, so it takes the wall's roughness — a cove
+      // with a different sheen reads as a separate strip even at the identical colour.
+      { mesh: this.studioCornerFill, roughness: config.wallSurface.roughness },
     ];
 
     for (const { mesh, roughness } of targets) {
       if (!mesh) continue;
-      const mat = mesh.material as THREE.MeshStandardMaterial;
+      // The corner fill can be a MeshBasicMaterial (unlit wall / unlit frame), which has
+      // no envMap and must not be touched here.
+      if (!(mesh.material instanceof THREE.MeshStandardMaterial)) continue;
+      const mat = mesh.material;
       mat.envMap = surfaceEnv;
       mat.envMapIntensity = 0.6;
       mat.needsUpdate = true;

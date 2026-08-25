@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * Price table manager.
+ * Price table manager — shared by the admin page and the deploy dialog's
+ * "sửa bảng giá" modal, so both show exactly the same controls.
  *
  * Each row is a named price table. "Global" holds the prices that used to be
  * hardcoded; add more (Uni, Novera, ...) and edit their numbers. The deploy
@@ -93,10 +94,20 @@ function draftToPricing(form: FormState): DeployPricing {
   return out;
 }
 
-export function DeployTemplatesEditor() {
+interface PriceTablesEditorProps {
+  /** Preselect this table when opening (the one picked in the deploy dialog). */
+  initialSelectedId?: string | null;
+  /**
+   * Called after any successful create/edit/delete so the opener can refresh its
+   * own copy of the list. Receives the id that is now selected (null if deleted).
+   */
+  onChanged?: (selectedId: string | null) => void;
+}
+
+export function PriceTablesEditor({ initialSelectedId = null, onChanged }: PriceTablesEditorProps = {}) {
   const [templates, setTemplates] = useState<DeployTemplate[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState<string>("");
+  const [selectedId, setSelectedId] = useState<string>(initialSelectedId ?? "");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -161,6 +172,7 @@ export function DeployTemplatesEditor() {
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       await load(false);
       if (data.item) setSelectedId(data.item.id);
+      onChanged?.(data.item?.id ?? null);
       setMessage(`Đã tạo bảng giá "${name}".`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Tạo bảng giá thất bại.");
@@ -187,6 +199,7 @@ export function DeployTemplatesEditor() {
       const data = (await res.json()) as { item?: DeployTemplate; error?: string };
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       await load(false);
+      onChanged?.(selected.id);
       setMessage("Đã lưu bảng giá.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Lưu thất bại.");
@@ -210,6 +223,7 @@ export function DeployTemplatesEditor() {
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       setSelectedId("");
       await load(false);
+      onChanged?.(null);
       setMessage("Đã xoá bảng giá.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Xoá thất bại.");

@@ -37,7 +37,8 @@ import {
 } from "lucide-react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager, HDRI_OPTIONS_FALLBACK } from "@/lib/three/extractor-scene-manager";
-import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CameraShapeParams, CameraWaypoint, CueHdriConfig, VideoRatio } from "@/types/video-studio";
+import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CameraShapeParams, CameraWaypoint, CueHdriConfig, VideoRatio, CornerFillConfig } from "@/types/video-studio";
+import { DEFAULT_CORNER_FILL } from "@/types/video-studio";
 import type { StudioEnvironmentAsset, StudioEnvironmentConfig } from "@/types/studio-environment";
 import { normalizeEnvironmentConfig } from "@/types/studio-environment";
 import { EnvironmentPanel } from "./environment-panel";
@@ -372,6 +373,25 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
 
   const updateConfig = useCallback(<K extends keyof VideoStudioConfig>(key: K, value: VideoStudioConfig[K]) => {
     setConfig((prev) => ({ ...prev, [key]: value }));
+  }, []);
+
+  /**
+   * Corner fillet settings, with defaults filled in.
+   *
+   * Templates saved before the fillet was configurable have no `cornerFill` block; merging
+   * over the defaults reproduces their previous look (enabled, 0.8 radius) rather than
+   * dropping the cove out of an existing scene.
+   */
+  const cornerFill: CornerFillConfig = useMemo(
+    () => ({ ...DEFAULT_CORNER_FILL, ...config.cornerFill }),
+    [config.cornerFill]
+  );
+
+  const updateCornerFill = useCallback((patch: Partial<CornerFillConfig>) => {
+    setConfig((prev) => ({
+      ...prev,
+      cornerFill: { ...DEFAULT_CORNER_FILL, ...prev.cornerFill, ...patch },
+    }));
   }, []);
 
   /**
@@ -1147,6 +1167,24 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       ].join(":")
     )
     .join("|");
+  /**
+   * Whether a wall frame *covers* the wall, which decides where the corner fill takes its
+   * material from. Size/position/opacity normally skip the rebuild (they are applied live
+   * by updateFramePlaneTransforms), but the cove's material is baked at setup, so dragging
+   * a frame across the coverage threshold has to trigger one.
+   */
+  const wallFrameCoverageKey = config.wallSurface.frames
+    .map((f) =>
+      [
+        f.id,
+        f.enabled ? 1 : 0,
+        f.width >= 1 && f.height >= 1 ? 1 : 0,
+        Math.abs(f.x - 0.5) <= 0.01 && Math.abs(f.y - 0.5) <= 0.01 ? 1 : 0,
+        (f.opacity ?? 1) >= 1 ? 1 : 0,
+        (f.rotation ?? 0) % 360 === 0 ? 1 : 0,
+      ].join(":")
+    )
+    .join("|");
   const tableFrameTextureKey = config.tableSurface.frames
     .map((f) =>
       [
@@ -1205,6 +1243,11 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     // eslint-disable-next-line react-hooks/exhaustive-deps
     JSON.stringify(config.hdriConfig.layers.map((l) => l.hdriType)),
     config.shadow.enabled,
+    // The fillet is baked into the shadow receiver + a dedicated mesh at setup time, so
+    // every field here needs a scene rebuild rather than a live material tweak.
+    cornerFill.enabled,
+    cornerFill.radius,
+    wallFrameCoverageKey,
     config.cueConfig.instances.length,
     config.hdriConfig.layers.length,
     config.surfaceLightDisabled,
@@ -2446,6 +2489,48 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                                     max={5}
                                     step={0.2}
                                   />
+                                </div>
+
+                                {/* Curved corner fillet between wall and table. It exists so the
+                                    shadow sweeps across the junction instead of breaking at a hard
+                                    edge, so it lives with the shadow controls. */}
+                                <div className="pt-2 border-t border-border/30 space-y-3">
+                                  <div className="flex items-center gap-2">
+                                    <Checkbox
+                                      id="corner-fill-enabled"
+                                      checked={cornerFill.enabled}
+                                      onCheckedChange={(checked) =>
+                                        updateCornerFill({ enabled: checked === true })
+                                      }
+                                      className="h-3.5 w-3.5"
+                                    />
+                                    <Label
+                                      htmlFor="corner-fill-enabled"
+                                      className="text-xs font-medium cursor-pointer"
+                                    >
+                                      Bo góc tường / bàn
+                                    </Label>
+                                  </div>
+                                  <p className="text-[10px] leading-relaxed text-muted-foreground">
+                                    {cornerFill.enabled
+                                      ? "Bóng đổ mượt, liền mạch qua chỗ giao tường và bàn. Vật liệu tự đồng bộ theo tường."
+                                      : "Góc vuông sắc — bóng vẫn đổ trên cả tường và bàn, nhưng gãy khúc đúng tại đường giao."}
+                                  </p>
+
+                                  {cornerFill.enabled && (
+                                    <div className="space-y-1.5">
+                                      <Label className="text-xs text-muted-foreground">
+                                        Bán kính bo — {cornerFill.radius.toFixed(2)}
+                                      </Label>
+                                      <Slider
+                                        value={[cornerFill.radius]}
+                                        onValueChange={([v]) => updateCornerFill({ radius: v })}
+                                        min={0.1}
+                                        max={3}
+                                        step={0.05}
+                                      />
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             )}

@@ -428,6 +428,35 @@ export const DEFAULT_CUE_HDRI: CueHdriConfig = {
   intensity: 1.0,
 };
 
+/**
+ * Curved corner fillet ("cyclorama" cove) between wall and table.
+ *
+ * The fillet exists so the cue's shadow sweeps smoothly across the wall/table junction
+ * instead of breaking at a hard 90 degree edge. Because it is real geometry it also has
+ * to *look* like part of the set, so it has no appearance of its own: the scene manager
+ * always derives its material from whatever the wall visibly shows — a covering
+ * background frame's colour or image if there is one, otherwise the wall material.
+ * There is deliberately no material picker; a cove that can disagree with the wall is
+ * the bug this replaced.
+ */
+export interface CornerFillConfig {
+  /** When false the fillet mesh is removed and the shadow receiver uses a sharp corner. */
+  enabled: boolean;
+  /** Fillet radius in scene units. Larger = wider, softer cove. */
+  radius: number;
+  /**
+   * Last-resort tint, used only when the wall itself is the flat unlit white surface
+   * (`surfaceLightDisabled`) and no covering frame resolves. Not exposed in the UI.
+   */
+  color: string;
+}
+
+export const DEFAULT_CORNER_FILL: CornerFillConfig = {
+  enabled: true,
+  radius: 0.8,
+  color: "#ffffff",
+};
+
 export interface VideoStudioConfig {
   cueConfig: CueConfig;
   cameraDirection: CameraDirection;
@@ -453,6 +482,9 @@ export interface VideoStudioConfig {
   /** When true, wall and table surfaces use a flat MeshBasicMaterial (pure white) that is
    *  completely unaffected by studio lights / env map. Matches Simulator Studio behaviour. */
   surfaceLightDisabled?: boolean;
+  /** Curved wall/table corner fillet. Absent on legacy templates — treated as the default
+   *  (enabled, wall material) so existing saved scenes keep their current look. */
+  cornerFill?: CornerFillConfig;
   /** Output aspect ratio for recording. Defaults to "16:9". */
   videoRatio?: VideoRatio;
   /** Duration (seconds) used when camera start and end positions are identical (fixed camera).
@@ -488,6 +520,7 @@ export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
   shadow: { enabled: true, intensity: 0.35, blur: 4, softness: 0.5, offsetX: 0, offsetY: 0 },
   hdriFile: "ferndale_studio_07_2k.hdr",
   surfaceLightDisabled: true,
+  cornerFill: { ...DEFAULT_CORNER_FILL },
   videoRatio: "16:9",
   fixedCameraDuration: 10,
 };
@@ -516,6 +549,7 @@ export const DEFAULT_STUDIO_CONFIG_V2: VideoStudioConfig = {
   cueHdri: { ...DEFAULT_CUE_HDRI },
   shadow: { enabled: true, intensity: 0.35, blur: 4, softness: 0.5, offsetX: 0, offsetY: 0 },
   surfaceLightDisabled: false,
+  cornerFill: { ...DEFAULT_CORNER_FILL },
   environment: {
     ...DEFAULT_STUDIO_ENVIRONMENT,
     groundProjection: { ...DEFAULT_STUDIO_ENVIRONMENT.groundProjection },
@@ -797,6 +831,7 @@ export function ensureFullConfig(partial: Partial<VideoStudioConfig>): VideoStud
     cueHdri: { ...d.cueHdri, ...partial.cueHdri },
     shadow: { ...d.shadow, ...partial.shadow },
     surfaceLightDisabled: partial.surfaceLightDisabled ?? d.surfaceLightDisabled,
+    cornerFill: { ...DEFAULT_CORNER_FILL, ...partial.cornerFill },
     videoRatio: partial.videoRatio ?? d.videoRatio,
     fixedCameraDuration: partial.fixedCameraDuration ?? d.fixedCameraDuration,
     // Preserved so V2 templates keep their environment; left undefined for V1 configs.
@@ -807,6 +842,9 @@ export function ensureFullConfig(partial: Partial<VideoStudioConfig>): VideoStud
 /** Migrate a full VideoStudioConfig from old format */
 export function migrateVideoStudioConfig(config: VideoStudioConfig): VideoStudioConfig {
   const migrated = { ...config };
+  // Templates saved before the corner fillet was configurable get the defaults, which
+  // reproduce the old hardcoded behaviour (enabled, 0.8 radius) but now follow the wall.
+  migrated.cornerFill = { ...DEFAULT_CORNER_FILL, ...config.cornerFill };
   // V2 templates saved before a field was added get the missing defaults backfilled.
   if (migrated.environment) {
     migrated.environment = normalizeEnvironmentConfig(migrated.environment);

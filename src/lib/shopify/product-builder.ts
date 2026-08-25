@@ -527,9 +527,9 @@ export interface ShopifyProductPayload {
     breadcrumbCollection: string | null;
     /** Gallery position → custom metafield key (Details/Package images). */
     imageMetafields: ImageMetafieldRef[];
-    /** Gallery position of the "Mockup-Web-1" image (laser shaft = No / default). */
+    /** Gallery position of the 1st gallery image (laser shaft = No / default). */
     laserShaftDefaultImagePosition: number | null;
-    /** Gallery position of the "Mockup-Web-5" image (laser shaft = Yes). */
+    /** Gallery position of the 5th gallery image (laser shaft = Yes). */
     laserShaftImagePosition: number | null;
     /** Product-level metafields (custom_text, surface_slots, surface_image, shaft_config).
      *  Inlined on create, but the update-in-place PUT does not carry
@@ -673,17 +673,18 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
   let laserShaftImagePosition: number | null = null;
   let pos = 1;
 
-  // Gallery images first, tracking the laser-shaft default (Mockup-Web-1) and
-  // toggled (Mockup-Web-5) positions for later variant-image mapping.
+  // Gallery images first, in the exact incoming (drag) order. The laser-shaft
+  // variant images are picked BY POSITION in that order — 1st gallery image for
+  // "No", 5th for "Yes" — not by filename, so renaming a render never changes
+  // which image a variant shows.
+  const LASER_DEFAULT_SLOT = 1;
+  const LASER_ENGRAVED_SLOT = 5;
+  let gallerySlot = 0;
   for (const img of galleryImages) {
-    const stem = imageStem(img.name);
     images.push({ src: img.url, alt: title, position: pos });
-    if (laserShaftDefaultImagePosition === null && /^Mockup-Web-1$/i.test(stem)) {
-      laserShaftDefaultImagePosition = pos;
-    }
-    if (laserShaftImagePosition === null && /^Mockup-Web-5(?:-.+)?$/i.test(stem)) {
-      laserShaftImagePosition = pos;
-    }
+    gallerySlot++;
+    if (gallerySlot === LASER_DEFAULT_SLOT) laserShaftDefaultImagePosition = pos;
+    if (gallerySlot === LASER_ENGRAVED_SLOT) laserShaftImagePosition = pos;
     pos++;
   }
 

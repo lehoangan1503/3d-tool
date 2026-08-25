@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tags } from "lucide-react";
-import { DeployTemplatesEditor } from "./templates-editor";
+import { PriceTablesEditor } from "@/components/shopify/price-tables-editor";
 
 export default async function AdminDeployTemplatesPage() {
   const supabase = await createClient();
@@ -27,7 +27,7 @@ export default async function AdminDeployTemplatesPage() {
           &quot;Global&quot; là bảng giá mặc định đang dùng. Tạo thêm bảng giá (Uni, Novera...) và sửa
           số cho từng bảng; khi deploy chọn bảng nào thì sản phẩm ăn giá bảng đó.
         </p>
-        <DeployTemplatesEditor />
+        <PriceTablesEditor />
       </CardContent>
     </Card>
   );

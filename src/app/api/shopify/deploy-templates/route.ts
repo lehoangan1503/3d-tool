@@ -16,10 +16,23 @@ import type { ShopifyVersionName } from "@/types/product";
 async function requireDeployRole() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { error: "Unauthorized", status: 401 as const, user: null };
+  if (!user) return { error: "Unauthorized", status: 401 as const, user: null, isToolAdmin: false };
   const { isToolAdmin, isMode } = await getSessionRole();
-  if (!isToolAdmin && !isMode) return { error: "Forbidden", status: 403 as const, user: null };
-  return { error: null, status: 200 as const, user };
+  if (!isToolAdmin && !isMode) {
+    return { error: "Forbidden", status: 403 as const, user: null, isToolAdmin: false };
+  }
+  return { error: null, status: 200 as const, user, isToolAdmin };
+}
+
+/**
+ * Only admins may create/edit/delete price tables — "mode" users deploy with
+ * them but must not change what anything is priced at. Enforced on every write
+ * below, and surfaced on GET so the UI can hide the controls.
+ */
+function requireAdmin(gate: { isToolAdmin: boolean }) {
+  return gate.isToolAdmin
+    ? null
+    : NextResponse.json({ error: "Chỉ admin mới sửa được bảng giá." }, { status: 403 });
 }
 
 const VERSIONS: readonly ShopifyVersionName[] = ["Standard", "Premium", "Pro", "Lux"] as const;
@@ -89,7 +102,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ item });
     }
 
-    return NextResponse.json({ items: await listDeployTemplates() });
+    return NextResponse.json({ items: await listDeployTemplates(), canEdit: gate.isToolAdmin });
   } catch (error) {
     console.error("GET /api/shopify/deploy-templates error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
@@ -103,6 +116,9 @@ export async function POST(request: Request) {
     if (gate.error || !gate.user) {
       return NextResponse.json({ error: gate.error }, { status: gate.status });
     }
+
+    const denied = requireAdmin(gate);
+    if (denied) return denied;
 
     const body = (await request.json()) as DeployTemplateInput;
     const name = body.name?.trim();
@@ -140,6 +156,9 @@ export async function PUT(request: Request) {
   try {
     const gate = await requireDeployRole();
     if (gate.error) return NextResponse.json({ error: gate.error }, { status: gate.status });
+
+    const denied = requireAdmin(gate);
+    if (denied) return denied;
 
     const body = (await request.json()) as DeployTemplateInput & { id?: string };
     const id = body.id?.trim();
@@ -180,6 +199,9 @@ export async function DELETE(request: Request) {
   try {
     const gate = await requireDeployRole();
     if (gate.error) return NextResponse.json({ error: gate.error }, { status: gate.status });
+
+    const denied = requireAdmin(gate);
+    if (denied) return denied;
 
     const body = (await request.json()) as { id?: string };
     const id = body.id?.trim();

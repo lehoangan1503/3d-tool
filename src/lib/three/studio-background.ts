@@ -423,7 +423,8 @@ export function createLShapedShadowMesh(
   floorDepth: number,
   cornerY: number,
   wallZ: number,
-  opacity: number = 0.25
+  opacity: number = 0.25,
+  cornerRadius: number = 0.8
 ): THREE.Mesh {
   const hw = wallWidth / 2;
   const floorFrontZ = wallZ + floorDepth;
@@ -431,9 +432,11 @@ export function createLShapedShadowMesh(
   // Z-fighting offsets to sit slightly in front of base surfaces
   const surfaceOff = 0.01;
   
-  // Curved corner parameters (cyclorama-style smooth transition)
-  const cornerRadius = 0.8;  // Radius of the curved corner section
-  const cornerSegments = 8;  // Number of segments in the curve
+  // Curved corner parameters (cyclorama-style smooth transition).
+  // radius 0 collapses the cove into a sharp 90 degree corner: the wall face runs all the
+  // way down to cornerY, the floor face starts at wallZ, and the curve loop emits nothing.
+  // Shadows still land on both faces, they just break at the junction instead of sweeping.
+  const cornerSegments = cornerRadius > 0 ? 8 : 0;
   
   // Calculate positions with offset
   const wallFaceZ = wallZ + surfaceOff;
@@ -522,31 +525,51 @@ export function createLShapedShadowMesh(
 }
 
 /**
- * Curved corner fill mesh that backs the L-shaped shadow mesh's curved section.
- * Without this, the shadow on the curved section appears as a floating dark arc
- * because no solid surface geometry exists at mid-curve positions.
- * Uses MeshBasicMaterial (unlit) so it stays the wall color regardless of HDRI.
- * Both junctions (wall top, table bottom) are white-on-white so z-fighting is invisible.
+ * Curved corner fill mesh ("cove") that backs the L-shaped shadow mesh's curved section.
+ *
+ * Without this, the shadow on the curved section appears as a floating dark arc because no
+ * solid surface geometry exists at mid-curve positions.
+ *
+ * The mesh carries UVs that *continue the wall's own UV space downwards*. The wall plane is
+ * `wallPlaneHeight` world units tall spanning v = 0..1 with v = 0 at its bottom edge
+ * (world y = `wallPlaneBottomY`), so one world unit of height is 1 / wallPlaneHeight of v.
+ * The cove's wall end sits at y = cornerY + radius, i.e. v = (cornerY + radius -
+ * wallPlaneBottomY) / wallPlaneHeight, and its arc length runs down from there. With
+ * RepeatWrapping on the wall's PBR maps the wall texture flows over the cove at the same
+ * scale with no visible seam or stretch — which is what lets the cove share the wall's
+ * material outright.
+ *
+ * U spans 0..1 across the width, matching the wall plane, so horizontal tiling lines up too.
  */
 export function createCornerFillMesh(
   wallWidth: number,
   cornerY: number,
   wallZ: number,
-  color: THREE.Color | string = '#ffffff'
+  color: THREE.Color | string = '#ffffff',
+  cornerRadius: number = 0.8,
+  wallPlaneHeight: number = 24,
+  wallPlaneBottomY: number = cornerY
 ): THREE.Mesh {
   const hw = wallWidth / 2;
-  const cornerRadius = 0.8;
   const cornerSegments = 8;
 
   const positions: number[] = [];
   const normals: number[] = [];
+  const uvs: number[] = [];
 
   const centerZ = wallZ + cornerRadius;
   const centerY = cornerY + cornerRadius;
 
+  // Arc length of the quarter circle, expressed in the wall's v units.
+  const arcV = (cornerRadius * (Math.PI / 2)) / wallPlaneHeight;
+  // v of the cove's wall end — where the cove tangentially meets the wall plane.
+  const wallEndV = (centerY - wallPlaneBottomY) / wallPlaneHeight;
+
   for (let i = 0; i < cornerSegments; i++) {
-    const angle0 = (i / cornerSegments) * (Math.PI / 2);
-    const angle1 = ((i + 1) / cornerSegments) * (Math.PI / 2);
+    const t0 = i / cornerSegments;
+    const t1 = (i + 1) / cornerSegments;
+    const angle0 = t0 * (Math.PI / 2);
+    const angle1 = t1 * (Math.PI / 2);
 
     const y0 = centerY - cornerRadius * Math.cos(angle0);
     const z0 = centerZ - cornerRadius * Math.sin(angle0);
@@ -558,15 +581,25 @@ export function createCornerFillMesh(
     const ny1 = Math.cos(angle1);
     const nz1 = Math.sin(angle1);
 
+    // angle = pi/2 is the wall end of the arc (v = wallEndV, tangent to the wall plane);
+    // angle = 0 is the floor end. t runs floor -> wall, so v walks up to wallEndV.
+    const v0 = wallEndV - (1 - t0) * arcV;
+    const v1 = wallEndV - (1 - t1) * arcV;
+
     positions.push(-hw, y0, z0,  hw, y0, z0,  hw, y1, z1);
     positions.push(-hw, y0, z0,  hw, y1, z1, -hw, y1, z1);
     normals.push(0, ny0, nz0,  0, ny0, nz0,  0, ny1, nz1);
     normals.push(0, ny0, nz0,  0, ny1, nz1,  0, ny1, nz1);
+    uvs.push(0, v0,  1, v0,  1, v1);
+    uvs.push(0, v0,  1, v1,  0, v1);
   }
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
   geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normals), 3));
+  geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+  // aoMap / lightMap read uv2 in three.js — mirror uv so a pack with an AO map still shades.
+  geometry.setAttribute('uv1', new THREE.BufferAttribute(new Float32Array(uvs), 2));
 
   const material = new THREE.MeshBasicMaterial({
     color: typeof color === 'string' ? new THREE.Color(color) : color,

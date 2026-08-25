@@ -188,6 +188,8 @@ export function EditorClient({
   });
   const [showImageExtractor, setShowImageExtractor] = useState(false);
   const [showVideoExtractor, setShowVideoExtractor] = useState(false);
+  /** Video Studio V2 — records the cue inside a real 3D room / HDRI space. */
+  const [showVideoStudioV2, setShowVideoStudioV2] = useState(false);
   const [showShopifyDeploy, setShowShopifyDeploy] = useState(false);
   const [cloning, setCloning] = useState(false);
 
@@ -670,6 +672,18 @@ export function EditorClient({
           <Button variant="ghost" size="icon" onClick={() => setShowVideoExtractor(true)} title="Quay video" className="h-8 w-8 sm:h-10 sm:w-10">
             <Video className="h-4 w-4 sm:h-5 sm:w-5" />
           </Button>
+          {/* <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setShowVideoStudioV2(true)}
+            title="Quay video V2 (không gian 3D thật)"
+            className="h-8 w-8 sm:h-10 sm:w-10 relative"
+          >
+            <Video className="h-4 w-4 sm:h-5 sm:w-5" />
+            <span className="absolute bottom-0.5 right-0.5 text-[9px] font-bold leading-none text-primary">
+              2
+            </span>
+          </Button> */}
           <Button
             variant="ghost"
             size="sm"
@@ -1806,6 +1820,14 @@ export function EditorClient({
         onClose={() => setShowImageExtractor(false)}
       />
       <VideoStudio sceneManager={sceneManager} productName={product.name} productId={product.id} open={showVideoExtractor} onClose={() => setShowVideoExtractor(false)} />
+      <VideoStudio
+        variant="v2"
+        sceneManager={sceneManager}
+        productName={product.name}
+        productId={product.id}
+        open={showVideoStudioV2}
+        onClose={() => setShowVideoStudioV2(false)}
+      />
       {showShopifyDeploy && canDeploy && (
         <ShopifyDeployDialog
           product={product}

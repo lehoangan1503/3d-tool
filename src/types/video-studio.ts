@@ -1,4 +1,6 @@
 import type { HdriLayer } from "./extractor";
+import type { StudioEnvironmentConfig } from "./studio-environment";
+import { DEFAULT_STUDIO_ENVIRONMENT, normalizeEnvironmentConfig } from "./studio-environment";
 import { createDefaultHdriLayer, STUDIO_WHITE_HDRI } from "./extractor";
 
 // ── Camera Keyframes (start and end) ──
@@ -458,6 +460,14 @@ export interface VideoStudioConfig {
   fixedCameraDuration?: number;
   /** @deprecated Unified HDRI now used. Wall/table use envMapIntensity on SurfaceConfig. */
   surfaceHdri?: { enabled: boolean; hdriFile: string; rotationX: number; rotationY: number; intensity: number };
+  /**
+   * Video Studio V2 — real 3D environment (360 degree HDRI or GLB room).
+   *
+   * Presence of this field is what selects V2: when set, the scene manager skips the V1
+   * flat wall + table planes and builds a real surrounding space instead. Absent on every
+   * V1 config and V1 saved template, so V1 behaviour is bit-for-bit unchanged.
+   */
+  environment?: StudioEnvironmentConfig;
 }
 
 export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
@@ -481,6 +491,43 @@ export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
   videoRatio: "16:9",
   fixedCameraDuration: 10,
 };
+
+/**
+ * Default config for Video Studio V2.
+ *
+ * Identical to V1 except that it carries an `environment` block — which is what makes the
+ * scene manager build a real 3D space instead of the flat wall + table — and turns off
+ * `surfaceLightDisabled`, since the "unlit pure white surface" trick exists only to keep
+ * the fake V1 set neutral and would fight the room's real lighting.
+ */
+export const DEFAULT_STUDIO_CONFIG_V2: VideoStudioConfig = {
+  ...DEFAULT_STUDIO_CONFIG,
+  cueConfig: {
+    ...DEFAULT_CUE_CONFIG,
+    instances: DEFAULT_CUE_CONFIG.instances.map(i => ({ ...i })),
+  },
+  cameraStart: { ...DEFAULT_CAMERA_START },
+  cameraEnd: { ...DEFAULT_CAMERA_END },
+  cameraPath: { ...DEFAULT_CAMERA_PATH, waypoints: [] },
+  easing: { ...DEFAULT_EASING },
+  wallSurface: { ...DEFAULT_WALL_SURFACE },
+  tableSurface: { ...DEFAULT_TABLE_SURFACE },
+  hdriConfig: { layers: [createDefaultHdriLayer(STUDIO_WHITE_HDRI)] },
+  cueHdri: { ...DEFAULT_CUE_HDRI },
+  shadow: { enabled: true, intensity: 0.35, blur: 4, softness: 0.5, offsetX: 0, offsetY: 0 },
+  surfaceLightDisabled: false,
+  environment: {
+    ...DEFAULT_STUDIO_ENVIRONMENT,
+    groundProjection: { ...DEFAULT_STUDIO_ENVIRONMENT.groundProjection },
+    shadowCatcher: { ...DEFAULT_STUDIO_ENVIRONMENT.shadowCatcher },
+    roomTransform: { ...DEFAULT_STUDIO_ENVIRONMENT.roomTransform },
+  },
+};
+
+/** True when a config drives the V2 (real 3D environment) studio. */
+export function isStudioV2(config: VideoStudioConfig): boolean {
+  return !!config.environment;
+}
 
 // ── Studio Template (DB record) ──
 
@@ -752,12 +799,18 @@ export function ensureFullConfig(partial: Partial<VideoStudioConfig>): VideoStud
     surfaceLightDisabled: partial.surfaceLightDisabled ?? d.surfaceLightDisabled,
     videoRatio: partial.videoRatio ?? d.videoRatio,
     fixedCameraDuration: partial.fixedCameraDuration ?? d.fixedCameraDuration,
+    // Preserved so V2 templates keep their environment; left undefined for V1 configs.
+    environment: partial.environment ?? d.environment,
   };
 }
 
 /** Migrate a full VideoStudioConfig from old format */
 export function migrateVideoStudioConfig(config: VideoStudioConfig): VideoStudioConfig {
   const migrated = { ...config };
+  // V2 templates saved before a field was added get the missing defaults backfilled.
+  if (migrated.environment) {
+    migrated.environment = normalizeEnvironmentConfig(migrated.environment);
+  }
   migrated.wallSurface = migrateSurfaceConfig(
     config.wallSurface,
     DEFAULT_WALL_SURFACE.texturePreset,

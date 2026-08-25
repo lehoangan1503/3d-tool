@@ -45,12 +45,29 @@ const TRANSFORMABLE_TYPES = new Set([
 /** Types that cannot be transformed at all (no gizmo, no G/R/S hotkeys) */
 const NON_TRANSFORMABLE_TYPES = new Set(["wall", "table"]);
 
+/** Axis-aligned limits the cue is confined to while dragging. */
+export interface CueClampBounds {
+  xMin: number;
+  xMax: number;
+  yMin: number;
+  yMax: number;
+  zMin: number;
+  zMax: number;
+}
+
 export class SceneViewControls {
   private orbitControls: OrbitControls | null = null;
   private transformControls: TransformControls | null = null;
   private mouseDownX = 0;
   private mouseDownY = 0;
   private isDisposed = false;
+
+  /**
+   * Bounding box the cue is confined to. Defaults to the V1 studio surface bounds.
+   * Video Studio V2 sets this to `null` so the cue can move freely inside a real
+   * 3D room instead of being pinned to the fake wall/table planes.
+   */
+  private cueBounds: CueClampBounds | null = { ...CUE_BOUNDS };
 
   private raycaster = new THREE.Raycaster();
   private mouse = new THREE.Vector2();
@@ -648,17 +665,31 @@ export class SceneViewControls {
    * regardless of scale or rotation — the cue surface stops exactly at the boundary.
    */
   private clampCueObject(obj: THREE.Object3D): void {
+    // Video Studio V2 places the cue inside a real 3D room / HDRI environment, where the
+    // V1 wall-and-table bounds are meaningless. Setting `cueBounds = null` frees the cue.
+    if (!this.cueBounds) return;
+    const bounds = this.cueBounds;
+
     // Make sure the world matrix is current before measuring
     obj.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(obj);
     if (box.isEmpty()) return;
 
     // Push the pivot far enough that the nearest surface edge clears each boundary
-    if (box.min.y < CUE_BOUNDS.yMin) obj.position.y += CUE_BOUNDS.yMin - box.min.y;
-    if (box.min.z < CUE_BOUNDS.zMin) obj.position.z += CUE_BOUNDS.zMin - box.min.z;
-    if (box.max.z > CUE_BOUNDS.zMax) obj.position.z -= box.max.z - CUE_BOUNDS.zMax;
-    if (box.min.x < CUE_BOUNDS.xMin) obj.position.x += CUE_BOUNDS.xMin - box.min.x;
-    if (box.max.x > CUE_BOUNDS.xMax) obj.position.x -= box.max.x - CUE_BOUNDS.xMax;
+    if (box.min.y < bounds.yMin) obj.position.y += bounds.yMin - box.min.y;
+    if (box.min.z < bounds.zMin) obj.position.z += bounds.zMin - box.min.z;
+    if (box.max.z > bounds.zMax) obj.position.z -= box.max.z - bounds.zMax;
+    if (box.min.x < bounds.xMin) obj.position.x += bounds.xMin - box.min.x;
+    if (box.max.x > bounds.xMax) obj.position.x -= box.max.x - bounds.xMax;
+  }
+
+  /**
+   * Replace the cue drag limits. Pass `null` to remove clamping entirely, which is what
+   * Video Studio V2 does — inside a real room the cue is positioned freely and the
+   * V1 wall/table planes it used to be clamped against no longer exist.
+   */
+  setCueBounds(bounds: CueClampBounds | null): void {
+    this.cueBounds = bounds ? { ...bounds } : null;
   }
 
   private handleMouseDown(e: MouseEvent) {

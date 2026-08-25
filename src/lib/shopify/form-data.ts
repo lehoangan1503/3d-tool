@@ -6,6 +6,15 @@ export interface ShopifyDeployRequest {
   productId: string;
   /** Which Shopify store to deploy to. Omitted → the default store. */
   storeId?: string;
+  /**
+   * Which price template prices this product. Omitted/null → the built-in
+   * default price table.
+   */
+  deployTemplateId?: string | null;
+  /** Mockup image group used for this deploy (recorded per store). */
+  imageGroupId?: string | null;
+  /** Video template used for this deploy (recorded per store). */
+  videoTemplateId?: string | null;
   productCode: string;
   title: string;
   description: string;
@@ -65,6 +74,7 @@ export function buildFormData(body: ShopifyDeployRequest): ShopifyFormData {
     skillIds = [],
     shaftConfig = null,
     previewPose = null,
+    deployTemplateId = null,
   } = body;
 
   const collectionList = (collections ?? "")
@@ -111,5 +121,8 @@ export function buildFormData(body: ShopifyDeployRequest): ShopifyFormData {
     skillIds,
     shaftConfig,
     previewPose,
+    // Remembered so reopening the dialog lands on the brand this product was
+    // last deployed/saved with, instead of silently repricing it.
+    deployTemplateId: deployTemplateId?.trim() || null,
   };
 }

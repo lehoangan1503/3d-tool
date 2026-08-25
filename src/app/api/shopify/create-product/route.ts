@@ -16,6 +16,8 @@ import { resolveShaftConfig } from "@/lib/shopify/global-shaft-config";
 import { withStore, activeStore } from "@/lib/shopify/store-context";
 import { getStore } from "@/lib/shopify/stores";
 import { getProductCodeFormat } from "@/lib/shopify/product-code";
+import { getDeployTemplateForDeploy } from "@/lib/shopify/deploy-templates";
+import { resolvePricing, resolveVendor } from "@/lib/shopify/pricing";
 import { parseProductTitle } from "@/lib/shopify/parse-title";
 import type { PreviewPose, ShaftConfig, SurfaceSlotsConfig, ThreeJSSettingsJson } from "@/types/product";
 
@@ -75,6 +77,9 @@ export async function POST(request: Request) {
       aiModel = "",
       manualTags = [],
       skillIds = [],
+      deployTemplateId = null,
+      imageGroupId = null,
+      videoTemplateId = null,
     } = body;
     const hasRequestSurfaceSlots =
       Object.prototype.hasOwnProperty.call(rawBody, "surfaceSlots") ||
@@ -190,6 +195,13 @@ export async function POST(request: Request) {
     const ownShaftConfig = hasRequestShaftConfig ? requestShaftConfig ?? null : productRow.shaft_config ?? null;
     const resolvedShaftConfig = await resolveShaftConfig(ownShaftConfig, Boolean(laserShaft));
 
+    // The picked price template supplies the price table and vendor. No template
+    // = the builder's built-in defaults, i.e. the prices that were hardcoded
+    // before this layer existed.
+    const deployTemplate = await getDeployTemplateForDeploy(deployTemplateId);
+    const resolvedPricing = resolvePricing(deployTemplate?.pricing);
+    const resolvedVendor = resolveVendor(deployTemplate);
+
     const payload = buildShopifyProduct({
       productCode: resolvedCode.toLowerCase(),
       productType: productRow.type,
@@ -220,6 +232,8 @@ export async function POST(request: Request) {
       textureType: productRow.texture_type ?? null,
       color: productRow.color ?? null,
       threejsSettings,
+      pricing: resolvedPricing,
+      vendor: resolvedVendor,
     });
 
     // Build the full form snapshot to persist for later edit / re-deploy.
@@ -298,6 +312,11 @@ export async function POST(request: Request) {
           admin_url: adminUrl,
           storefront_url: storefrontUrl,
           title: result.title,
+          // Record what THIS store's deploy used, so reopening the dialog on
+          // this store restores the same price table + mockup + video.
+          deploy_template_id: deployTemplate?.id ?? null,
+          image_group_id: imageGroupId,
+          video_template_id: videoTemplateId,
         })
         .eq("id", existing.id);
       if (updateError) console.error("Failed to update shopify_deployment:", updateError.message);
@@ -312,6 +331,9 @@ export async function POST(request: Request) {
           admin_url: adminUrl,
           storefront_url: storefrontUrl,
           title: result.title,
+          deploy_template_id: deployTemplate?.id ?? null,
+          image_group_id: imageGroupId,
+          video_template_id: videoTemplateId,
           created_by: user.id,
         });
       if (insertError) {

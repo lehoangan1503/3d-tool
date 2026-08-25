@@ -56,6 +56,8 @@ import { StoreSwitcher, useStore } from "@/components/shopify/store-switcher";
 import { createClient } from "@/lib/supabase/client";
 import { parseProductTitle } from "@/lib/shopify/parse-title";
 import { getProductCodeFormat, isValidProductCode } from "@/lib/shopify/product-code";
+import { useDeployTemplates } from "@/components/shopify/use-deploy-templates";
+import { priceVariants } from "@/lib/shopify/pricing";
 import { ShaftConfigEditor } from "@/components/editor/shaft-config-editor";
 import { buildPreviewPose } from "@/lib/shopify/preview-pose";
 
@@ -444,6 +446,13 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
         const dep = (json?.deployment ?? null) as ShopifyDeploymentSummary | null;
         setDeployment(dep);
         setConnected(Boolean(dep?.shopify_product_id));
+        // Restore what THIS store's last deploy used — price table, mockup image
+        // group, video template — so switching stores shows that store's own
+        // setup instead of the previously-viewed store's.
+        const storeTemplateId = dep?.deploy_template_id ?? dep?.form_data?.deployTemplateId ?? null;
+        if (storeTemplateId) setDeployTemplateId(storeTemplateId);
+        if (dep?.image_group_id) setSelectedGroupId(dep.image_group_id);
+        if (dep?.video_template_id) setSelectedTemplateId(dep.video_template_id);
       })
       .catch(() => {});
     return () => { active = false; };
@@ -453,6 +462,19 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
   const [templates, setTemplates] = useState<VideoTemplateItem[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(true);
   const [loadingTemplates, setLoadingTemplates] = useState(true);
+
+  // ── Price template ──
+  // A named price table (Global / Uni / Novera / ...). Picking one prices this
+  // deploy, which is what lets one store carry several brands at several prices.
+  const [deployTemplateId, setDeployTemplateId] = useState<string>(
+    () => deployment?.deploy_template_id ?? prefill?.deployTemplateId ?? "",
+  );
+  const {
+    templates: priceTemplates,
+    template: priceTemplate,
+    pricing: activePricing,
+    loading: loadingPriceTemplates,
+  } = useDeployTemplates(deployTemplateId || null);
 
   // ── Selection ──
   const [selectedGroupId, setSelectedGroupId] = useState("");
@@ -1139,6 +1161,11 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       return {
         productId: product.id,
         storeId: storeId ?? undefined,
+        // The price table used for this deploy. Empty = built-in defaults.
+        deployTemplateId: deployTemplateId || null,
+        // Recorded per store so reopening on this store restores the same setup.
+        imageGroupId: selectedGroupId || null,
+        videoTemplateId: selectedTemplateId || null,
         productCode: productCode.trim(),
         title: title.trim(),
         description,
@@ -1171,6 +1198,9 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       shaftConfig,
       groupRefs,
       storeId,
+      deployTemplateId,
+      selectedGroupId,
+      selectedTemplateId,
       productCode,
       title,
       description,
@@ -1360,7 +1390,10 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       const res = await fetch("/api/shopify/create-product", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productId: product.id }),
+        // storeId is required: without it the route falls back to the DEFAULT
+        // store and would delete that store's product while another store is
+        // selected in the dialog.
+        body: JSON.stringify({ productId: product.id, storeId: storeId ?? undefined }),
       });
       const data = (await res.json()) as { success?: boolean; error?: string };
       if (!res.ok) throw new Error(data.error ?? "Xóa sản phẩm thất bại");
@@ -1375,7 +1408,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     } finally {
       setDeleting(false);
     }
-  }, [product.id, deployment, onDeploymentChange]);
+  }, [product.id, storeId, deployment, onDeploymentChange]);
 
   const toggleVersion = (v: Version) => {
     setVersions((prev) => (prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v]));
@@ -1430,15 +1463,16 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       .sort((a, b) => a.value.localeCompare(b.value));
   })();
 
-  // Prices preview
-  const baseImageAdd = customImage ? 20 : 0;
-  const textPaidAdd = customTextMode === "paid" ? 20 : 0;
-  const PRICES: Record<string, number> = {
-    Standard: 154.5 + baseImageAdd + textPaidAdd,
-    Premium: 229.5 + baseImageAdd + textPaidAdd,
-    Pro: 299.5 + baseImageAdd + textPaidAdd,
-    Lux: 399.5 + baseImageAdd + textPaidAdd,
-  };
+  // Price preview — computed by the SAME function the deploy route uses, from
+  // the price table resolved for (brand template x selected store). No prices
+  // are hardcoded here, so the preview cannot drift from what gets created.
+  const pricedVariants = priceVariants({
+    versions,
+    laserShaft,
+    customImage,
+    customTextPaid: customTextMode === "paid",
+    pricing: activePricing,
+  });
 
   // `uploadingAssets` is shared by Deploy and Save; scope the deploy button's
   // busy state to an actual deploy (not a concurrent draft save).
@@ -1518,6 +1552,36 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-2">
         {/* ── LEFT: Assets + Product config ── */}
         <div className="overflow-y-auto p-6 space-y-6 border-r border-white/10">
+          {/* 0. Price template — just a named price table. */}
+          <Section title="0. Bảng giá">
+            <p className="text-[11px] text-white/40 -mt-1">
+              Chọn bảng giá dùng cho lần đăng này. Tạo/sửa bảng giá ở Admin → Bảng giá.
+            </p>
+            <Select
+              value={deployTemplateId || undefined}
+              onValueChange={(v) => {
+                // "__none__" is the explicit "no template" pick — Select cannot
+                // use "" as an item value.
+                setDeployTemplateId(v === "__none__" ? "" : v);
+              }}
+            >
+              <SelectTrigger className="border-white/20 bg-white/5 text-white">
+                <SelectValue
+                  placeholder={loadingPriceTemplates ? "Đang tải..." : "-- Bảng giá mặc định --"}
+                />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">-- Bảng giá mặc định --</SelectItem>
+                {priceTemplates.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.name}
+                    {t.vendor ? ` · ${t.vendor}` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Section>
+
           {/* 1. Image group */}
           <Section title="1. Nhóm ảnh mockup">
             <p className="text-[11px] text-white/40 -mt-1">
@@ -1939,32 +2003,33 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
                 </div>
               )}
 
-              {/* Price preview */}
+              {/* Price preview — from the (brand x store) price table */}
               <div className="rounded-lg bg-white/5 border border-white/10 p-3 text-xs text-white/50 space-y-1">
-                <p className="text-white/30 font-medium mb-2">Biến thể sẽ được tạo:</p>
+                <div className="flex items-center justify-between mb-2 gap-2">
+                  <p className="text-white/30 font-medium">Biến thể sẽ được tạo:</p>
+                  <span className="text-[10px] text-white/40 truncate">
+                    {priceTemplate?.name ?? "Bảng giá mặc định"}
+                  </span>
+                </div>
                 {versions.length === 0 && <p className="text-yellow-400/60">Chưa chọn phiên bản</p>}
-                {(["Standard", "Premium", "Pro", "Lux"] as Version[])
-                  .filter((v) => versions.includes(v))
-                  .map((v) => {
-                    const base = PRICES[v];
-                    if (laserShaft) {
-                      return [
-                        <p key={`${v}-no`}>
-                          {v} / No Laser: ${base}
-                        </p>,
-                        <p key={`${v}-yes`}>
-                          {v} / Laser: ${base + 20}
-                        </p>,
-                      ];
-                    }
-                    return (
-                      <p key={v}>
-                        {v}: ${base}
-                      </p>
-                    );
-                  })}
-                {customImage && <p className="text-orange-400/70">+ Custom Image: +$20 trên tất cả biến thể</p>}
-                {customTextMode === "paid" && <p className="text-teal-400/70">+ Custom Text: +$20 trên tất cả biến thể</p>}
+                {pricedVariants.map((pv) => (
+                  <p key={`${pv.version}-${pv.laserOption ?? "single"}`}>
+                    {pv.version}
+                    {pv.laserOption === null ? "" : pv.laserOption === "Yes" ? " / Laser" : " / No Laser"}
+                    : ${pv.price}
+                    <span className="text-white/25"> (compare_at_price ${pv.compareAtPrice})</span>
+                  </p>
+                ))}
+                {customImage && (
+                  <p className="text-orange-400/70">
+                    + Custom Image: +${activePricing.modifiers.customImage} trên tất cả biến thể
+                  </p>
+                )}
+                {customTextMode === "paid" && (
+                  <p className="text-teal-400/70">
+                    + Custom Text: +${activePricing.modifiers.customTextPaid} trên tất cả biến thể
+                  </p>
+                )}
               </div>
 
               {/* Tags: auto-generated (read-only) + editable manual tags */}

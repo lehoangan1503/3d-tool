@@ -42,11 +42,20 @@ interface StudioTemplateSelectorProps {
   currentConfig: VideoStudioConfig;
   onLoadConfig: (config: VideoStudioConfig) => void;
   onNewTemplate: () => void;
+  /**
+   * Which studio the list belongs to. V1 and V2 share one table, and their configs are
+   * not interchangeable — a V2 template loaded into V1 would drop the environment and a
+   * V1 template loaded into V2 would leave it with no room at all. Templates are told
+   * apart by whether their config carries an `environment` block, and filtered here so
+   * each studio only ever lists its own.
+   */
+  variant?: "v1" | "v2";
 }
 
 export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector(
   {
     productId,
+    variant = "v1",
     currentConfig,
     onLoadConfig,
     onNewTemplate,
@@ -70,13 +79,16 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
       const res = await fetch(`/api/video-studio-templates?${params}`);
       if (!res.ok) throw new Error("Failed to fetch templates");
       const json = await res.json();
-      setTemplates((json.data ?? json.items ?? []) as VideoStudioTemplate[]);
+      const all = (json.data ?? json.items ?? []) as VideoStudioTemplate[];
+      // Keep only the templates belonging to this studio variant.
+      const wantV2 = variant === "v2";
+      setTemplates(all.filter((t) => !!t.config?.environment === wantV2));
     } catch (err) {
       console.error("StudioTemplateSelector fetch error:", err);
     } finally {
       setIsLoading(false);
     }
-  }, [productId]);
+  }, [productId, variant]);
 
   useEffect(() => {
     fetchTemplates();

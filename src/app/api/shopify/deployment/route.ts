@@ -36,7 +36,7 @@ export async function GET(request: Request) {
   const [{ data: dep }, { data: draft }] = await Promise.all([
     supabase
       .from("shopify_deployments")
-      .select("shopify_product_id, admin_url, storefront_url, title, created_by, created_at, form_data")
+      .select("shopify_product_id, admin_url, storefront_url, title, created_by, created_at, form_data, deploy_template_id, image_group_id, video_template_id")
       .eq("product_id", productId)
       .eq("store_id", storeId)
       .maybeSingle(),
@@ -56,6 +56,15 @@ export async function GET(request: Request) {
     (dep?.form_data as ShopifyDeploymentSummary["form_data"]) ??
     null;
 
+  // What THIS store's last deploy used: price table + mockup group + video.
+  // Read from the per-store deployment row, NOT the shared draft — the draft is
+  // store-independent, so a product deployed with different price tables on two
+  // stores would otherwise reopen on whichever was saved last.
+  const deployTemplateId =
+    (dep?.deploy_template_id as string | null | undefined) ?? formData?.deployTemplateId ?? null;
+  const imageGroupId = (dep?.image_group_id as string | null | undefined) ?? null;
+  const videoTemplateId = (dep?.video_template_id as string | null | undefined) ?? null;
+
   // No live deployment on this store: still return the shared draft so the editor
   // can edit/deploy. shopify_product_id stays null → shows as "not deployed here".
   if (!dep) {
@@ -70,6 +79,9 @@ export async function GET(request: Request) {
         created_by: null,
         creator_nickname: null,
         created_at: null,
+        deploy_template_id: deployTemplateId,
+        image_group_id: imageGroupId,
+        video_template_id: videoTemplateId,
       } satisfies ShopifyDeploymentSummary,
     });
   }
@@ -93,6 +105,9 @@ export async function GET(request: Request) {
     created_by: dep.created_by,
     creator_nickname: creatorNickname,
     created_at: dep.created_at,
+    deploy_template_id: deployTemplateId,
+    image_group_id: imageGroupId,
+    video_template_id: videoTemplateId,
   };
   return NextResponse.json({ deployment });
 }

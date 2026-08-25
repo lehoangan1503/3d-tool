@@ -252,6 +252,9 @@ export interface ShopifyFormData {
   // Camera pose of the main rendered mockup. Persisted so a re-deploy keeps
   // the storefront's 2D → 3D swap aligned even if the render is not repeated.
   previewPose?: PreviewPose | null;
+  // Which price template this product was last priced with. null = the built-in
+  // default price table. See src/types/deploy-template.ts.
+  deployTemplateId?: string | null;
 }
 
 // Full Shopify deployment record (shopify_deployments table).
@@ -266,6 +269,10 @@ export interface ShopifyDeployment {
   storefront_url: string | null;
   title: string | null;
   form_data: ShopifyFormData | null;
+  /** What this deploy used: price table, mockup image group, video template. */
+  deploy_template_id?: string | null;
+  image_group_id?: string | null;
+  video_template_id?: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -282,6 +289,14 @@ export interface ShopifyDeploymentSummary {
   /** Null when only a shared draft exists (not yet deployed to this store). */
   created_at: string | null;
   form_data: ShopifyFormData | null;
+  /**
+   * What this store's last deploy used: price table, mockup image group, video
+   * template. Read from the per-store deployment row so switching stores
+   * restores that store's own set.
+   */
+  deploy_template_id?: string | null;
+  image_group_id?: string | null;
+  video_template_id?: string | null;
 }
 
 // A saved collection value for the deploy-form Collections picker.

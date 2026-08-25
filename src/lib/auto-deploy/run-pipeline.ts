@@ -323,6 +323,7 @@ export async function runProductDeploy(
   const payload: ShopifyDeployRequest = {
     productId: product.id,
     storeId: config.storeId ?? undefined,
+    deployTemplateId: config.deployTemplateId ?? null,
     productCode,
     title: content.title,
     description: content.description,

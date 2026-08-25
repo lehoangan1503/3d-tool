@@ -32,6 +32,8 @@ import { compositeSurfaceFrames, preloadFrameImages } from './background-composi
 import { applyBumperEmissiveShaderMask, applyLogoToExistingMaterial } from './leather-material';
 import { isRubberMaterial, isTopCapMaterial, isTopCapFaceMaterial, isCylinderLeatherMaterial } from './leather-config';
 import { createWhiteImmuneMaterial } from './studio-helpers';
+import { StudioRoomEnvironment } from './studio-room-environment';
+import { normalizeEnvironmentConfig } from '@/types/studio-environment';
 
 /**
  * Material used by background frame planes. Unlit (Basic) when studio lights are
@@ -177,6 +179,10 @@ export class ExtractorSceneManager {
   private backgroundLayerMeshes: THREE.Mesh[] = [];
   private videoPreviewConfigRef: VideoExtractorConfig | null = null;
   private studioConfigRef: VideoStudioConfig | null = null;
+  /** Video Studio V2 — real 3D room / HDRI environment. Null while V1 (flat wall+table) is active. */
+  private roomEnvironment: StudioRoomEnvironment | null = null;
+  /** Reason the last V2 environment load failed, surfaced in the studio UI. */
+  private _roomEnvironmentError: string | null = null;
 
   // Multi-cue instancing
   private instancedMeshes: THREE.InstancedMesh[] = [];
@@ -565,6 +571,8 @@ export class ExtractorSceneManager {
 
   /** Show or hide backdrop wall, table surface and their frame planes (for transparent capture). */
   setWallsVisible(visible: boolean): void {
+    // V2: the "walls" are the room/skybox, so transparent capture hides those instead.
+    this.roomEnvironment?.setVisible(visible);
     if (this.backdrop) this.backdrop.visible = visible;
     if (this.tableSurface) this.tableSurface.visible = visible;
     if (this.studioCornerFill) {
@@ -2201,6 +2209,131 @@ export class ExtractorSceneManager {
   //  VIDEO STUDIO — New camera system with start/end positions
   // ════════════════════════════════════════════════════════════════
 
+  // ════════════════════════════════════════════════════════════════
+  //  VIDEO STUDIO V2 — real 3D room / HDRI environment
+  // ════════════════════════════════════════════════════════════════
+
+  /**
+   * Build the V2 environment: a 360 degree HDRI or a real GLB room, replacing the V1
+   * wall + table planes.
+   *
+   * Lighting differs from V1 in one important way. V1 deliberately keeps
+   * `scene.environment` null and hands each surface its own solid-colour env map, so the
+   * fake set stays flat and neutral. A real room needs the opposite: the panorama must
+   * light everything so the cue picks up the room's colour and its reflections agree with
+   * the visible background. That is exactly what makes the cue read as being *in* the
+   * space rather than composited over a photo.
+   */
+  private async setupRoomEnvironment(config: VideoStudioConfig): Promise<void> {
+    this._roomEnvironmentError = null;
+    const envConfig = normalizeEnvironmentConfig(config.environment);
+
+    if (!this.roomEnvironment) {
+      this.roomEnvironment = new StudioRoomEnvironment(
+        this.scene,
+        this.renderer,
+        this.pmremGenerator
+      );
+    }
+
+    const result = await this.roomEnvironment.build(envConfig);
+    if (!result.ok) {
+      console.warn('[ESM] V2 environment build failed:', result.error);
+      this._roomEnvironmentError = result.error ?? 'unknown error';
+    }
+
+    // The V1 cameras are built for a 34-unit set, so their far planes (100 production,
+    // 200 god) sit *inside* a V2 environment: the skybox radius alone defaults to 100 and
+    // a GLB room can be larger still. Anything past the far plane is clipped and renders
+    // as a black void, which looks like a hole punched in the room. Push both far planes
+    // out past the environment's true extent.
+    this.extendCameraFarForEnvironment(this.roomEnvironment.getFarPlaneRequirement(envConfig));
+
+    // Directional lights still come from the HDRI layers so the cue keeps a defined
+    // key light and casts a real shadow onto the shadow catcher. Without this the cue
+    // would be lit by ambient IBL only, which reads as flat and casts nothing.
+    this.setupHdriShadowLights(config);
+    this.setupHdriLightHelpers(config);
+
+    // The cue keeps its dedicated product-tuned HDRI unless the user opts into being lit
+    // by the room. Product highlights are usually better with the purpose-built cue HDRI,
+    // so this defaults to off.
+    if (envConfig.lightCueFromEnvironment) {
+      this.applyCueEnvMap(this.scene.environment, envConfig.intensity);
+      this.invalidateCueHdriCache();
+    } else {
+      try {
+        if (config.cueHdriLayers && config.cueHdriLayers.length > 0) {
+          await this.setCueHdriLayers(config.cueHdriLayers);
+        } else {
+          await this.setCueHdri(config.cueHdri ?? DEFAULT_CUE_HDRI);
+        }
+      } catch (err) {
+        console.warn('[ESM] Failed to apply cue HDRI in V2:', err);
+      }
+    }
+  }
+
+  /**
+   * Grow both cameras' far planes so the whole environment stays inside the view frustum.
+   *
+   * Only ever increases the far plane — the V1 defaults are the floor — and keeps a margin
+   * so the dome's far rim is not sitting exactly on the clip boundary.
+   */
+  private extendCameraFarForEnvironment(requiredFar: number): void {
+    const target = requiredFar * 1.5;
+    if (this.camera.far < target) {
+      this.camera.far = target;
+      this.camera.updateProjectionMatrix();
+    }
+    if (this.godCamera && this.godCamera.far < target) {
+      this.godCamera.far = target;
+      this.godCamera.updateProjectionMatrix();
+    }
+  }
+
+  /** Apply the cheap V2 environment updates (rotation, intensity, shadow catcher) live. */
+  updateRoomEnvironment(config: VideoStudioConfig): void {
+    if (!config.environment || !this.roomEnvironment) return;
+    const envConfig = normalizeEnvironmentConfig(config.environment);
+    this.roomEnvironment.applyLightUpdates(envConfig);
+    // Growing the floor radius pushes the dome's rim further out, so the far plane has to
+    // follow or the newly-distant geometry is clipped straight back into a black void.
+    this.extendCameraFarForEnvironment(this.roomEnvironment.getFarPlaneRequirement(envConfig));
+  }
+
+  /** Reason the last V2 environment load failed, or null if it succeeded. */
+  getRoomEnvironmentError(): string | null {
+    return this._roomEnvironmentError;
+  }
+
+  /** True when a V2 environment is currently built. */
+  hasRoomEnvironment(): boolean {
+    return !!this.roomEnvironment?.isActive();
+  }
+
+  /** The V2 shadow-catcher mesh, if any (used for raycast placement of the cue). */
+  getRoomShadowCatcher(): THREE.Mesh | null {
+    return this.roomEnvironment?.getShadowCatcher() ?? null;
+  }
+
+  /** The loaded V2 room model, if any. */
+  getRoomModel(): THREE.Group | null {
+    return this.roomEnvironment?.getRoom() ?? null;
+  }
+
+  /** Show/hide V2 environment scenery (used by transparent capture). */
+  setRoomEnvironmentVisible(visible: boolean): void {
+    this.roomEnvironment?.setVisible(visible);
+  }
+
+  /** Tear down the V2 environment and restore the scene's original background. */
+  disposeRoomEnvironment(): void {
+    if (!this.roomEnvironment) return;
+    this.roomEnvironment.dispose();
+    this.roomEnvironment = null;
+  }
+
   /** Setup studio environment from the new VideoStudioConfig (compositor-based backgrounds) */
   async setupStudioFromStudioConfig(config: VideoStudioConfig): Promise<void> {
     this.clearStudioElements();
@@ -2232,6 +2365,18 @@ export class ExtractorSceneManager {
         await this.setCueHdri(cueHdri);
       }
     } catch (err) { console.warn('[ESM] Failed to apply cue HDRI:', err); }
+
+    // ══ Video Studio V2 ══
+    // When an environment config is present the studio is a *real* 3D space: an
+    // equirectangular HDRI (optionally ground-projected) or a loaded GLB room.
+    // In that mode the V1 fake set — wall plane, table plane, L-shaped shadow mesh and
+    // corner fill — is skipped entirely; the environment provides background, lighting
+    // and (for GLB) actual geometry the cue can be occluded by.
+    if (config.environment) {
+      await this.setupRoomEnvironment(config);
+      this.setupCueInstances(config.cueConfig);
+      return;
+    }
 
     // ── Load PBR textures for wall and table ──
     const manifest = await loadTextureManifest();
@@ -5218,6 +5363,9 @@ export class ExtractorSceneManager {
     this.stopLivePreview();
     this.stopRecording();
     this.clearStudioElements();
+    // Full teardown of the V2 environment, including its HDRI / room caches.
+    // clearStudioElements() only removes its scene objects so rebuilds stay fast.
+    this.disposeRoomEnvironment();
     this.clearInstancedMeshes();
     this.clearSimulatorCueGroups();
 

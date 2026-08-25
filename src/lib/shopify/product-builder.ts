@@ -3,8 +3,10 @@
  * and parts of shopify_product_builder.py from the up_web_python tool.
  */
 
+import { DEFAULT_PRICING, priceVariants } from "./pricing";
 import { activeStore } from "./store-context";
 import type { SpecMetafieldMap } from "./stores";
+import type { ResolvedPricing } from "@/types/deploy-template";
 import type {
   LeatherColor,
   LeatherTextureType,
@@ -18,18 +20,10 @@ import type {
 
 // ── Base config ──────────────────────────────────────────────────────────────
 
-const BASE_VERSIONS: Record<string, { price: number; discount_percent: number }> = {
-  Standard: { price: 154.5, discount_percent: 15 },
-  Premium: { price: 229.5, discount_percent: 20 },
-  Pro: { price: 299.5, discount_percent: 20 },
-  // Lux: matches the existing live Lux variants on Shopify ($399.50 final,
-  // compare-at $499.38 = 20% off; +$20 laser shaft as with other tiers).
-  Lux: { price: 399.5, discount_percent: 20 },
-};
-
-const PRICE_MODIFIER_LASER_SHAFT = 20;
-const PRICE_MODIFIER_CUSTOM_IMAGE = 20;
-const PRICE_MODIFIER_CUSTOM_TEXT_PAID = 20;
+// Prices are NOT defined here any more. They come from the deploy template
+// resolved for the target store (see lib/shopify/pricing.ts), which defaults to
+// the values that used to be hardcoded in this file — so a build with no
+// template picked prices exactly as before.
 
 const DEFAULT_PRODUCT_SETTINGS = {
   vendor: "Uni Cues",
@@ -48,19 +42,6 @@ const SHOPIFY_HDRI_URLS = [
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function roundPriceNaturally(price: number): number {
-  const whole = Math.floor(price);
-  const decimal = price - whole;
-  if (decimal < 0.25) return whole;
-  if (decimal < 0.75) return whole + 0.5;
-  return whole + 1;
-}
-
-function calculateCompareAtPrice(finalPrice: number, version: string): number {
-  const pct = BASE_VERSIONS[version]?.discount_percent ?? 20;
-  return roundPriceNaturally(finalPrice / (1 - pct / 100));
-}
 
 /**
  * Transliterate Vietnamese diacritics to ASCII so handles stay readable
@@ -384,6 +365,11 @@ export interface VariantInput {
    * omit the metafield rather than reference a non-existent resource.
    */
   specMetafields: SpecMetafieldMap;
+  /**
+   * Resolved price table for this (template x store) pair. Omitted = the
+   * built-in defaults, i.e. the prices this file used to hardcode.
+   */
+  pricing?: ResolvedPricing;
 }
 
 export interface ShopifyVariant {
@@ -402,59 +388,55 @@ export interface ShopifyVariant {
 
 function generateVariants(input: VariantInput): ShopifyVariant[] {
   const { versions, wrapType, laserShaft, customImage, customTextPaid, baseSku, specMetafields } = input;
-  const variants: ShopifyVariant[] = [];
 
-  for (const version of versions) {
-    const basePrice = BASE_VERSIONS[version]?.price ?? 154.5;
-    const imagePriceAdd = customImage ? PRICE_MODIFIER_CUSTOM_IMAGE : 0;
-    const textPaidAdd = customTextPaid ? PRICE_MODIFIER_CUSTOM_TEXT_PAID : 0;
-    const optionValues = laserShaft ? ["No", "Yes"] : [null];
+  // Prices come from the resolved template table so the dialog preview and this
+  // build run the identical arithmetic.
+  const priced = priceVariants({
+    versions,
+    laserShaft,
+    customImage,
+    customTextPaid,
+    pricing: input.pricing ?? DEFAULT_PRICING,
+  });
 
-    for (const laserOpt of optionValues) {
-      const priceIncrease = laserOpt === "Yes" ? PRICE_MODIFIER_LASER_SHAFT : 0;
-      const finalPrice = basePrice + imagePriceAdd + textPaidAdd + priceIncrease;
-      const compareAt = calculateCompareAtPrice(finalPrice, version);
-
-      const versionSlug = slugify(version);
-      let sku = `${baseSku}-${versionSlug}`;
-      if (laserOpt !== null) {
-        sku += `-${slugify(laserOpt)}`;
-      }
-
-      const metafieldGid = specMetafields[version]?.[wrapType];
-
-      const variant: ShopifyVariant = {
-        option1: version,
-        price: finalPrice.toString(),
-        compare_at_price: compareAt.toString(),
-        sku,
-        inventory_management: "shopify",
-        inventory_quantity: 10000,
-        weight: DEFAULT_PRODUCT_SETTINGS.weight,
-        weight_unit: DEFAULT_PRODUCT_SETTINGS.weight_unit,
-        requires_shipping: true,
-      };
-
-      if (laserOpt !== null) {
-        variant.option2 = laserOpt;
-      }
-
-      if (metafieldGid) {
-        variant.metafields = [
-          {
-            namespace: "custom",
-            key: "cue_spec_variants",
-            type: "metaobject_reference",
-            value: metafieldGid,
-          },
-        ];
-      }
-
-      variants.push(variant);
+  return priced.map(({ version, laserOption, price, compareAtPrice }) => {
+    const versionSlug = slugify(version);
+    let sku = `${baseSku}-${versionSlug}`;
+    if (laserOption !== null) {
+      sku += `-${slugify(laserOption)}`;
     }
-  }
 
-  return variants;
+    const metafieldGid = specMetafields[version]?.[wrapType];
+
+    const variant: ShopifyVariant = {
+      option1: version,
+      price: price.toString(),
+      compare_at_price: compareAtPrice.toString(),
+      sku,
+      inventory_management: "shopify",
+      inventory_quantity: 10000,
+      weight: DEFAULT_PRODUCT_SETTINGS.weight,
+      weight_unit: DEFAULT_PRODUCT_SETTINGS.weight_unit,
+      requires_shipping: true,
+    };
+
+    if (laserOption !== null) {
+      variant.option2 = laserOption;
+    }
+
+    if (metafieldGid) {
+      variant.metafields = [
+        {
+          namespace: "custom",
+          key: "cue_spec_variants",
+          type: "metaobject_reference",
+          value: metafieldGid,
+        },
+      ];
+    }
+
+    return variant;
+  });
 }
 
 // ── Product builder ───────────────────────────────────────────────────────────
@@ -511,6 +493,16 @@ export interface ProductInput {
   color?: LeatherColor | null;
   /** Saved editor 3D settings. Written to custom.cue_3d_config + adds the 3d tag. */
   threejsSettings?: ThreeJSSettingsJson | null;
+  /**
+   * Price table resolved from the deploy template for the target store. Omitted
+   * = the built-in defaults (the previously hardcoded prices).
+   */
+  pricing?: ResolvedPricing;
+  /**
+   * Shopify vendor from the deploy template (the brand). Omitted/blank = the
+   * builder default ("Uni Cues"), preserving existing behaviour.
+   */
+  vendor?: string | null;
 }
 
 export interface ShopifyProductPayload {
@@ -653,6 +645,7 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
     // Resolved from the store active for this request (set via withStore() in
     // the deploy route). Empty for stores that haven't configured their GIDs.
     specMetafields: activeStore().specMetafields,
+    pricing: input.pricing,
   });
 
   // Classify images by name → gallery (product) images vs metafield images.
@@ -778,7 +771,7 @@ export function buildShopifyProduct(input: ProductInput): ShopifyProductPayload 
       title,
       handle,
       body_html: descriptionHtml,
-      vendor: DEFAULT_PRODUCT_SETTINGS.vendor,
+      vendor: input.vendor?.trim() || DEFAULT_PRODUCT_SETTINGS.vendor,
       product_type: DEFAULT_PRODUCT_SETTINGS.product_type,
       tags: Array.from(tags).join(", "),
       status: DEFAULT_PRODUCT_SETTINGS.status,

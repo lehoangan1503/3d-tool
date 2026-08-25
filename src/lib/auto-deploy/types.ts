@@ -36,6 +36,11 @@ export interface AutoDeployConfig {
   videoTemplateId: string | null;
   /** Target Shopify store id (from the store switcher); null → default store. */
   storeId?: string | null;
+  /**
+   * Price template used for this run. null → the built-in default prices, so a
+   * batch cannot silently publish at another brand's prices.
+   */
+  deployTemplateId?: string | null;
   /** Product-code format of the target store (injected at run time, not persisted). */
   codeFormat?: ProductCodeFormatKey;
 }
@@ -56,6 +61,7 @@ export function emptyRunConfig(): AutoDeployConfig {
     aiModel: "gpt-5.4-mini",
     manualTags: [],
     videoTemplateId: null,
+    deployTemplateId: null,
   };
 }
 

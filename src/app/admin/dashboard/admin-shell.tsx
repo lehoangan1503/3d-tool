@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ShieldCheck, Users, Package, LogOut } from "lucide-react";
+import { ShieldCheck, Users, Package, Tags, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { adminLogout } from "../login/actions";
@@ -15,6 +15,7 @@ interface AdminShellProps {
 const NAV_ITEMS = [
   { href: "/admin/dashboard/accounts", label: "Quản lý tài khoản", icon: Users },
   { href: "/admin/dashboard/products", label: "Quản lý sản phẩm", icon: Package },
+  { href: "/admin/dashboard/deploy-templates", label: "Bảng giá", icon: Tags },
 ];
 
 export function AdminShell({ email, children }: AdminShellProps) {

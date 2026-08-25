@@ -11,6 +11,7 @@ import { ChevronDown } from "lucide-react";
 import type { ExtractorReferenceGroup } from "@/types/extractor";
 import type { ShopifySkill, ShopifyCollection, ShopifyWrapType } from "@/types/product";
 import type { AutoDeployConfig, AutoDeployVersion } from "@/lib/auto-deploy/types";
+import type { DeployTemplate } from "@/types/deploy-template";
 
 interface VideoTemplateItem {
   id: string;
@@ -36,6 +37,8 @@ export function AutoDeployConfigForm({ value, onChange }: AutoDeployConfigFormPr
   const [collections, setCollections] = useState<ShopifyCollection[]>([]);
   const [videoTemplates, setVideoTemplates] = useState<VideoTemplateItem[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
+  // Which price table a batch run publishes at.
+  const [brandTemplates, setBrandTemplates] = useState<DeployTemplate[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -55,14 +58,16 @@ export function AutoDeployConfigForm({ value, onChange }: AutoDeployConfigFormPr
       get("/api/shopify/collections"),
       get("/api/video-studio-templates?limit=100"),
       get("/api/shopify/generate-content"),
+      get("/api/shopify/deploy-templates"),
     ])
-      .then(([g, s, c, v, m]) => {
+      .then(([g, s, c, v, m, b]) => {
         if (!mounted) return;
         if (g?.items) setGroups(g.items as ExtractorReferenceGroup[]);
         if (s?.items) setSkills(s.items as ShopifySkill[]);
         if (c?.items) setCollections(c.items as ShopifyCollection[]);
         if (v?.items) setVideoTemplates((v.items as VideoTemplateItem[]).map((t) => ({ id: t.id, name: t.name })));
         if (m?.models?.length) setModels(m.models as ModelOption[]);
+        if (b?.items) setBrandTemplates(b.items as DeployTemplate[]);
       })
       .finally(() => {
         if (mounted) setLoading(false);
@@ -269,6 +274,26 @@ export function AutoDeployConfigForm({ value, onChange }: AutoDeployConfigFormPr
             </div>
           </div>
         )}
+      </Field>
+
+      {/* The price table this batch publishes at. */}
+      <Field label="Bảng giá">
+        <select
+          value={value.deployTemplateId ?? ""}
+          onChange={(e) => patch({ deployTemplateId: e.target.value || null })}
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        >
+          <option value="">Bảng giá mặc định</option>
+          {brandTemplates.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+              {t.vendor ? ` · ${t.vendor}` : ""}
+            </option>
+          ))}
+        </select>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Cả lô sẽ dùng bảng giá này. Để trống = bảng giá mặc định.
+        </p>
       </Field>
 
       {/* AI model */}

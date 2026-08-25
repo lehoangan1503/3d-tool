@@ -38,8 +38,12 @@ import {
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager, HDRI_OPTIONS_FALLBACK } from "@/lib/three/extractor-scene-manager";
 import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CameraShapeParams, CameraWaypoint, CueHdriConfig, VideoRatio } from "@/types/video-studio";
+import type { StudioEnvironmentAsset, StudioEnvironmentConfig } from "@/types/studio-environment";
+import { normalizeEnvironmentConfig } from "@/types/studio-environment";
+import { EnvironmentPanel } from "./environment-panel";
 import {
   DEFAULT_STUDIO_CONFIG,
+  DEFAULT_STUDIO_CONFIG_V2,
   DEFAULT_CUE_HDRI,
   DEFAULT_CAMERA_PATH,
   MAX_CAMERA_WAYPOINTS,
@@ -196,6 +200,15 @@ interface VideoStudioProps {
   productId: string;
   onClose: () => void;
   open: boolean;
+  /**
+   * "v1" (default) keeps the original studio: a flat wall + table plane with a
+   * composited background image. "v2" replaces that fake set with a real 3D space —
+   * a 360 degree HDRI (optionally ground-projected) or a loaded GLB room.
+   *
+   * Everything else — cue model, cue HDRI, camera path, recording — is shared, so the
+   * two variants differ only in what surrounds the cue.
+   */
+  variant?: "v1" | "v2";
 }
 
 const SELECTION_LABELS_VN: Record<string, string> = {
@@ -214,8 +227,15 @@ const MODE_LABELS_VN: Record<string, string> = {
   scale: "Tỷ lệ",
 };
 
-export function VideoStudio({ sceneManager, productName, productId, onClose, open }: VideoStudioProps) {
-  const [config, setConfig] = useState<VideoStudioConfig>(() => structuredClone(DEFAULT_STUDIO_CONFIG));
+export function VideoStudio({ sceneManager, productName, productId, onClose, open, variant = "v1" }: VideoStudioProps) {
+  const isV2 = variant === "v2";
+  const [config, setConfig] = useState<VideoStudioConfig>(() =>
+    structuredClone(isV2 ? DEFAULT_STUDIO_CONFIG_V2 : DEFAULT_STUDIO_CONFIG)
+  );
+  /** V2 only — HDRI / room files the user added this session (object URLs). */
+  const [userEnvAssets, setUserEnvAssets] = useState<StudioEnvironmentAsset[]>([]);
+  /** V2 only — why the last environment load failed (bad file, 404, unsupported codec). */
+  const [envLoadError, setEnvLoadError] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [progress, setProgress] = useState(0);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -352,6 +372,19 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
 
   const updateConfig = useCallback(<K extends keyof VideoStudioConfig>(key: K, value: VideoStudioConfig[K]) => {
     setConfig((prev) => ({ ...prev, [key]: value }));
+  }, []);
+
+  /**
+   * Patch the V2 environment block.
+   *
+   * Normalises first so a template saved before a field existed still merges cleanly
+   * instead of writing `undefined` into a nested object the renderer reads.
+   */
+  const updateEnvironment = useCallback((patch: Partial<StudioEnvironmentConfig>) => {
+    setConfig((prev) => ({
+      ...prev,
+      environment: { ...normalizeEnvironmentConfig(prev.environment), ...patch },
+    }));
   }, []);
 
   /**
@@ -937,6 +970,10 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         localSceneViewControls = controls;
         sceneViewControlsRef.current = controls;
 
+        // V2 places the cue inside a real room, so the V1 wall/table clamp (which pins the
+        // cue to z >= -5.5 and y >= -2) no longer describes anything real — drop it.
+        if (isV2) controls.setCueBounds(null);
+
         // Waypoint gizmos are disposed and rebuilt whenever the waypoint count changes.
         // Drop the selection first so TransformControls is never left attached to a
         // disposed mesh (which throws on the next interaction).
@@ -953,6 +990,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         return;
       }
       await extractor.setupStudioFromStudioConfig(config);
+      if (isV2) setEnvLoadError(extractor.getRoomEnvironmentError());
       if (isCancelled) {
         extractor.dispose();
         localExtractor = null;
@@ -1081,6 +1119,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       sceneViewControlsRef.current?.deselect();
       extractorRef.current.stopVideoPreview();
       await extractorRef.current.setupStudioFromStudioConfig(config);
+      if (isV2) setEnvLoadError(extractorRef.current.getRoomEnvironmentError());
       extractorRef.current.startStudioVideoPreview(config, preserveCamera);
     } finally {
       setIsRebuilding(false);
@@ -1128,6 +1167,23 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     )
     .join("|");
 
+  /**
+   * Fields whose change requires reloading the environment asset (and thus a full
+   * scene rebuild). Deliberately excludes rotation/intensity/shadow, which are cheap.
+   */
+  const env = config.environment;
+  const environmentReloadKey = env
+    ? [
+        env.mode,
+        env.assetId,
+        env.assetUrl,
+        env.showBackground ? 1 : 0,
+        env.groundProjection.enabled ? 1 : 0,
+        env.groundProjection.radius,
+        env.lightCueFromEnvironment ? 1 : 0,
+      ].join(":")
+    : "";
+
   useEffect(() => {
     if (!extractorRef.current || !open) return;
     if (rebuildTimerRef.current) clearTimeout(rebuildTimerRef.current);
@@ -1152,7 +1208,35 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     config.cueConfig.instances.length,
     config.hdriConfig.layers.length,
     config.surfaceLightDisabled,
+    // V2: reload the environment only when the asset itself or a structural flag changes.
+    // Rotation / intensity / shadow-catcher values are applied live instead (below).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    environmentReloadKey,
     open,
+  ]);
+
+  /**
+   * V2 live environment updates.
+   *
+   * Rotating or brightening the room must not re-decode a multi-megabyte HDRI, so these
+   * fields bypass the 500 ms rebuild and mutate the existing scene directly.
+   */
+  useEffect(() => {
+    if (!extractorRef.current || !open || !isV2) return;
+    extractorRef.current.updateRoomEnvironment(config);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    open,
+    isV2,
+    config.environment?.rotationY,
+    config.environment?.intensity,
+    config.environment?.backgroundIntensity,
+    config.environment?.groundProjection.height,
+    config.environment?.shadowCatcher.enabled,
+    config.environment?.shadowCatcher.height,
+    config.environment?.shadowCatcher.opacity,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    JSON.stringify(config.environment?.roomTransform ?? null),
   ]);
 
   // Light-weight update: sync frame transforms (position/size/rotation) without full rebuild
@@ -1510,7 +1594,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   };
 
   const handleReset = () => {
-    setConfig(structuredClone(DEFAULT_STUDIO_CONFIG));
+    setConfig(structuredClone(isV2 ? DEFAULT_STUDIO_CONFIG_V2 : DEFAULT_STUDIO_CONFIG));
     setVideoUrl(null);
     setError(null);
     templateSelectorRef.current?.resetSelection();
@@ -1753,10 +1837,17 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                 {/* Template selector — always visible at top */}
                 <StudioTemplateSelector
                   ref={templateSelectorRef}
+                  variant={variant}
                   productId={productId}
                   currentConfig={config}
                   onLoadConfig={(c) => {
-                    const migrated = migrateVideoStudioConfig(ensureFullConfig(c));
+                    const loaded = migrateVideoStudioConfig(ensureFullConfig(c));
+                    // Guarantee the variant's invariant holds regardless of what was stored:
+                    // V2 must always have an environment, V1 must never have one. Without this
+                    // a mismatched template would leave the studio with no space to render.
+                    const migrated: VideoStudioConfig = isV2
+                      ? { ...loaded, environment: normalizeEnvironmentConfig(loaded.environment) }
+                      : { ...loaded, environment: undefined };
                     setConfig(migrated);
                     // Invalidate cache so the next updateStudioPreviewConfig applies the template camera
                     extractorRef.current?.invalidateCameraStartKey();
@@ -1765,7 +1856,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                     setCapturedEnd(migrated.cameraEnd ?? null);
                   }}
                   onNewTemplate={() => {
-                    setConfig(structuredClone(DEFAULT_STUDIO_CONFIG));
+                    setConfig(structuredClone(isV2 ? DEFAULT_STUDIO_CONFIG_V2 : DEFAULT_STUDIO_CONFIG));
                     // Fresh template — clear captured so user must set positions manually
                     setCapturedStart(null);
                     setCapturedEnd(null);
@@ -1914,7 +2005,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                             </button>
                             {expandedSections.has("cue") && (
                               <div className="px-3 pb-3 pt-2 border-t border-border/30">
-                                <CueSetupPanel cueConfig={config.cueConfig} onChange={(cueConfig) => updateConfig("cueConfig", cueConfig)} />
+                                <CueSetupPanel cueConfig={config.cueConfig} onChange={(cueConfig) => updateConfig("cueConfig", cueConfig)} freePositionRange={isV2} />
                               </div>
                             )}
                           </div>
@@ -1980,7 +2071,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                               onClick={() => toggleSection("background")}
                             >
                               <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
-                              <span>Nền</span>
+                              <span>{isV2 ? "Không gian 3D" : "Nền"}</span>
                               <span className="flex-1" />
                               {expandedSections.has("background") ? (
                                 <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
@@ -1990,12 +2081,35 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                             </button>
                             {expandedSections.has("background") && (
                               <div className="px-3 pb-3 pt-2 border-t border-border/30 space-y-3">
-                                <BackgroundPanel
-                                  wallSurface={config.wallSurface}
-                                  tableSurface={config.tableSurface}
-                                  onWallSurfaceChange={(s) => updateConfig("wallSurface", s)}
-                                  onTableSurfaceChange={(s) => updateConfig("tableSurface", s)}
-                                />
+                                {isV2 ? (
+                                  /* V2 has no wall/table planes to style — this picks the
+                                     real 3D space the cue is placed inside instead. */
+                                  <EnvironmentPanel
+                                    config={normalizeEnvironmentConfig(config.environment)}
+                                    onChange={updateEnvironment}
+                                    userAssets={userEnvAssets}
+                                    onAddUserAsset={(asset) => {
+                                      // Tracked so the object URL for a multi-megabyte HDRI
+                                      // or room model is revoked when the studio unmounts.
+                                      blobUrlsRef.current.push(asset.url);
+                                      setUserEnvAssets((prev) => [
+                                        ...prev.filter((a) => a.id !== asset.id),
+                                        asset,
+                                      ]);
+                                    }}
+                                    onRemoveUserAsset={(id) =>
+                                      setUserEnvAssets((prev) => prev.filter((a) => a.id !== id))
+                                    }
+                                    loadError={envLoadError}
+                                  />
+                                ) : (
+                                  <BackgroundPanel
+                                    wallSurface={config.wallSurface}
+                                    tableSurface={config.tableSurface}
+                                    onWallSurfaceChange={(s) => updateConfig("wallSurface", s)}
+                                    onTableSurfaceChange={(s) => updateConfig("tableSurface", s)}
+                                  />
+                                )}
                               </div>
                             )}
                           </div>

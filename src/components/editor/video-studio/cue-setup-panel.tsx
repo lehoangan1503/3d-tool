@@ -11,9 +11,18 @@ import { createCueInstance, MAX_CUE_INSTANCES, CUE_BOUNDS } from "@/types/video-
 interface CueSetupPanelProps {
   cueConfig: CueConfig;
   onChange: (config: CueConfig) => void;
+  /**
+   * V2 only. The V1 slider limits describe the fake wall/table set (cue pinned to
+   * y >= -2, z >= -5.5). Inside a real 3D room those numbers mean nothing, so V2 opens
+   * the ranges up to let the cue be placed anywhere in the space.
+   */
+  freePositionRange?: boolean;
 }
 
-export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
+export function CueSetupPanel({ cueConfig, onChange, freePositionRange = false }: CueSetupPanelProps) {
+  // Symmetric limits wide enough for any room scale the environment picker can load.
+  const posMin = freePositionRange ? -60 : undefined;
+  const posMax = freePositionRange ? 60 : undefined;
   const [expandedPanels, setExpandedPanels] = useState<Set<string>>(new Set(["main"]));
 
   const togglePanel = useCallback((id: string) => {
@@ -150,7 +159,7 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
                     <Label className="text-xs text-muted-foreground">Vị trí X</Label>
                     <span className="text-xs text-muted-foreground tabular-nums">{instance.positionX.toFixed(1)}</span>
                   </div>
-                  <Slider value={[instance.positionX]} onValueChange={([v]) => updateInstance(i, { positionX: v })} min={-14} max={14} step={0.1} />                </div>
+                  <Slider value={[instance.positionX]} onValueChange={([v]) => updateInstance(i, { positionX: v })} min={posMin ?? -14} max={posMax ?? 14} step={0.1} />                </div>
 
                 {/* Position Y */}
                 <div className="space-y-1.5">
@@ -158,7 +167,7 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
                     <Label className="text-xs text-muted-foreground">Vị trí Y</Label>
                     <span className="text-xs text-muted-foreground tabular-nums">{instance.positionY.toFixed(1)}</span>
                   </div>
-                  <Slider value={[instance.positionY]} onValueChange={([v]) => updateInstance(i, { positionY: v })} min={CUE_BOUNDS.yMin} max={10} step={0.1} />
+                  <Slider value={[instance.positionY]} onValueChange={([v]) => updateInstance(i, { positionY: v })} min={posMin ?? CUE_BOUNDS.yMin} max={posMax ?? 10} step={0.1} />
                 </div>
 
                 {/* Position Z */}
@@ -167,7 +176,7 @@ export function CueSetupPanel({ cueConfig, onChange }: CueSetupPanelProps) {
                     <Label className="text-xs text-muted-foreground">Vị trí Z</Label>
                     <span className="text-xs text-muted-foreground tabular-nums">{instance.positionZ.toFixed(1)}</span>
                   </div>
-                  <Slider value={[instance.positionZ]} onValueChange={([v]) => updateInstance(i, { positionZ: v })} min={CUE_BOUNDS.zMin} max={3} step={0.1} />
+                  <Slider value={[instance.positionZ]} onValueChange={([v]) => updateInstance(i, { positionZ: v })} min={posMin ?? CUE_BOUNDS.zMin} max={posMax ?? 3} step={0.1} />
                 </div>
 
                 {/* Scale */}

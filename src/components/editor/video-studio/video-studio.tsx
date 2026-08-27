@@ -348,27 +348,6 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     setConfig(structuredClone(next));
   }, []);
 
-  /**
-   * Adopt the globally shared logo plate when the studio opens.
-   *
-   * Whatever the loaded product config stored for the plate's APPEARANCE is ignored in
-   * favour of the global one, so the branding is identical across every template and every
-   * product — see loadGlobalLogoBackdrop. `enabled` is the exception: whether this shot has
-   * a logo at all belongs to the template, so it is carried over rather than overwritten.
-   */
-  useEffect(() => {
-    if (!open) return;
-    setConfig((prev) => {
-      const next = {
-        ...loadGlobalLogoBackdrop(),
-        enabled: prev.logoBackdrop?.enabled ?? DEFAULT_LOGO_BACKDROP.enabled,
-      };
-      return JSON.stringify(prev.logoBackdrop) === JSON.stringify(next)
-        ? prev
-        : { ...prev, logoBackdrop: next };
-    });
-  }, [open]);
-
   // Ctrl+Z / Ctrl+Shift+Z keyboard handler
   useEffect(() => {
     if (!open) return;
@@ -1954,13 +1933,13 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                     const migrated: VideoStudioConfig = isV2
                       ? { ...loaded, environment: normalizeEnvironmentConfig(loaded.environment) }
                       : { ...loaded, environment: undefined };
-                    // The plate's LOOK is global branding, so switching templates must not
-                    // replace the neon treatment you dialled in. Whether the template shows a
-                    // logo at all is its own decision, so that one field is kept.
-                    migrated.logoBackdrop = {
-                      ...loadGlobalLogoBackdrop(),
-                      enabled: loaded.logoBackdrop?.enabled ?? DEFAULT_LOGO_BACKDROP.enabled,
-                    };
+                    // A template carries its own logo look — style tab, colours, neon
+                    // treatment — and restoring it is the whole point of saving one. The
+                    // global config only fills in fields the template predates, so an older
+                    // template still opens with sensible values for settings added since.
+                    migrated.logoBackdrop = loaded.logoBackdrop
+                      ? { ...DEFAULT_LOGO_BACKDROP, ...loaded.logoBackdrop }
+                      : loadGlobalLogoBackdrop();
                     setConfig(migrated);
                     // Invalidate cache so the next updateStudioPreviewConfig applies the template camera
                     extractorRef.current?.invalidateCameraStartKey();

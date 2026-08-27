@@ -530,14 +530,18 @@ export function createLShapedShadowMesh(
  * Without this, the shadow on the curved section appears as a floating dark arc because no
  * solid surface geometry exists at mid-curve positions.
  *
- * The mesh carries UVs that *continue the wall's own UV space downwards*. The wall plane is
- * `wallPlaneHeight` world units tall spanning v = 0..1 with v = 0 at its bottom edge
- * (world y = `wallPlaneBottomY`), so one world unit of height is 1 / wallPlaneHeight of v.
- * The cove's wall end sits at y = cornerY + radius, i.e. v = (cornerY + radius -
- * wallPlaneBottomY) / wallPlaneHeight, and its arc length runs down from there. With
- * RepeatWrapping on the wall's PBR maps the wall texture flows over the cove at the same
- * scale with no visible seam or stretch — which is what lets the cove share the wall's
- * material outright.
+ * The mesh carries UVs that place it in the wall's own UV space by *straight-down projection*
+ * onto the wall plane: a point on the arc takes the v of its own world height, exactly as if
+ * the wall's image were projected forward onto the curve. The wall plane is `wallPlaneHeight`
+ * world units tall spanning v = 0..1 with v = 0 at its bottom edge (world y =
+ * `wallPlaneBottomY`), so v = (y - wallPlaneBottomY) / wallPlaneHeight.
+ *
+ * Projection, not arc-length. An earlier version walked v down by the arc's *length*, which
+ * stretched whatever the wall showed across a band taller than the cove actually occupies —
+ * a backdrop photo smeared into vertical streaks across the curve. Projecting instead keeps
+ * the wall's pixels at the wall's own scale and aspect: the cove shows the slice of the
+ * backdrop that lines up with it and simply crops away what curves out of view. The cost is
+ * a mild foreshortening toward the floor end, which is what a real cyclorama does too.
  *
  * U spans 0..1 across the width, matching the wall plane, so horizontal tiling lines up too.
  */
@@ -560,10 +564,9 @@ export function createCornerFillMesh(
   const centerZ = wallZ + cornerRadius;
   const centerY = cornerY + cornerRadius;
 
-  // Arc length of the quarter circle, expressed in the wall's v units.
-  const arcV = (cornerRadius * (Math.PI / 2)) / wallPlaneHeight;
-  // v of the cove's wall end — where the cove tangentially meets the wall plane.
-  const wallEndV = (centerY - wallPlaneBottomY) / wallPlaneHeight;
+  // v of a world height, in the wall plane's UV space. Straight-down projection of the arc
+  // onto the wall keeps the backdrop at the wall's own scale — see the note above.
+  const vAt = (y: number) => (y - wallPlaneBottomY) / wallPlaneHeight;
 
   for (let i = 0; i < cornerSegments; i++) {
     const t0 = i / cornerSegments;
@@ -581,10 +584,10 @@ export function createCornerFillMesh(
     const ny1 = Math.cos(angle1);
     const nz1 = Math.sin(angle1);
 
-    // angle = pi/2 is the wall end of the arc (v = wallEndV, tangent to the wall plane);
-    // angle = 0 is the floor end. t runs floor -> wall, so v walks up to wallEndV.
-    const v0 = wallEndV - (1 - t0) * arcV;
-    const v1 = wallEndV - (1 - t1) * arcV;
+    // angle = pi/2 is the wall end of the arc (tangent to the wall plane); angle = 0 is the
+    // floor end. Each vertex takes the v of its own world height.
+    const v0 = vAt(y0);
+    const v1 = vAt(y1);
 
     positions.push(-hw, y0, z0,  hw, y0, z0,  hw, y1, z1);
     positions.push(-hw, y0, z0,  hw, y1, z1, -hw, y1, z1);

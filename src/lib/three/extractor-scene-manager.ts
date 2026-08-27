@@ -26,12 +26,22 @@ import {
   findTexturePack,
   loadPBRTexturePack,
 } from './studio-background';
-import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig, CueHdriConfig, CornerFillConfig } from '@/types/video-studio';
-import { computeVideoDuration, createEasingFunction, applyDirection, isCameraFixed, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI, DEFAULT_CORNER_FILL, getRecordingDimensions } from '@/types/video-studio';
+import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig, CueHdriConfig, CornerFillConfig, LogoBackdropConfig } from '@/types/video-studio';
+import { computeVideoDuration, createEasingFunction, applyDirection, isCameraFixed, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI, DEFAULT_CORNER_FILL, DEFAULT_LOGO_BACKDROP, DEFAULT_SCENE_BACKGROUND, getRecordingDimensions } from '@/types/video-studio';
 import { compositeSurfaceFrames, preloadFrameImages } from './background-compositor';
 import { applyBumperEmissiveShaderMask, applyLogoToExistingMaterial } from './leather-material';
+import { LogoBackdrop, resolveLogoBackdropUrl } from './logo-backdrop';
+
+/**
+ * How strongly the logo plate is drawn in scene view.
+ *
+ * Scene view is the authoring viewport: the plate is shown so its size and position can
+ * be judged, but held back so it never hides the geometry being edited. The minimap and
+ * the recorded video draw it at full strength.
+ */
+const SCENE_VIEW_BACKDROP_DIM = 0.45;
 import { isRubberMaterial, isTopCapMaterial, isTopCapFaceMaterial, isCylinderLeatherMaterial } from './leather-config';
-import { createWhiteImmuneMaterial } from './studio-helpers';
+import { createWhiteImmuneMaterial, applySurfaceTint } from './studio-helpers';
 import { StudioRoomEnvironment } from './studio-room-environment';
 import { normalizeEnvironmentConfig } from '@/types/studio-environment';
 
@@ -129,6 +139,8 @@ export class ExtractorSceneManager {
   private tableSurface: THREE.Mesh | null = null;
   // Curved corner fill — backs the shadow mesh's curved section so shadows look natural
   private studioCornerFill: THREE.Mesh | null = null;
+  /** Seconds fed to the logo plate's flicker clock. Advances with preview/recording time. */
+  private _logoElapsed = 0;
 
   // HDRI-driven shadow lights (one DirectionalLight per HDRI layer)
   private hdriShadowLights: Array<{
@@ -181,6 +193,28 @@ export class ExtractorSceneManager {
   private studioConfigRef: VideoStudioConfig | null = null;
   /** Video Studio V2 — real 3D room / HDRI environment. Null while V1 (flat wall+table) is active. */
   private roomEnvironment: StudioRoomEnvironment | null = null;
+  /**
+   * Giant camera-locked logo plate drawn behind the cue. Created lazily the first time a
+   * studio config asks for one, so nothing is allocated for the image extractor.
+   */
+  private logoBackdrop: LogoBackdrop | null = null;
+  /** Colour of the void around the V1 wall/table set. Mirrors config.sceneBackground. */
+  private _sceneBackgroundColor: string = DEFAULT_SCENE_BACKGROUND.color;
+  /**
+   * Frame aspect the logo plate is currently laid out for.
+   *
+   * The plate fits itself to the frame, and the studio renders into several differently
+   * shaped targets (the editor canvas, the ratio-accurate minimap, the recording buffer),
+   * so this is saved and restored around each of them.
+   */
+  private viewportAspectForBackdrop = 16 / 9;
+  /**
+   * The product's own "Logo khắc laser" id, which the plate follows when its own logoId
+   * is "auto". Set by the studio from the loaded product config.
+   */
+  private productLogoId: string | null = null;
+  /** True while a transparent (alpha) capture is in progress — suppresses the background. */
+  private _transparentBackground = false;
   /** Reason the last V2 environment load failed, surfaced in the studio UI. */
   private _roomEnvironmentError: string | null = null;
 
@@ -232,6 +266,15 @@ export class ExtractorSceneManager {
   private wallFramePlanes: THREE.Mesh[] = [];
   private tableFramePlanes: THREE.Mesh[] = [];
 
+  // Kept from scene setup so the corner fill can be repainted on a frame drag without
+  // rebuilding the whole set: the decoded wall images, and the bare wall material the cove
+  // falls back to when no frame paints over it.
+  private wallFrameImages: Map<string, HTMLImageElement> = new Map();
+  private wallBaseMaterial: THREE.Material | null = null;
+  /** True while the cove is a clone of the bare wall material rather than a wall composite.
+   *  Decides whether a live tint update applies to it (see updateSurfaceHdri). */
+  private coveShowsBareWall = true;
+
   // Smooth camera interpolation
   private cameraTargetPos = new THREE.Vector3();
   private cameraSmoothEnabled = false;
@@ -280,7 +323,7 @@ export class ExtractorSceneManager {
     this.renderer.shadowMap.type = THREE.VSMShadowMap;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x1a1a1a);
+    this.scene.background = new THREE.Color(this._sceneBackgroundColor);
 
     this.camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 100);
     this.camera.position.set(2, 0, 2);
@@ -435,10 +478,19 @@ export class ExtractorSceneManager {
     }
     if (this.studioCornerFill) {
       this.scene.remove(this.studioCornerFill);
-      (this.studioCornerFill.material as THREE.Material).dispose();
+      const coveMat = this.studioCornerFill.material as THREE.MeshStandardMaterial;
+      // The cove owns its wall-composite canvas texture; a clone of the wall material
+      // shares the wall's map, which the wall disposal above already handled.
+      if (coveMat.map && coveMat.map !== (this.wallBaseMaterial as THREE.MeshStandardMaterial | null)?.map) {
+        coveMat.map.dispose();
+      }
+      coveMat.dispose();
       this.studioCornerFill.geometry.dispose();
       this.studioCornerFill = null;
     }
+    // Cached wall inputs belong to the set being torn down.
+    this.wallFrameImages = new Map();
+    this.wallBaseMaterial = null;
     for (const mesh of this.backgroundLayerMeshes) {
       this.scene.remove(mesh);
       mesh.geometry.dispose();
@@ -587,6 +639,10 @@ export class ExtractorSceneManager {
     }
     for (const p of this.wallFramePlanes) p.visible = visible;
     for (const p of this.tableFramePlanes) p.visible = visible;
+    // The wall-anchored logo plate is part of the set, so it follows the wall it is
+    // painted on — a transparent capture that keeps it would fill the frame it is meant
+    // to leave empty.
+    this.logoBackdrop?.setWorldVisible(visible);
   }
 
   /**
@@ -1865,7 +1921,8 @@ export class ExtractorSceneManager {
    * Set scene background to transparent (for PNG export with alpha)
    */
   setTransparentBackground(transparent: boolean): void {
-    this.scene.background = transparent ? null : new THREE.Color(0x1a1a1a);
+    this._transparentBackground = transparent;
+    this.scene.background = transparent ? null : new THREE.Color(this._sceneBackgroundColor);
     console.log('[ExtractorSceneManager] Background set to:', transparent ? 'transparent' : 'dark');
   }
 
@@ -2338,6 +2395,12 @@ export class ExtractorSceneManager {
     // Ensure scene.environment is null — cue and surfaces each get their own envMap
     this.scene.environment = null;
 
+    // The void around the set and the camera-locked logo plate are both applied here as
+    // well as in updateStudioPreviewConfig, so a freshly built scene is already correct
+    // instead of showing one frame of the previous look before the debounced sync lands.
+    this.setSceneBackgroundColor(config.sceneBackground?.color ?? DEFAULT_SCENE_BACKGROUND.color);
+    this.setLogoBackdrop(config.logoBackdrop, resolveLogoBackdropUrl(config.logoBackdrop, this.productLogoId));
+
     // Apply multi-layer HDRI for shadow lights (no longer sets scene.environment)
     const layers = config.hdriConfig?.layers ?? [];
     try {
@@ -2403,11 +2466,13 @@ export class ExtractorSceneManager {
     if (config.wallSurface.roughness != null) {
       wallMaterial.roughness = config.wallSurface.roughness;
     }
+    // Base tint multiplies the pack's colour map, so the texture keeps its grain.
+    applySurfaceTint(wallMaterial, config.wallSurface.baseTint);
 
     // Subdivided wall geometry for better displacement mapping
     const wallGeo = new THREE.PlaneGeometry(34, 24, 64, 64);
     const wallMeshMat: THREE.Material = config.surfaceLightDisabled
-      ? createWhiteImmuneMaterial()
+      ? createWhiteImmuneMaterial(config.wallSurface.baseTint)
       : wallMaterial;
     if (config.surfaceLightDisabled) wallMaterial.dispose();
     this.backdrop = new THREE.Mesh(wallGeo, wallMeshMat);
@@ -2437,11 +2502,12 @@ export class ExtractorSceneManager {
     if (config.tableSurface.roughness != null) {
       tableMaterial.roughness = config.tableSurface.roughness;
     }
+    applySurfaceTint(tableMaterial, config.tableSurface.baseTint);
 
     // Subdivided table geometry for displacement
     const tableGeo = new THREE.PlaneGeometry(34, tableDepth, 64, 64);
     const tableMeshMat: THREE.Material = config.surfaceLightDisabled
-      ? createWhiteImmuneMaterial()
+      ? createWhiteImmuneMaterial(config.tableSurface.baseTint)
       : tableMaterial;
     if (config.surfaceLightDisabled) tableMaterial.dispose();
     this.tableSurface = new THREE.Mesh(tableGeo, tableMeshMat);
@@ -2457,6 +2523,9 @@ export class ExtractorSceneManager {
     // Frame planes follow the same lighting rule as the surfaces they sit on:
     // studio lights shade the background image unless surface influence is disabled.
     const framesLit = !config.surfaceLightDisabled;
+    // Cached for refreshCornerFillMaterial — see the fields' declaration.
+    this.wallFrameImages = wallImages2;
+    this.wallBaseMaterial = wallMeshMat;
     this.wallFramePlanes = this.buildFramePlanes(
       config.wallSurface, this.backdrop!, false, wallImages2, framesLit, surfaceEnv
     );
@@ -2469,8 +2538,8 @@ export class ExtractorSceneManager {
     // radius 0 tells the shadow mesh to build a sharp 90 degree corner. Shadows still land
     // on both faces; they simply break at the junction instead of sweeping around a cove.
     const cornerRadius = cornerFill.enabled ? cornerFill.radius : 0;
+    const wallZ = -5.5;
     if (config.shadow.enabled) {
-      const wallZ = -5.5;
       const shadowMesh = createLShapedShadowMesh(
         36,                    // width (slightly wider than surfaces)
         24,                    // wall height
@@ -2486,24 +2555,24 @@ export class ExtractorSceneManager {
       this.scene.add(this.shadowFloor);
       // Restore saved manual transform for shadow floor (if any)
       this.applyShadowPlaneTransform(config);
+    }
 
-      if (cornerFill.enabled) {
-        // Curved corner fill: backing geometry for the shadow mesh's curved section, and a
-        // visible part of the set in its own right. Its UVs continue the wall plane's UV
-        // space (see createCornerFillMesh), so cloning the wall/table material makes the
-        // texture flow across the cove at the surface's own tiling with no seam.
-        this.studioCornerFill = createCornerFillMesh(
-          34, tableY, wallZ, cornerFill.color, cornerRadius,
-          24,      // wall plane height — matches the PlaneGeometry(34, 24) backdrop
-          tableY   // wall plane bottom edge (backdrop y=10, height 24 -> bottom at -2)
-        );
-        (this.studioCornerFill.material as THREE.Material).dispose();
-        this.studioCornerFill.material = this.buildCornerFillMaterial(
-          cornerFill, config, wallMeshMat, surfaceEnv
-        );
-        this.studioCornerFill.userData = { type: 'corner-fill' };
-        this.scene.add(this.studioCornerFill);
-      }
+    // Curved corner fill: backing geometry for the shadow mesh's curved section, and a
+    // visible part of the set in its own right. Because it is visible set dressing and not
+    // only a shadow backing, it is built whether or not shadows are on — otherwise turning
+    // shadows off would square off the wall/table junction as a side effect.
+    if (cornerFill.enabled) {
+      this.studioCornerFill = createCornerFillMesh(
+        34, tableY, wallZ, cornerFill.color, cornerRadius,
+        24,      // wall plane height — matches the PlaneGeometry(34, 24) backdrop
+        tableY   // wall plane bottom edge (backdrop y=10, height 24 -> bottom at -2)
+      );
+      (this.studioCornerFill.material as THREE.Material).dispose();
+      this.studioCornerFill.material = this.buildCornerFillMaterial(
+        cornerFill, config, wallMeshMat, surfaceEnv, wallImages2
+      );
+      this.studioCornerFill.userData = { type: 'corner-fill' };
+      this.scene.add(this.studioCornerFill);
     }
 
     this.syncCornerFillVisibility(config);
@@ -2515,146 +2584,270 @@ export class ExtractorSceneManager {
   /**
    * Decide whether the corner fill should be drawn.
    *
-   * It used to be hidden whenever ANY frame carried an image, because a white cove would
-   * cut a bright band through a photographic backdrop. That is no longer necessary for the
-   * wall: the cove now inherits the covering wall frame's own material, so it continues the
-   * image instead of interrupting it.
+   * The cove now paints itself from a render of the wall's *whole* visible surface
+   * (see buildCornerFillMaterial), so it continues any backdrop — flat colour, gradient
+   * or photo, full-bleed or not — instead of interrupting it. That leaves only one reason
+   * to hide it: the fillet is disabled.
    *
-   * It still hides for a *table* image frame. The cove follows the wall, so against a
-   * photographic table it would be the one surface that does not match, and there is no
-   * single material that can belong to both at once.
+   * It deliberately no longer hides for a table image. The cove is the wall's continuation
+   * and reads correctly against a photographic table exactly as the wall itself does.
    */
   private syncCornerFillVisibility(config: VideoStudioConfig): void {
     if (!this.studioCornerFill) return;
-    const tableHasImage = config.tableSurface.frames.some(f => f.enabled && f.imageUrl);
-    this.studioCornerFill.visible = !tableHasImage;
+    const cornerFill = { ...DEFAULT_CORNER_FILL, ...config.cornerFill };
+    this.studioCornerFill.visible = cornerFill.enabled;
   }
 
   /**
-   * Pick the wall frame that defines what the wall actually looks like.
+   * Repaint the corner fill from the wall's current frame layout.
    *
-   * The wall's visible appearance is often NOT its own material: a full-coverage frame
-   * plane sits 0.01 in front of the backdrop and covers it entirely. The cove must match
-   * what the viewer sees, so it follows that frame rather than the bare wall material.
+   * The cove's texture is a render of the whole wall, so it goes stale the moment a frame
+   * moves, resizes, rotates or changes opacity — all of which are applied live by
+   * `updateFramePlaneTransforms` and deliberately never trigger a scene rebuild. This is the
+   * cheap counterpart: it redraws one canvas and swaps the material, leaving geometry,
+   * textures and lights untouched.
    *
-   * "Covering" means the frame spans the whole wall (>= 1.0 in both axes), is centred, is
-   * opaque, and has its background layer on. A small decorative frame fails this test and
-   * the cove correctly falls back to the wall material underneath.
+   * It is a no-op when the cove does not exist, so callers do not need to guard.
    */
-  private findCoveringWallFrame(surface: SurfaceConfig): BackgroundFrame | null {
-    const enabled = surface.frames.filter(f => f.enabled);
-    // Later frames draw on top, so the topmost covering frame wins.
-    for (let i = enabled.length - 1; i >= 0; i--) {
-      const f = enabled[i];
-      if (f.width < 1 || f.height < 1) continue;
-      if ((f.opacity ?? 1) < 1) continue;
-      if (Math.abs(f.x - 0.5) > 0.01 || Math.abs(f.y - 0.5) > 0.01) continue;
-      if ((f.rotation ?? 0) % 360 !== 0) continue;
-      // A frame whose background layer is off shows the wall through it.
-      const isLegacy = !!f.type;
-      if (isLegacy) {
-        if (f.type !== 'color' && f.type !== 'gradient' && f.type !== 'image') continue;
-      } else if (f.backgroundEnabled === false && !f.imageUrl) {
-        continue;
+  refreshCornerFillMaterial(config: VideoStudioConfig): void {
+    if (!this.studioCornerFill || !this.wallBaseMaterial) return;
+
+    const cornerFill = { ...DEFAULT_CORNER_FILL, ...config.cornerFill };
+    const firstEnabledLayer = (config.hdriConfig?.layers ?? []).find(l => l.enabled !== false);
+    const surfaceEnv = config.surfaceLightDisabled
+      ? null
+      : this.getSurfaceEnvMap(firstEnabledLayer?.lightColor ?? '#ffffff');
+
+    const next = this.buildCornerFillMaterial(
+      cornerFill, config, this.wallBaseMaterial, surfaceEnv, this.wallFrameImages
+    );
+
+    const prev = this.studioCornerFill.material as THREE.Material;
+    this.studioCornerFill.material = next;
+    // The old material owns a canvas texture of its own (unless it was a clone of the wall
+    // material, whose map is shared and must survive). Only dispose what this mesh made.
+    if (prev !== this.wallBaseMaterial) {
+      const prevMap = (prev as THREE.MeshStandardMaterial).map;
+      if (prevMap && prevMap !== (this.wallBaseMaterial as THREE.MeshStandardMaterial).map) {
+        prevMap.dispose();
       }
-      return f;
+      prev.dispose();
     }
-    return null;
   }
 
   /**
-   * Resolve the flat colour a frame paints, when it paints one.
+   * Draw the wall's visible surface into a canvas laid out in *wall-plane UV space*.
    *
-   * Returns null for image or gradient frames — those have no single colour, so the cove
-   * takes a different route (it borrows the frame plane's own texture instead).
+   * The canvas covers the full 34x24 backdrop: x = 0 is the wall's left edge, y = 0 its
+   * top edge. Every enabled frame is composited into it at its own position, size, rotation
+   * and opacity, using the exact same drawing rules as `createFramePlaneMaterial` — an
+   * image is letterboxed (`object-fit: contain`) inside its frame over the frame's
+   * background layer — so what lands in the canvas is pixel-for-pixel what the frame planes
+   * show on the wall.
+   *
+   * Returns null when nothing is drawn (no enabled frames), which tells the caller to fall
+   * back to the bare wall material.
    */
-  private resolveFrameFlatColor(frame: BackgroundFrame): string | null {
-    if (frame.type) {
-      if (frame.type === 'color' && frame.color) return frame.color;
-      return null;
+  private renderWallCompositeCanvas(
+    surface: SurfaceConfig,
+    loadedImages: Map<string, HTMLImageElement>,
+    wallWidth: number,
+    wallHeight: number,
+    baseTint?: string | null
+  ): HTMLCanvasElement | null {
+    const enabledFrames = surface.frames.filter(f => f.enabled);
+    if (enabledFrames.length === 0) return null;
+
+    // Resolution is driven by the wall's aspect so nothing is stretched, and by the largest
+    // source image so a high-res photo is not pre-downsampled before the cove samples it.
+    const gpuMaxTex = this.renderer.capabilities.maxTextureSize ?? 4096;
+    const HARD_MAX_TEX = Math.min(gpuMaxTex, 4096);
+    let srcMaxSide = 0;
+    for (const f of enabledFrames) {
+      if (!f.imageUrl) continue;
+      const img = loadedImages.get(f.imageUrl);
+      if (img) srcMaxSide = Math.max(srcMaxSide, img.naturalWidth, img.naturalHeight);
     }
-    if (frame.imageUrl) return null;
-    if (frame.backgroundEnabled === false) return null;
-    if (frame.backgroundType === 'gradient') return null;
-    return frame.backgroundColor ?? '#1a1a1a';
+    const MAX_TEX = Math.min(Math.max(2048, srcMaxSide), HARD_MAX_TEX);
+    const wallAR = wallWidth / wallHeight;
+    const canvasW = wallAR >= 1 ? MAX_TEX : Math.round(MAX_TEX * wallAR);
+    const canvasH = wallAR < 1 ? MAX_TEX : Math.round(MAX_TEX / wallAR);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = canvasW;
+    canvas.height = canvasH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    // Pixels per wall unit — the same on both axes because the canvas matches the wall AR.
+    const pxPerU = canvasW / wallWidth;
+    const pxPerV = canvasH / wallHeight;
+
+    // Base layer: the wall's own tint, so a frame that does not cover the whole wall blends
+    // into the same colour the wall plane shows beside it instead of into transparency.
+    // (The pack's texture grain is not reproduced here — around a 0.8-unit cove the tint is
+    // what reads, and sampling the PBR maps per-pixel on every drag would not pay for itself.)
+    if (baseTint && baseTint !== '#ffffff') {
+      ctx.fillStyle = baseTint;
+      ctx.fillRect(0, 0, canvasW, canvasH);
+    }
+
+    let drewAnything = false;
+
+    for (const frame of enabledFrames) {
+      // Frame rect in wall units, then in canvas pixels. frame.x / frame.y are the CENTRE
+      // in 0..1 wall space with y = 0 at the top, matching the canvas' own y direction.
+      const fwPx = frame.width * wallWidth * pxPerU;
+      const fhPx = frame.height * wallHeight * pxPerV;
+      const cxPx = frame.x * canvasW;
+      const cyPx = frame.y * canvasH;
+
+      ctx.save();
+      ctx.translate(cxPx, cyPx);
+      if (frame.rotation) ctx.rotate((frame.rotation * Math.PI) / 180);
+
+      const outer = frame.opacity ?? 1;
+
+      // ── object-fit: contain, matching createFramePlaneMaterial's drawImageContain ──
+      const drawContain = (img: HTMLImageElement, alpha: number) => {
+        const scale = Math.min(fwPx / img.naturalWidth, fhPx / img.naturalHeight);
+        const dw = img.naturalWidth * scale;
+        const dh = img.naturalHeight * scale;
+        ctx.globalAlpha = alpha;
+        ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
+        ctx.globalAlpha = 1;
+      };
+
+      const fillRect = (style: string | CanvasGradient, alpha: number) => {
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = style;
+        ctx.fillRect(-fwPx / 2, -fhPx / 2, fwPx, fhPx);
+        ctx.globalAlpha = 1;
+      };
+
+      const linearGradient = (colors: string[], angleDeg: number): CanvasGradient => {
+        const angleRad = (angleDeg * Math.PI) / 180;
+        const len = Math.sqrt(fwPx * fwPx + fhPx * fhPx) / 2;
+        const grad = ctx.createLinearGradient(
+          -Math.cos(angleRad) * len, -Math.sin(angleRad) * len,
+          Math.cos(angleRad) * len, Math.sin(angleRad) * len
+        );
+        colors.forEach((c, i) => grad.addColorStop(i / Math.max(colors.length - 1, 1), c));
+        return grad;
+      };
+
+      if (frame.type) {
+        // ── Legacy format ──
+        if (frame.type === 'color' && frame.color) {
+          fillRect(frame.color, outer);
+          drewAnything = true;
+        } else if (frame.type === 'gradient' && frame.gradient) {
+          const preset = GRADIENT_PRESETS.find(p => p.id === frame.gradient!.presetId);
+          if (preset) {
+            fillRect(linearGradient(preset.colors, frame.gradient.angle ?? preset.angle), outer);
+            drewAnything = true;
+          }
+        } else if (frame.type === 'image' && frame.imageUrl) {
+          const img = loadedImages.get(frame.imageUrl);
+          if (img) { drawContain(img, outer); drewAnything = true; }
+        }
+      } else {
+        // ── Current format: background layer, then image layer on top ──
+        if (frame.backgroundEnabled !== false) {
+          const bgAlpha = outer * (frame.backgroundOpacity ?? 1);
+          if (frame.backgroundType === 'gradient' && frame.backgroundGradient) {
+            const g = frame.backgroundGradient;
+            fillRect(linearGradient(g.colors, g.angle), bgAlpha);
+          } else {
+            fillRect(frame.backgroundColor ?? '#1a1a1a', bgAlpha);
+          }
+          drewAnything = true;
+        }
+        if (frame.imageUrl) {
+          const img = loadedImages.get(frame.imageUrl);
+          if (img) { drawContain(img, outer * (frame.imageOpacity ?? 1)); drewAnything = true; }
+        }
+      }
+
+      ctx.restore();
+    }
+
+    return drewAnything ? canvas : null;
   }
 
   /**
    * Build the material for the curved corner fill so it reads as a continuation of the
    * wall rather than a separate strip.
    *
-   * The cove has no styling of its own — it always mirrors the wall's *visible* surface,
-   * resolved in this order:
+   * The cove has no styling of its own — it always mirrors the wall's *visible* surface.
+   * Earlier versions cloned one "covering" frame's material, which only worked when a
+   * single frame happened to span the whole wall: the default frame is 0.4 x 0.35, so an
+   * image backdrop almost never qualified and the cove silently fell back to the bare wall
+   * texture, showing the seam this mesh exists to hide.
    *
-   *  1. A full-coverage wall frame painting a flat colour (the common case: the "Khung nền"
-   *     background-colour layer). The cove takes that exact colour, and critically copies
-   *     the frame material's `toneMapped` flag — an unlit frame plane bypasses tone
-   *     mapping, so a tone-mapped cove would render the same hex as a visibly different
-   *     shade. Matching the flag is what makes #1a1a1a actually look like #1a1a1a.
-   *  2. A full-coverage frame painting an image or gradient. The cove clones that frame
-   *     plane's material, so the same artwork continues around the curve.
-   *  3. No covering frame — clone the bare wall material (PBR texture pack or solid),
-   *     whose UV space the cove's UVs already continue.
+   * Instead the whole wall — every enabled frame, in order, over the wall material — is
+   * composited into one canvas laid out in wall UV space, and that canvas is used as the
+   * cove's map. The cove's UVs already continue the wall plane's UV space (see
+   * `createCornerFillMesh`), so sampling it lands on exactly the strip of wall the cove
+   * sits below, and any backdrop — flat colour, gradient, photo, full-bleed or not —
+   * flows around the curve.
    *
-   * `cornerFill.color` is used only as a last-resort tint when nothing else resolves.
+   * The wall material underneath is painted in first so a partial frame blends into the
+   * real wall at its edges exactly as it does on the wall plane itself.
+   *
+   * `cornerFill.color` is used only as a last-resort tint when the wall is the flat unlit
+   * white surface and no frame resolves.
    */
   private buildCornerFillMaterial(
     cornerFill: CornerFillConfig,
     config: VideoStudioConfig,
     wallMeshMat: THREE.Material,
-    surfaceEnv: THREE.Texture | null
+    surfaceEnv: THREE.Texture | null,
+    wallImages: Map<string, HTMLImageElement>
   ): THREE.Material {
-    const coveringFrame = this.findCoveringWallFrame(config.wallSurface);
+    const composite = this.renderWallCompositeCanvas(
+      config.wallSurface, wallImages, 34, 24, config.wallSurface.baseTint
+    );
+    this.coveShowsBareWall = !composite;
 
-    if (coveringFrame) {
-      const framePlane = this.wallFramePlanes.find(
-        m => m.userData?.frameId === coveringFrame.id
-      );
-      const frameMat = framePlane?.material as FramePlaneMaterial | undefined;
-      const flatColor = this.resolveFrameFlatColor(coveringFrame);
+    if (composite) {
+      const tex = new THREE.CanvasTexture(composite);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      // The cove samples a thin horizontal band of this texture at a grazing angle, so
+      // mipmaps + anisotropy are what keep it from aliasing into a shimmering line.
+      tex.generateMipmaps = true;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+      tex.needsUpdate = true;
 
-      if (flatColor) {
-        // Flat-colour frame: reproduce the colour AND the frame's tone-mapping behaviour.
-        if (frameMat instanceof THREE.MeshStandardMaterial) {
-          const mat = new THREE.MeshStandardMaterial({
-            color: new THREE.Color(flatColor),
-            roughness: frameMat.roughness,
-            metalness: frameMat.metalness,
-            side: THREE.FrontSide,
-          });
-          if (surfaceEnv) {
-            mat.envMap = surfaceEnv;
-            mat.envMapIntensity = frameMat.envMapIntensity;
-          }
-          mat.toneMapped = frameMat.toneMapped;
-          return mat;
-        }
-        const mat = new THREE.MeshBasicMaterial({
-          color: new THREE.Color(flatColor),
-          side: THREE.FrontSide,
-        });
-        // Unlit frame planes set toneMapped = false so colours display as authored.
-        mat.toneMapped = frameMat?.toneMapped ?? false;
+      // Frame planes are unlit when surfaceLightDisabled, lit otherwise — the cove has to
+      // take the same path or the identical pixels render as two different shades.
+      if (config.surfaceLightDisabled) {
+        const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.FrontSide });
+        // Unlit frame planes bypass tone mapping so colours display as authored.
+        mat.toneMapped = false;
         return mat;
       }
 
-      if (frameMat) {
-        // Image / gradient frame: clone the plane's material so the artwork continues.
-        // The frame's canvas texture spans the plane's full UV 0..1, and the cove's UVs
-        // continue the wall plane's space, so the image carries around the curve.
-        const clone = frameMat.clone();
-        clone.side = THREE.FrontSide;
-        // Frame planes are transparent with depthWrite off for layering; the cove is
-        // solid geometry that must write depth or the shadow mesh renders through it.
-        clone.transparent = false;
-        clone.opacity = 1;
-        clone.depthWrite = true;
-        clone.needsUpdate = true;
-        return clone;
+      const mat = new THREE.MeshStandardMaterial({
+        map: tex,
+        roughness: config.wallSurface.roughness ?? 0.95,
+        metalness: 0,
+        side: THREE.FrontSide,
+      });
+      if (surfaceEnv) {
+        mat.envMap = surfaceEnv;
+        mat.envMapIntensity = 0.6;
       }
+      return mat;
     }
 
-    // No covering frame — mirror the bare wall material.
+    // No frames at all — mirror the bare wall material.
     const clone = wallMeshMat.clone();
     clone.side = THREE.FrontSide;
 
@@ -3037,6 +3230,9 @@ export class ExtractorSceneManager {
         );
       }
       if (this._cameraOrbit) this._cameraOrbit.update();
+      // Drive the neon flicker off the preview's own elapsed time.
+      this._logoElapsed += deltaMs / 1000;
+      this.logoBackdrop?.setElapsed(this._logoElapsed);
       this.render();
     };
     animate(performance.now());
@@ -3065,6 +3261,12 @@ export class ExtractorSceneManager {
       );
     }
 
+    // Colour of the void outside the wall/table planes
+    this.setSceneBackgroundColor(config.sceneBackground?.color ?? DEFAULT_SCENE_BACKGROUND.color);
+
+    // Giant camera-locked logo plate behind the cue
+    this.setLogoBackdrop(config.logoBackdrop, resolveLogoBackdropUrl(config.logoBackdrop, this.productLogoId));
+
     // Update cue instances
     this.updateCueInstances(config.cueConfig);
 
@@ -3081,6 +3283,11 @@ export class ExtractorSceneManager {
 
     // Apply surface HDRI separation
     this.updateSurfaceHdri(config);
+
+    // The cove paints itself from the wall, so a surface tint change has to repaint it too.
+    // This runs AFTER updateSurfaceHdri so that when the cove clones the bare wall material
+    // it copies the tint just applied, not the previous frame's.
+    this.refreshCornerFillMaterial(config);
 
     // Update HDRI light helpers
     this.updateHdriLightHelpers(config);
@@ -3148,23 +3355,45 @@ export class ExtractorSceneManager {
 
   /** Apply per-surface roughness from config and tint surface envMap with studio light color */
   private updateSurfaceHdri(config: VideoStudioConfig): void {
-    // When surfaceLightDisabled the wall/table use MeshBasicMaterial — skip all env map updates.
-    if (config.surfaceLightDisabled) return;
+    // When surfaceLightDisabled the wall/table use MeshBasicMaterial — skip all env map
+    // updates, but the base tint still has to land or the colour picker would do nothing
+    // in that mode. There is no texture to multiply, so the tint IS the material colour.
+    if (config.surfaceLightDisabled) {
+      const unlit: Array<[THREE.Mesh | null, string | null | undefined]> = [
+        [this.backdrop, config.wallSurface.baseTint],
+        [this.tableSurface, config.tableSurface.baseTint],
+        [this.coveShowsBareWall ? this.studioCornerFill : null, config.wallSurface.baseTint],
+      ];
+      for (const [mesh, tint] of unlit) {
+        if (!mesh) continue;
+        const mat = mesh.material;
+        if (mat instanceof THREE.MeshBasicMaterial) mat.color.set(tint || '#ffffff');
+      }
+      return;
+    }
 
     // Use the first enabled studio light's color for surface tint
     const firstEnabledLayer = (config.hdriConfig?.layers ?? []).find(l => l.enabled !== false);
     const surfaceColor = firstEnabledLayer?.lightColor ?? '#ffffff';
     const surfaceEnv = this.getSurfaceEnvMap(surfaceColor);
 
-    const targets: Array<{ mesh: THREE.Mesh | null; roughness?: number }> = [
-      { mesh: this.backdrop, roughness: config.wallSurface.roughness },
-      { mesh: this.tableSurface, roughness: config.tableSurface.roughness },
-      // The corner fill always mirrors the wall, so it takes the wall's roughness — a cove
-      // with a different sheen reads as a separate strip even at the identical colour.
-      { mesh: this.studioCornerFill, roughness: config.wallSurface.roughness },
+    const targets: Array<{ mesh: THREE.Mesh | null; roughness?: number; tint?: string | null }> = [
+      { mesh: this.backdrop, roughness: config.wallSurface.roughness, tint: config.wallSurface.baseTint },
+      { mesh: this.tableSurface, roughness: config.tableSurface.roughness, tint: config.tableSurface.baseTint },
+      // The corner fill always mirrors the wall, so it takes the wall's roughness and tint —
+      // a cove with a different sheen or hue reads as a separate strip.
+      //
+      // Only when the cove is showing the bare wall, though: once a frame paints over the
+      // wall the cove's map is the wall composite, which already has the tint baked into the
+      // pixels it copied. Tinting that a second time would double it.
+      {
+        mesh: this.coveShowsBareWall ? this.studioCornerFill : null,
+        roughness: config.wallSurface.roughness,
+        tint: config.wallSurface.baseTint,
+      },
     ];
 
-    for (const { mesh, roughness } of targets) {
+    for (const { mesh, roughness, tint } of targets) {
       if (!mesh) continue;
       // The corner fill can be a MeshBasicMaterial (unlit wall / unlit frame), which has
       // no envMap and must not be touched here.
@@ -3172,7 +3401,7 @@ export class ExtractorSceneManager {
       const mat = mesh.material;
       mat.envMap = surfaceEnv;
       mat.envMapIntensity = 0.6;
-      mat.needsUpdate = true;
+      applySurfaceTint(mat, tint);
       if (roughness != null) {
         mat.roughness = roughness;
       }
@@ -3213,6 +3442,10 @@ export class ExtractorSceneManager {
       // Pass false to prevent Three.js from overwriting canvas CSS (width/height px style)
       this.renderer.setSize(dims.width, dims.height, false);
       this.camera.aspect = dims.width / dims.height;
+      // Re-fit the logo plate to the recording frame. The editor canvas is a different
+      // shape from the output, so without this the plate would be laid out for the
+      // preview's aspect and come out stretched (or cropped) in the file.
+      this.applyBackdropAspect(dims.width / dims.height);
       this.camera.updateProjectionMatrix();
 
       this.setupStudioFromStudioConfig(config).then(async () => {
@@ -3627,7 +3860,10 @@ export class ExtractorSceneManager {
       if (hasAnySpin && this.clonedModel && this.instancedMeshes.length === 0) {
         this.clonedModel.updateMatrixWorld(true);
       }
-      this.renderer.render(this.scene, this.camera);
+      // Flicker phase comes from the frame COUNT, not a wall clock, so re-recording the
+      // same config produces an identical file rather than a different flicker every take.
+      this.logoBackdrop?.setElapsed(frameCount / RECORD_FPS);
+      this.renderWithBackdrop(this.camera);
     };
 
     const animate = (timestamp: number) => {
@@ -3951,6 +4187,187 @@ export class ExtractorSceneManager {
   }
 
   /**
+   * Colour of the empty space surrounding the V1 wall/table set.
+   *
+   * V1 only builds two planes; everything the camera sees past their edges is the scene
+   * background, which is why painting the wall and the table black still left a lighter
+   * border around them. This is the knob for that border.
+   */
+  setSceneBackgroundColor(color: string): void {
+    if (color === this._sceneBackgroundColor) return;
+    this._sceneBackgroundColor = color;
+    // A transparent capture is mid-flight and owns the background until it finishes;
+    // setTransparentBackground(false) will pick the new colour up on the way out.
+    if (this._transparentBackground) return;
+    if (this.scene.background instanceof THREE.Color) {
+      this.scene.background.set(color);
+    } else {
+      this.scene.background = new THREE.Color(color);
+    }
+  }
+
+  /**
+   * Configure the giant camera-locked logo plate behind the cue.
+   *
+   * `url` must already be resolved (the caller knows the product's own logoId and the
+   * CUE_LOGO_OPTIONS catalog); pass null to draw nothing.
+   */
+  setLogoBackdrop(config: LogoBackdropConfig | undefined | null, url: string | null): void {
+    if (this.isDisposed) return;
+    if (!config?.enabled) {
+      // Keep the instance alive: toggling the plate off and on again is a common edit,
+      // and re-decoding the logo texture each time would stutter the preview.
+      this.logoBackdrop?.setConfig({ ...(config ?? DEFAULT_LOGO_BACKDROP), enabled: false }, url);
+      // Turning the plate off has to take its MESH out of the scene, not merely mark the
+      // plate inactive. In wall mode the mesh is ordinary set geometry that the main pass
+      // draws on its own, so leaving it parented kept the logo on screen after the toggle
+      // was cleared — the "off" switch appeared to do nothing.
+      this.syncLogoBackdropMesh();
+      return;
+    }
+    if (!this.logoBackdrop) {
+      this.logoBackdrop = new LogoBackdrop();
+      // Bound once at creation: `this.camera` is built in the constructor and never
+      // reassigned, so the plate's frame reference stays valid for the whole session.
+      this.logoBackdrop.setFrameCamera(this.camera);
+      // The plate only becomes `active` once its image has decoded, which is always after
+      // the synchronous mesh check below has already run and concluded there was nothing to
+      // add. Re-running it on load is what makes a saved template show its logo immediately
+      // instead of waiting for the next unrelated edit.
+      this.logoBackdrop.onReady = () => {
+        this.syncLogoBackdropMesh();
+        this.render();
+      };
+    }
+    this.logoBackdrop.setViewportAspect(this.viewportAspectForBackdrop);
+    // Frame-relative placement is measured against the PRODUCTION camera, never the
+    // scene-view god camera: the plate has to be composed against the shot that will be
+    // recorded, not against whatever angle the editor is inspecting from.
+    this.logoBackdrop.setFrameCamera(this.camera);
+    this.logoBackdrop.setConfig(config, url);
+    this.syncLogoBackdropMesh();
+  }
+
+  /**
+   * Keep the wall-anchored plate attached to the studio scene.
+   *
+   * In wall mode the plate is ordinary set geometry, so it has to live in the scene the
+   * main pass renders — that is what makes the cue occlude it and gives it the set's
+   * perspective. In screen mode it belongs to the overlay scene instead, so it must be
+   * removed from here or it would be drawn twice.
+   */
+  private syncLogoBackdropMesh(): void {
+    const backdrop = this.logoBackdrop;
+    if (!backdrop) return;
+    const mesh = backdrop.worldMesh;
+    const wantsWorld = backdrop.active && backdrop.anchor === "wall";
+    if (wantsWorld) {
+      if (mesh.parent !== this.scene) {
+        mesh.removeFromParent();
+        this.scene.add(mesh);
+      }
+      mesh.userData = { type: 'logoBackdrop' };
+    } else if (mesh.parent === this.scene) {
+      this.scene.remove(mesh);
+    }
+  }
+
+  /**
+   * Tell the studio which logo is engraved on the cue, so a plate set to "auto" draws
+   * the same mark. Safe to call before any plate exists.
+   */
+  setProductLogoId(logoId: string | null): void {
+    this.productLogoId = logoId;
+  }
+
+  /** Re-fit the logo plate to a differently shaped render target. */
+  private applyBackdropAspect(aspect: number): void {
+    if (!isFinite(aspect) || aspect <= 0) return;
+    this.viewportAspectForBackdrop = aspect;
+    this.logoBackdrop?.setViewportAspect(aspect);
+  }
+
+  /**
+   * Tell the logo plate what shape the frame is, from the studio's selected video ratio.
+   *
+   * Called when the ratio changes and before recording starts, so the plate that appears
+   * in the preview is the plate that ends up in the file.
+   */
+  setLogoBackdropAspect(aspect: number): void {
+    this.applyBackdropAspect(aspect);
+  }
+
+  /**
+   * Render the scene with the logo plate composited behind it.
+   *
+   * The plate is drawn into the same buffer BEFORE the main scene, with the main scene's
+   * automatic clear suppressed for that one call — that is what puts the cue in front of
+   * the plate while keeping the plate locked to the frame. With no active plate this is
+   * exactly `renderer.render(scene, camera)`.
+   *
+   * Skipped during a transparent capture: an alpha PNG must keep its empty pixels empty,
+   * and a full-frame backdrop would fill every one of them.
+   */
+  private renderWithBackdrop(camera: THREE.Camera, opacityScale = 1): void {
+    const backdrop = this.logoBackdrop;
+
+    // A frame-relative plate is re-placed from the production camera's current pose before
+    // anything draws, so it holds its spot in the shot as the camera travels.
+    backdrop?.syncToFrame();
+
+    if (!backdrop?.active || this._transparentBackground) {
+      // An inactive plate must be HIDDEN, not merely skipped. In wall mode its mesh is
+      // ordinary set geometry that this render call draws on its own, so a plate that was
+      // switched off (or whose texture is gone) would otherwise stay on screen.
+      // A transparent capture hides it for the same reason: an alpha PNG has to keep its
+      // empty pixels empty.
+      backdrop?.setWorldVisible(false);
+      this.renderer.render(this.scene, camera);
+      return;
+    }
+    backdrop.setWorldVisible(true);
+
+    // The blur runs into offscreen render targets, so it has to happen before any pass
+    // binds a target of its own.
+    const ready = backdrop.prepare(this.renderer);
+
+    if (backdrop.anchor === "wall") {
+      // The plate is real set geometry sitting in front of the back wall: it is already
+      // in this.scene, so the ordinary render draws it, the cue occludes it, and it takes
+      // the set's perspective. Nothing else to do.
+      this.renderer.render(this.scene, camera);
+      return;
+    }
+
+    if (!ready) {
+      this.renderer.render(this.scene, camera);
+      return;
+    }
+
+    // ── Screen-anchored: draw the scene, then the plate as an overlay ON TOP. ──
+    //
+    // The plate used to be drawn FIRST, as a backdrop behind the scene. That works only
+    // when there is empty space behind the subject to see it through — and V1's set has a
+    // 34x24 opaque wall filling the whole frame, so the wall painted straight over the
+    // plate and a screen-locked logo appeared to do nothing at all.
+    //
+    // Drawn last it is what the name promises: locked to the frame, always visible, holding
+    // its position while the camera moves. Its own pass uses a fixed orthographic camera,
+    // so nothing about the studio camera's motion reaches it.
+    const savedAutoClear = this.renderer.autoClear;
+
+    this.renderer.render(this.scene, camera);
+
+    // The overlay must not be depth-rejected by the scene it sits on top of, and must not
+    // leave depth of its own behind for the next frame's geometry to test against.
+    this.renderer.autoClear = false;
+    this.renderer.clearDepth();
+    backdrop.render(this.renderer, opacityScale);
+
+    this.renderer.autoClear = savedAutoClear;
+  }
+
+  /**
    * Render the current scene (call after making changes to see updates)
    */
   render(): void {
@@ -3978,7 +4395,16 @@ export class ExtractorSceneManager {
     }
 
     const cam = this.isSceneView && this.godCamera ? this.godCamera : this.camera;
-    this.renderer.render(this.scene, cam);
+    // A wall-anchored plate is set geometry and renders identically in every view.
+    // A SCREEN-anchored plate, though, is locked to the production frame — in scene view
+    // the god camera roams while the plate stays glued to the viewport, so it is dimmed
+    // there to keep the geometry being edited visible underneath it. The minimap and the
+    // recording always draw it at full strength.
+    const dim =
+      this.isSceneView && this.logoBackdrop?.anchor === "screen"
+        ? SCENE_VIEW_BACKDROP_DIM
+        : 1;
+    this.renderWithBackdrop(cam, dim);
   }
 
   /** Register a canvas to receive live production-camera preview (square, for shadow simulator) */
@@ -4108,8 +4534,14 @@ export class ExtractorSceneManager {
     this.renderer.setViewport(vx, vy, vw, vh);
 
     // Render directly to main WebGL canvas (preserveDrawingBuffer: true)
-    // This ensures tone mapping + sRGB encoding match the main view exactly
-    this.renderer.render(this.scene, this.camera);
+    // This ensures tone mapping + sRGB encoding match the main view exactly.
+    // The minimap IS the production camera, so it must show the logo plate — and at the
+    // minimap's own aspect, not the editor canvas's, or the plate would be stretched
+    // relative to what actually records.
+    const savedBackdropAspect = this.viewportAspectForBackdrop;
+    this.applyBackdropAspect(targetAspect);
+    this.renderWithBackdrop(this.camera);
+    this.applyBackdropAspect(savedBackdropAspect);
 
     this.renderer.setViewport(savedViewport);
 
@@ -4134,7 +4566,10 @@ export class ExtractorSceneManager {
    * Capture current view as data URL with transparency
    */
   captureFrame(format: 'png' | 'jpeg' | 'webp' = 'png'): string {
-    this.renderer.render(this.scene, this.camera);
+    // This is the still shown in the studio's camera view, so it must include the
+    // camera-locked logo plate — otherwise the one view meant to preview the shot is
+    // the only place the plate is missing.
+    this.renderWithBackdrop(this.camera);
     const mimeType =
       format === 'jpeg'
         ? 'image/jpeg'
@@ -5520,6 +5955,8 @@ export class ExtractorSceneManager {
     // Full teardown of the V2 environment, including its HDRI / room caches.
     // clearStudioElements() only removes its scene objects so rebuilds stay fast.
     this.disposeRoomEnvironment();
+    this.logoBackdrop?.dispose();
+    this.logoBackdrop = null;
     this.clearInstancedMeshes();
     this.clearSimulatorCueGroups();
 

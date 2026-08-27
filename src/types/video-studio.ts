@@ -331,6 +331,17 @@ export interface SurfaceConfig {
   envMapIntensity: number;        // 0–1, how much HDRI light the surface receives
   roughness?: number;             // 0–1, override material roughness (undefined = use texture default)
   frames: BackgroundFrame[];      // Max 4, ordered bottom-to-top
+  /**
+   * Tint applied to the surface material itself, under any frames.
+   *
+   * This multiplies the texture pack's colour map, so a grey concrete wall set to #103050
+   * keeps its grain and takes the blue. It is the quick way to recolour the whole set —
+   * wall, table and the corner cove that follows the wall — without adding a full-bleed
+   * frame that would then sit between the wall and the logo backdrop.
+   *
+   * Absent on templates saved before it existed, which means "no tint" (#ffffff).
+   */
+  baseTint?: string;
   /** @deprecated Use texturePreset instead. Kept for migration. */
   baseColor?: string;
 }
@@ -457,6 +468,229 @@ export const DEFAULT_CORNER_FILL: CornerFillConfig = {
   color: "#ffffff",
 };
 
+// ── Scene Background (the void around the wall/table set) ──
+
+/**
+ * Colour of the empty space surrounding the V1 set.
+ *
+ * V1 builds only two planes — a 34x22 wall at z = -5.5 and a 28x5 table at y = -1.2.
+ * Anything the camera sees outside those planes is `scene.background`, which used to be
+ * hardcoded to 0x1a1a1a. That is why setting the wall and table to #000 still left a
+ * lighter grey border around the set: the border was never a surface at all.
+ */
+export interface SceneBackgroundConfig {
+  /** Hex colour painted behind everything. */
+  color: string;
+}
+
+export const DEFAULT_SCENE_BACKGROUND: SceneBackgroundConfig = {
+  // The historical hardcoded value, so untouched templates look exactly as before.
+  color: "#1a1a1a",
+};
+
+// ── Logo Backdrop (giant camera-locked logo behind the cue) ──
+
+/**
+ * How the logo plate is coloured.
+ *
+ *   solid — one flat fill, the plain "giant watermark" look.
+ *   neon  — the CSS neon-text recipe (a bright near-white core wrapped in stacked
+ *           coloured glows) rendered in a shader, so the core and the halo are
+ *           two independent colours.
+ */
+export type LogoBackdropStyle = "solid" | "neon";
+
+/**
+ * Where the logo plate lives.
+ *
+ *   wall   — real geometry parked just in front of the back wall, inside the set. It is
+ *            genuinely behind the cue, takes the set's perspective, and moves with the
+ *            wall as the camera travels (a painted mural).
+ *   screen — locked to the camera frame: the same screen position in every frame of the
+ *            recording, regardless of camera motion (a title card / watermark).
+ */
+export type LogoBackdropAnchor = "wall" | "screen";
+
+/**
+ * A large, blurred rendition of the cue's laser-engraved logo, drawn behind the cue.
+ *
+ * It is rendered by a dedicated orthographic overlay pass rather than by a plane placed
+ * in the world, which is what makes it stay locked to the camera frame: the studio camera
+ * can orbit, dolly or spiral and the logo never shifts, exactly like a fixed background
+ * plate in a title card. See `renderLogoBackdrop` in ExtractorSceneManager.
+ */
+export interface LogoBackdropConfig {
+  enabled: boolean;
+  /**
+   * Which logo to draw. "auto" follows the product's own `logoId` (the "Logo khắc laser"
+   * currently engraved on the cue); any other value is an explicit CUE_LOGO_OPTIONS id.
+   * `customUrl` overrides both when set.
+   */
+  logoId: string;
+  /** User-uploaded PNG/SVG (object URL or remote). Takes precedence over `logoId`. */
+  customUrl?: string | null;
+  /**
+   * Whether the plate is set geometry on the wall or locked to the camera frame.
+   * Absent on templates saved before the choice existed; those were all screen-locked.
+   */
+  anchor?: LogoBackdropAnchor;
+  /**
+   * Wall anchor only: position the plate inside the rectangle the camera's view cuts out of
+   * the wall, instead of against the wall itself.
+   *
+   * The plate stays real geometry on the wall — the cue still occludes it and it still takes
+   * the set's perspective — but its placement is recomputed each frame from where the
+   * camera's frustum meets the wall, so it holds the same spot in the SHOT while the camera
+   * moves. Without this a logo composed in the editor slides out of frame as soon as the
+   * camera travels.
+   *
+   * Absent = false, so templates saved earlier keep their wall-fixed placement.
+   */
+  frameRelative?: boolean;
+  style: LogoBackdropStyle;
+  /** Fill colour (solid style) / core colour (neon style). */
+  color: string;
+  /** Neon halo colour — the "light" of the neon tube. Ignored by the solid style. */
+  neonColor: string;
+  /**
+   * Neon brightness, 0–1. How hot the halo burns — brightness only.
+   *
+   * This used to drive the glow's RADIUS as well, so "brighter" and "wider" could not be
+   * separated and the effect read as a soft shadow rather than a lit tube. Reach now lives
+   * in `neonGlowSize`.
+   */
+  neonIntensity: number;
+  /** Neon halo reach, 0–1. How far the light spreads past the tube. Absent = 0.5. */
+  neonGlowSize?: number;
+  /**
+   * Tube core thickness, 0–1. Low values leave a thin bright filament with most of the
+   * mark given over to glow; high values light the whole stroke. Absent = 0.5.
+   */
+  neonCoreWidth?: number;
+  /**
+   * How white-hot the centre of the tube burns, 0–1. Real neon overexposes to near-white
+   * at the tube regardless of the gas colour; 0 keeps the core fully coloured. Absent = 0.65.
+   */
+  neonCoreGlow?: number;
+  /**
+   * Outer bloom, 0–1. A second, far wider and dimmer halo — the light the tube throws onto
+   * the wall around it. This is most of what separates real neon from a coloured blur.
+   * Absent = 0.5.
+   */
+  neonBloom?: number;
+  /**
+   * Flicker amount, 0–1. Subtle brightness instability, as in an ageing tube. 0 = rock
+   * steady. Absent = 0 so existing templates never start flickering on their own.
+   */
+  neonFlicker?: number;
+  /**
+   * Gaussian blur radius for the SOLID style, 0 = crisp, 1 = very soft.
+   *
+   * Solid and neon are independent looks with independent softness: a neon tube's crispness
+   * is a property of the tube, and inheriting a solid plate's heavy blur turned every neon
+   * sign into a smear. Neon reads `neonBlur` instead.
+   */
+  blur: number;
+  /** Gaussian blur radius for the NEON style only. Absent = 0 (a crisp tube). */
+  neonBlur?: number;
+  /** Overall opacity 0–1. */
+  opacity: number;
+  /**
+   * Size as a fraction of the frame. 1 = the logo's longest side exactly spans the frame,
+   * so the whole mark is always visible ("display full in camera frame").
+   */
+  scale: number;
+  /** Centre offset in frame units (-1..1). 0,0 = dead centre. */
+  offsetX: number;
+  offsetY: number;
+  /** Clockwise rotation in degrees. */
+  rotation: number;
+}
+
+export const DEFAULT_LOGO_BACKDROP: LogoBackdropConfig = {
+  enabled: false,
+  logoId: "auto",
+  customUrl: null,
+  // On the wall by default: it is what "behind the cue" actually means in this set, and
+  // it behaves correctly in every view without needing to fight the camera.
+  anchor: "wall",
+  // Stay in shot by default: a logo that drifts out of frame the moment the camera moves is
+  // almost never what is wanted from a backdrop.
+  frameRelative: true,
+  style: "solid",
+  color: "#ffffff",
+  neonColor: "#ff2fd0",
+  neonIntensity: 0.6,
+  neonGlowSize: 0.5,
+  neonCoreWidth: 0.5,
+  neonCoreGlow: 0.65,
+  neonBloom: 0.5,
+  neonFlicker: 0,
+  // A neon tube is crisp by default; its softness comes from the glow, not from blurring
+  // the mark itself.
+  neonBlur: 0,
+  // A visible softness by default — the reference look is a blurred plate, not a sticker.
+  blur: 0.35,
+  opacity: 0.85,
+  scale: 0.9,
+  offsetX: 0,
+  offsetY: 0,
+  rotation: 0,
+};
+
+/**
+ * localStorage key holding the logo backdrop settings shared by every template.
+ *
+ * The plate is branding, not scene composition: the same mark, colour and neon treatment
+ * belong on every video of a product regardless of which camera/lighting template is
+ * loaded. Keeping it per-template meant re-dialling the whole neon look every time a
+ * template was switched, and a template saved by someone else silently replaced it.
+ */
+export const LOGO_BACKDROP_STORAGE_KEY = "videoStudio.logoBackdrop.global";
+
+/**
+ * Read the globally shared logo backdrop config.
+ *
+ * Returns the default when nothing is stored, when the value is unparseable, or when
+ * running on the server. Merged over the default so a field added later is present even in
+ * a config written by an older build.
+ */
+export function loadGlobalLogoBackdrop(): LogoBackdropConfig {
+  if (typeof window === "undefined") return { ...DEFAULT_LOGO_BACKDROP };
+  try {
+    const raw = window.localStorage.getItem(LOGO_BACKDROP_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_LOGO_BACKDROP };
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return { ...DEFAULT_LOGO_BACKDROP };
+    return {
+      ...DEFAULT_LOGO_BACKDROP,
+      ...(parsed as Partial<LogoBackdropConfig>),
+      // `enabled` is deliberately NOT restored. What the plate LOOKS like is shared branding;
+      // whether a given shot has a logo on the wall at all is a per-shot decision, and
+      // carrying it across meant every new template silently opened with the logo already on.
+      enabled: DEFAULT_LOGO_BACKDROP.enabled,
+    };
+  } catch {
+    return { ...DEFAULT_LOGO_BACKDROP };
+  }
+}
+
+/**
+ * Persist the globally shared logo backdrop config. Silently no-ops if storage is full.
+ *
+ * `enabled` is stored as false regardless of the live value: the shared blob describes what
+ * the plate looks like, not whether any particular shot uses one. See loadGlobalLogoBackdrop.
+ */
+export function saveGlobalLogoBackdrop(config: LogoBackdropConfig): void {
+  if (typeof window === "undefined") return;
+  try {
+    const shared: LogoBackdropConfig = { ...config, enabled: DEFAULT_LOGO_BACKDROP.enabled };
+    window.localStorage.setItem(LOGO_BACKDROP_STORAGE_KEY, JSON.stringify(shared));
+  } catch {
+    // A private window or a full quota must not break the studio.
+  }
+}
+
 export interface VideoStudioConfig {
   cueConfig: CueConfig;
   cameraDirection: CameraDirection;
@@ -493,6 +727,13 @@ export interface VideoStudioConfig {
   /** @deprecated Unified HDRI now used. Wall/table use envMapIntensity on SurfaceConfig. */
   surfaceHdri?: { enabled: boolean; hdriFile: string; rotationX: number; rotationY: number; intensity: number };
   /**
+   * Colour of the empty space around the wall/table set. Absent on legacy templates,
+   * which are treated as the old hardcoded #1a1a1a so their look is unchanged.
+   */
+  sceneBackground?: SceneBackgroundConfig;
+  /** Giant camera-locked logo plate drawn behind the cue. Absent = disabled. */
+  logoBackdrop?: LogoBackdropConfig;
+  /**
    * Video Studio V2 — real 3D environment (360 degree HDRI or GLB room).
    *
    * Presence of this field is what selects V2: when set, the scene manager skips the V1
@@ -523,6 +764,8 @@ export const DEFAULT_STUDIO_CONFIG: VideoStudioConfig = {
   cornerFill: { ...DEFAULT_CORNER_FILL },
   videoRatio: "16:9",
   fixedCameraDuration: 10,
+  sceneBackground: { ...DEFAULT_SCENE_BACKGROUND },
+  logoBackdrop: { ...DEFAULT_LOGO_BACKDROP },
 };
 
 /**
@@ -834,6 +1077,8 @@ export function ensureFullConfig(partial: Partial<VideoStudioConfig>): VideoStud
     cornerFill: { ...DEFAULT_CORNER_FILL, ...partial.cornerFill },
     videoRatio: partial.videoRatio ?? d.videoRatio,
     fixedCameraDuration: partial.fixedCameraDuration ?? d.fixedCameraDuration,
+    sceneBackground: { ...DEFAULT_SCENE_BACKGROUND, ...partial.sceneBackground },
+    logoBackdrop: { ...DEFAULT_LOGO_BACKDROP, ...partial.logoBackdrop },
     // Preserved so V2 templates keep their environment; left undefined for V1 configs.
     environment: partial.environment ?? d.environment,
   };
@@ -845,6 +1090,10 @@ export function migrateVideoStudioConfig(config: VideoStudioConfig): VideoStudio
   // Templates saved before the corner fillet was configurable get the defaults, which
   // reproduce the old hardcoded behaviour (enabled, 0.8 radius) but now follow the wall.
   migrated.cornerFill = { ...DEFAULT_CORNER_FILL, ...config.cornerFill };
+  // Templates predating the configurable void colour / logo plate get the defaults,
+  // which reproduce the previous behaviour exactly (#1a1a1a void, no logo plate).
+  migrated.sceneBackground = { ...DEFAULT_SCENE_BACKGROUND, ...config.sceneBackground };
+  migrated.logoBackdrop = { ...DEFAULT_LOGO_BACKDROP, ...config.logoBackdrop };
   // V2 templates saved before a field was added get the missing defaults backfilled.
   if (migrated.environment) {
     migrated.environment = normalizeEnvironmentConfig(migrated.environment);

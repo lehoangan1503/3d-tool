@@ -29,6 +29,12 @@ export function isCueLogoId(value: unknown): value is CueLogoId {
   return CUE_LOGO_OPTIONS.some((option) => option.id === value);
 }
 
+/** Public path of a catalog logo image, falling back to the first entry (UNI). */
+export function cueLogoPath(id: string | undefined | null): string {
+  const option = CUE_LOGO_OPTIONS.find((item) => item.id === id);
+  return (option ?? CUE_LOGO_OPTIONS[0]).path;
+}
+
 // Assignable roles stored on user_profiles, granted by the superadmin from
 // /admin/dashboard/accounts. null = normal user.
 //

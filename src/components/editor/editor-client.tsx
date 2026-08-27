@@ -1819,12 +1819,13 @@ export function EditorClient({
         open={showImageExtractor}
         onClose={() => setShowImageExtractor(false)}
       />
-      <VideoStudio sceneManager={sceneManager} productName={product.name} productId={product.id} open={showVideoExtractor} onClose={() => setShowVideoExtractor(false)} />
+      <VideoStudio sceneManager={sceneManager} productName={product.name} productId={product.id} productLogoId={config.logoId} open={showVideoExtractor} onClose={() => setShowVideoExtractor(false)} />
       <VideoStudio
         variant="v2"
         sceneManager={sceneManager}
         productName={product.name}
         productId={product.id}
+        productLogoId={config.logoId}
         open={showVideoStudioV2}
         onClose={() => setShowVideoStudioV2(false)}
       />

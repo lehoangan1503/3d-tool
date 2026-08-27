@@ -37,8 +37,8 @@ import {
 } from "lucide-react";
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager, HDRI_OPTIONS_FALLBACK } from "@/lib/three/extractor-scene-manager";
-import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CameraShapeParams, CameraWaypoint, CueHdriConfig, VideoRatio, CornerFillConfig } from "@/types/video-studio";
-import { DEFAULT_CORNER_FILL } from "@/types/video-studio";
+import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CameraShapeParams, CameraWaypoint, CueHdriConfig, VideoRatio, CornerFillConfig, LogoBackdropConfig, SceneBackgroundConfig } from "@/types/video-studio";
+import { DEFAULT_CORNER_FILL, DEFAULT_LOGO_BACKDROP, DEFAULT_SCENE_BACKGROUND, loadGlobalLogoBackdrop, saveGlobalLogoBackdrop } from "@/types/video-studio";
 import type { StudioEnvironmentAsset, StudioEnvironmentConfig } from "@/types/studio-environment";
 import { normalizeEnvironmentConfig } from "@/types/studio-environment";
 import { EnvironmentPanel } from "./environment-panel";
@@ -72,6 +72,7 @@ import {
 import { CameraControlsPanel } from "./camera-controls-panel";
 import { CueSetupPanel } from "./cue-setup-panel";
 import { BackgroundPanel } from "./background-panel";
+import { LogoBackdropPanel } from "./logo-backdrop-panel";
 import { StudioTemplateSelector, type StudioTemplateSelectorHandle } from "./studio-template-selector";
 import { SceneViewControls, type SelectionInfo } from "./scene-view-controls";
 
@@ -210,6 +211,12 @@ interface VideoStudioProps {
    * two variants differ only in what surrounds the cue.
    */
   variant?: "v1" | "v2";
+  /**
+   * The product's current "Logo khắc laser" (`config.logoId`). The big logo plate follows
+   * it when set to "auto", so the plate matches whatever is engraved on the cue without
+   * the user having to pick anything.
+   */
+  productLogoId?: string | null;
 }
 
 const SELECTION_LABELS_VN: Record<string, string> = {
@@ -228,7 +235,7 @@ const MODE_LABELS_VN: Record<string, string> = {
   scale: "Tỷ lệ",
 };
 
-export function VideoStudio({ sceneManager, productName, productId, onClose, open, variant = "v1" }: VideoStudioProps) {
+export function VideoStudio({ sceneManager, productName, productId, onClose, open, variant = "v1", productLogoId }: VideoStudioProps) {
   const isV2 = variant === "v2";
   const [config, setConfig] = useState<VideoStudioConfig>(() =>
     structuredClone(isV2 ? DEFAULT_STUDIO_CONFIG_V2 : DEFAULT_STUDIO_CONFIG)
@@ -341,6 +348,27 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     setConfig(structuredClone(next));
   }, []);
 
+  /**
+   * Adopt the globally shared logo plate when the studio opens.
+   *
+   * Whatever the loaded product config stored for the plate's APPEARANCE is ignored in
+   * favour of the global one, so the branding is identical across every template and every
+   * product — see loadGlobalLogoBackdrop. `enabled` is the exception: whether this shot has
+   * a logo at all belongs to the template, so it is carried over rather than overwritten.
+   */
+  useEffect(() => {
+    if (!open) return;
+    setConfig((prev) => {
+      const next = {
+        ...loadGlobalLogoBackdrop(),
+        enabled: prev.logoBackdrop?.enabled ?? DEFAULT_LOGO_BACKDROP.enabled,
+      };
+      return JSON.stringify(prev.logoBackdrop) === JSON.stringify(next)
+        ? prev
+        : { ...prev, logoBackdrop: next };
+    });
+  }, [open]);
+
   // Ctrl+Z / Ctrl+Shift+Z keyboard handler
   useEffect(() => {
     if (!open) return;
@@ -392,6 +420,39 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       ...prev,
       cornerFill: { ...DEFAULT_CORNER_FILL, ...prev.cornerFill, ...patch },
     }));
+  }, []);
+
+  /**
+   * Colour of the empty space around the wall/table set, with the legacy default filled in.
+   * Templates saved before it existed keep the old hardcoded #1a1a1a.
+   */
+  const sceneBackground: SceneBackgroundConfig = useMemo(
+    () => ({ ...DEFAULT_SCENE_BACKGROUND, ...config.sceneBackground }),
+    [config.sceneBackground]
+  );
+
+  const updateSceneBackground = useCallback((next: SceneBackgroundConfig) => {
+    setConfig((prev) => ({ ...prev, sceneBackground: next }));
+  }, []);
+
+  /** Giant camera-locked logo plate behind the cue, with defaults filled in. */
+  const logoBackdrop: LogoBackdropConfig = useMemo(
+    () => ({ ...DEFAULT_LOGO_BACKDROP, ...config.logoBackdrop }),
+    [config.logoBackdrop]
+  );
+
+  /**
+   * Patch the logo plate and persist it GLOBALLY.
+   *
+   * The plate is branding rather than scene composition, so it is shared by every template
+   * instead of being stored per-template — see loadGlobalLogoBackdrop.
+   */
+  const updateLogoBackdrop = useCallback((patch: Partial<LogoBackdropConfig>) => {
+    setConfig((prev) => {
+      const next = { ...DEFAULT_LOGO_BACKDROP, ...prev.logoBackdrop, ...patch };
+      saveGlobalLogoBackdrop(next);
+      return { ...prev, logoBackdrop: next };
+    });
   }, []);
 
   /**
@@ -1114,6 +1175,23 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     requestAnimationFrame(() => resizePreviewCanvas());
   }, [viewMode, resizePreviewCanvas]);
 
+  // The logo plate follows the cue's engraved logo when set to "auto", so the scene
+  // manager needs to know which one that is. Pushed before the debounced config sync so
+  // the very first plate resolves against the right logo.
+  useEffect(() => {
+    if (!extractorRef.current || !open) return;
+    extractorRef.current.setProductLogoId(productLogoId ?? null);
+  }, [productLogoId, open, sceneReady]);
+
+  // The logo plate fits itself to the frame, so it must be re-laid-out whenever the
+  // output ratio changes — otherwise a plate authored at 16:9 comes out cropped at 9:16.
+  useEffect(() => {
+    if (!extractorRef.current || !open) return;
+    const preset = VIDEO_RATIO_PRESETS.find((r) => r.id === (config.videoRatio ?? "16:9"))
+      ?? VIDEO_RATIO_PRESETS[0];
+    extractorRef.current.setLogoBackdropAspect(preset.width / preset.height);
+  }, [config.videoRatio, open, sceneReady]);
+
   // Debounced preview updates on config change
   useEffect(() => {
     if (!extractorRef.current || !open) return;
@@ -1164,24 +1242,6 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         f.gradient?.presetId ?? "",
         f.backgroundGradient?.angle ?? 0,
         JSON.stringify(f.backgroundGradient?.colors ?? []),
-      ].join(":")
-    )
-    .join("|");
-  /**
-   * Whether a wall frame *covers* the wall, which decides where the corner fill takes its
-   * material from. Size/position/opacity normally skip the rebuild (they are applied live
-   * by updateFramePlaneTransforms), but the cove's material is baked at setup, so dragging
-   * a frame across the coverage threshold has to trigger one.
-   */
-  const wallFrameCoverageKey = config.wallSurface.frames
-    .map((f) =>
-      [
-        f.id,
-        f.enabled ? 1 : 0,
-        f.width >= 1 && f.height >= 1 ? 1 : 0,
-        Math.abs(f.x - 0.5) <= 0.01 && Math.abs(f.y - 0.5) <= 0.01 ? 1 : 0,
-        (f.opacity ?? 1) >= 1 ? 1 : 0,
-        (f.rotation ?? 0) % 360 === 0 ? 1 : 0,
       ].join(":")
     )
     .join("|");
@@ -1247,7 +1307,6 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     // every field here needs a scene rebuild rather than a live material tweak.
     cornerFill.enabled,
     cornerFill.radius,
-    wallFrameCoverageKey,
     config.cueConfig.instances.length,
     config.hdriConfig.layers.length,
     config.surfaceLightDisabled,
@@ -1286,6 +1345,10 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   useEffect(() => {
     if (!extractorRef.current || !open) return;
     extractorRef.current.updateFramePlaneTransforms(config);
+    // The cove paints itself from a render of the whole wall, so moving or resizing any
+    // frame changes what it should show. Repainting one canvas is cheap enough to run on
+    // every drag frame — far cheaper than the 500 ms full rebuild this effect exists to avoid.
+    extractorRef.current.refreshCornerFillMaterial(config);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1891,6 +1954,13 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                     const migrated: VideoStudioConfig = isV2
                       ? { ...loaded, environment: normalizeEnvironmentConfig(loaded.environment) }
                       : { ...loaded, environment: undefined };
+                    // The plate's LOOK is global branding, so switching templates must not
+                    // replace the neon treatment you dialled in. Whether the template shows a
+                    // logo at all is its own decision, so that one field is kept.
+                    migrated.logoBackdrop = {
+                      ...loadGlobalLogoBackdrop(),
+                      enabled: loaded.logoBackdrop?.enabled ?? DEFAULT_LOGO_BACKDROP.enabled,
+                    };
                     setConfig(migrated);
                     // Invalidate cache so the next updateStudioPreviewConfig applies the template camera
                     extractorRef.current?.invalidateCameraStartKey();
@@ -1899,7 +1969,10 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                     setCapturedEnd(migrated.cameraEnd ?? null);
                   }}
                   onNewTemplate={() => {
-                    setConfig(structuredClone(isV2 ? DEFAULT_STUDIO_CONFIG_V2 : DEFAULT_STUDIO_CONFIG));
+                    setConfig({
+                      ...structuredClone(isV2 ? DEFAULT_STUDIO_CONFIG_V2 : DEFAULT_STUDIO_CONFIG),
+                      logoBackdrop: loadGlobalLogoBackdrop(),
+                    });
                     // Fresh template — clear captured so user must set positions manually
                     setCapturedStart(null);
                     setCapturedEnd(null);
@@ -2146,12 +2219,26 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                                     loadError={envLoadError}
                                   />
                                 ) : (
-                                  <BackgroundPanel
-                                    wallSurface={config.wallSurface}
-                                    tableSurface={config.tableSurface}
-                                    onWallSurfaceChange={(s) => updateConfig("wallSurface", s)}
-                                    onTableSurfaceChange={(s) => updateConfig("tableSurface", s)}
-                                  />
+                                  <>
+                                    <BackgroundPanel
+                                      wallSurface={config.wallSurface}
+                                      tableSurface={config.tableSurface}
+                                      onWallSurfaceChange={(s) => updateConfig("wallSurface", s)}
+                                      onTableSurfaceChange={(s) => updateConfig("tableSurface", s)}
+                                      sceneBackground={sceneBackground}
+                                      onSceneBackgroundChange={updateSceneBackground}
+                                      cornerFill={cornerFill}
+                                      onCornerFillChange={updateCornerFill}
+                                    />
+                                    <div className="border-t border-border/40 pt-2.5">
+                                      <LogoBackdropPanel
+                                        config={logoBackdrop}
+                                        onChange={updateLogoBackdrop}
+                                        productLogoId={productLogoId}
+                                        onCustomUpload={(url) => blobUrlsRef.current.push(url)}
+                                      />
+                                    </div>
+                                  </>
                                 )}
                               </div>
                             )}
@@ -2489,48 +2576,6 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                                     max={5}
                                     step={0.2}
                                   />
-                                </div>
-
-                                {/* Curved corner fillet between wall and table. It exists so the
-                                    shadow sweeps across the junction instead of breaking at a hard
-                                    edge, so it lives with the shadow controls. */}
-                                <div className="pt-2 border-t border-border/30 space-y-3">
-                                  <div className="flex items-center gap-2">
-                                    <Checkbox
-                                      id="corner-fill-enabled"
-                                      checked={cornerFill.enabled}
-                                      onCheckedChange={(checked) =>
-                                        updateCornerFill({ enabled: checked === true })
-                                      }
-                                      className="h-3.5 w-3.5"
-                                    />
-                                    <Label
-                                      htmlFor="corner-fill-enabled"
-                                      className="text-xs font-medium cursor-pointer"
-                                    >
-                                      Bo góc tường / bàn
-                                    </Label>
-                                  </div>
-                                  <p className="text-[10px] leading-relaxed text-muted-foreground">
-                                    {cornerFill.enabled
-                                      ? "Bóng đổ mượt, liền mạch qua chỗ giao tường và bàn. Vật liệu tự đồng bộ theo tường."
-                                      : "Góc vuông sắc — bóng vẫn đổ trên cả tường và bàn, nhưng gãy khúc đúng tại đường giao."}
-                                  </p>
-
-                                  {cornerFill.enabled && (
-                                    <div className="space-y-1.5">
-                                      <Label className="text-xs text-muted-foreground">
-                                        Bán kính bo — {cornerFill.radius.toFixed(2)}
-                                      </Label>
-                                      <Slider
-                                        value={[cornerFill.radius]}
-                                        onValueChange={([v]) => updateCornerFill({ radius: v })}
-                                        min={0.1}
-                                        max={3}
-                                        step={0.05}
-                                      />
-                                    </div>
-                                  )}
                                 </div>
                               </div>
                             )}

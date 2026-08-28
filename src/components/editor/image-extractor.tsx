@@ -14,7 +14,7 @@ import { FrameCanvas, CANVAS_SIZE } from "./frame-canvas";
 import { FrameControlsPanel } from "./frame-controls-panel";
 import { DownloadMultipleDialog } from "./download-multiple-dialog";
 import type { ExtractorFrame, ExtractorReference, TemplateKey, CueFrame, ImageFrame, ImageGradient, HdriLayer, ImageRatio } from "@/types/extractor";
-import { createDefaultFrame, createDefaultImageFrame, DEFAULT_CUE_SHADOW, FRAME_TEMPLATES, isCueFrame, isImageFrame, STUDIO_WHITE_HDRI, DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT } from "@/types/extractor";
+import { createDefaultFrame, createDefaultImageFrame, DEFAULT_CUE_SHADOW, FRAME_TEMPLATES, isCueFrame, isImageFrame, STUDIO_WHITE_HDRI, DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT, surfaceFrameTransform } from "@/types/extractor";
 import type { CueHdriConfig } from "@/types/video-studio";
 import { DEFAULT_CUE_HDRI } from "@/types/video-studio";
 import { resolveStorageUrl } from "@/lib/resolve-storage-url";
@@ -714,9 +714,9 @@ export function ImageExtractor({ sceneManager, productName, productType, product
 
   const handleAddImageFrame = () => {
     const newFrame = createDefaultImageFrame(undefined, frames.length, canvasWidth, canvasHeight);
-    const offset = Math.min(frames.length * Math.round(Math.min(canvasWidth, canvasHeight) * 0.025), Math.min(canvasWidth, canvasHeight) * 0.3);
-    newFrame.transform.x = Math.round(newFrame.transform.x - newFrame.transform.width / 2 * 0.15 + offset);
-    newFrame.transform.y = Math.round(newFrame.transform.y - newFrame.transform.height / 2 * 0.15 + offset);
+    // New images start filling the whole artboard so they can be used as a
+    // backdrop straight away; resize/"Vừa khung nền" adjusts from there.
+    newFrame.transform = surfaceFrameTransform(canvasWidth, canvasHeight);
     setFrames([...frames, newFrame]); // discrete — undoable
     setSelectedFrameId(newFrame.id);
   };

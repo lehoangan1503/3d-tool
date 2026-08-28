@@ -17,6 +17,7 @@ import {
   ChevronUp,
   ArrowUp,
   ArrowDown,
+  Maximize2,
 } from "lucide-react";
 import type { BackgroundFrame } from "@/types/video-studio";
 import { ImagePickerDialog } from "../image-picker-dialog";
@@ -64,6 +65,12 @@ export function SurfaceFrameControls({
     (partial: Partial<BackgroundFrame>) => onChange({ ...frame, ...partial }),
     [frame, onChange]
   );
+
+  // Cover the whole surface: width/height are normalised so 1 = full wall or
+  // table, centred at 0.5/0.5.
+  const fillSurface = useCallback(() => {
+    patch({ x: 0.5, y: 0.5, width: 1, height: 1, rotation: 0 });
+  }, [patch]);
 
   const bgEnabled = frame.backgroundEnabled ?? true;
   const bgType = frame.backgroundType ?? "color";
@@ -375,6 +382,16 @@ export function SurfaceFrameControls({
                 <Slider value={[frame.height]} min={0.05} max={2} step={0.005} onValueChange={([v]) => patch({ height: v })} />
               </div>
             </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 w-full text-[11px]"
+              onClick={fillSurface}
+              title="Phủ kín toàn bộ tường / mặt bàn"
+            >
+              <Maximize2 className="h-3 w-3 mr-1" /> Tự động phủ kín
+            </Button>
 
             <div className="space-y-1">
               <div className="flex justify-between text-xs">

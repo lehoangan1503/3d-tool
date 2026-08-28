@@ -169,18 +169,30 @@ interface ShadowSimulateDialogProps {
 
 function TransformInput({ label, value, onChange, suffix = "" }: { label: string; value: number; onChange: (v: number) => void; suffix?: string }) {
   const color = AXIS_COLORS[label] ?? undefined;
+  // Hold raw text while typing so "" and "-" survive until blur.
+  const [draft, setDraft] = useState<string | null>(null);
   return (
     <div className="flex items-center gap-1">
       <span className="text-[10px] font-bold w-3 shrink-0" style={color ? { color } : undefined}>
         {label}
       </span>
       <input
-        type="number"
-        step="0.1"
-        value={parseFloat(value.toFixed(2))}
+        type="text"
+        inputMode="decimal"
+        value={draft !== null ? draft : String(parseFloat(value.toFixed(2)))}
         onChange={(e) => {
-          const v = parseFloat(e.target.value);
+          const raw = e.target.value;
+          setDraft(raw);
+          const v = parseFloat(raw);
           if (!isNaN(v)) onChange(v);
+        }}
+        onBlur={(e) => {
+          setDraft(null);
+          const v = parseFloat(e.target.value);
+          onChange(isNaN(v) ? 0 : v);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
         }}
         className="h-5 w-full rounded border border-border/50 bg-muted/30 px-1 text-[11px] font-mono tabular-nums text-foreground outline-none focus:border-blue-500/50"
       />

@@ -24,6 +24,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Copy, ImagePlus, Loader2, Type, Trash2, ZoomIn, ZoomOut, RotateCcw, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -694,68 +695,64 @@ export function SurfaceSlotEditor({ open, onOpenChange, surfaceUrl, value, onSav
                   (["x", "y", "w", "h"] as const).map((field) => (
                     <div key={field} className="flex flex-col">
                       <span className="text-[9px] font-medium uppercase text-muted-foreground">{field} px</span>
-                      <Input
-                        type="number"
+                      <NumberInput
                         className="h-6 w-[68px] px-1.5 text-xs"
                         value={slotPx(field)}
-                        onChange={(e) => setSlotPx(field, Number(e.target.value) || 0)}
+                        onChange={(v) => setSlotPx(field, v)}
                       />
                     </div>
                   ))}
                 <div className="flex flex-col">
                   <span className="text-[9px] font-medium uppercase text-muted-foreground">Xoay</span>
-                  <Input
-                    type="number"
+                  <NumberInput
                     className="h-6 w-[68px] px-1.5 text-xs"
                     value={Math.round(selected.rotate ?? 0)}
-                    onChange={(e) => updateSlot(selected.id, { rotate: Number(e.target.value) || 0 })}
+                    onChange={(v) => updateSlot(selected.id, { rotate: v })}
                   />
                 </div>
                 <div className="flex flex-col">
                   <span className="text-[9px] font-medium uppercase text-muted-foreground">Bo góc %</span>
-                  <Input
-                    type="number"
+                  <NumberInput
                     min={0}
                     max={50}
                     className="h-6 w-[68px] px-1.5 text-xs"
                     value={selected.radius ?? 8}
-                    onChange={(e) => updateSlot(selected.id, { radius: clamp(Number(e.target.value) || 0, 0, 50) })}
+                    onChange={(v) => updateSlot(selected.id, { radius: v })}
                   />
                 </div>
                 {selected.type === "text" && (
                   <>
                     <div className="flex flex-col">
                       <span className="text-[9px] font-medium uppercase text-muted-foreground">Max</span>
-                      <Input
-                        type="number"
+                      <NumberInput
                         min={1}
                         max={60}
+                        fallback={20}
                         className="h-6 w-14 px-1.5 text-xs"
                         value={selected.maxChars ?? 20}
-                        onChange={(e) => updateSlot(selected.id, { maxChars: Number(e.target.value) || 20 })}
+                        onChange={(v) => updateSlot(selected.id, { maxChars: v })}
                       />
                     </div>
                     <div className="flex flex-col">
                       <span className="text-[9px] font-medium uppercase text-muted-foreground">Size %</span>
-                      <Input
-                        type="number"
+                      <NumberInput
                         min={10}
                         max={160}
+                        fallback={62}
                         className="h-6 w-[68px] px-1.5 text-xs"
                         value={selected.fontSize ?? 62}
-                        onChange={(e) => updateSlot(selected.id, { fontSize: clamp(Number(e.target.value) || 62, 10, 160) })}
+                        onChange={(v) => updateSlot(selected.id, { fontSize: v })}
                       />
                     </div>
                     <div className="flex flex-col">
                       <span className="text-[9px] font-medium uppercase text-muted-foreground">Weight</span>
-                      <Input
-                        type="number"
+                      <NumberInput
                         min={100}
                         max={900}
-                        step={100}
+                        fallback={700}
                         className="h-6 w-[68px] px-1.5 text-xs"
                         value={selected.fontWeight ?? 700}
-                        onChange={(e) => updateSlot(selected.id, { fontWeight: clamp(Number(e.target.value) || 700, 100, 900) })}
+                        onChange={(v) => updateSlot(selected.id, { fontWeight: v })}
                       />
                     </div>
                     <div className="flex flex-col">

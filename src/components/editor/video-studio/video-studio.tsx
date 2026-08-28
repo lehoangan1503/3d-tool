@@ -94,8 +94,8 @@ function TransformInput({ label, value, onChange, suffix = "" }: { label: string
     <div className="flex items-center gap-1.5">
       <span className="text-[10px] text-muted-foreground w-3 shrink-0">{label}</span>
       <input
-        type="number"
-        step="0.1"
+        type="text"
+        inputMode="decimal"
         value={displayValue}
         onChange={(e) => setLocalValue(e.target.value)}
         onBlur={(e) => commit(e.target.value)}

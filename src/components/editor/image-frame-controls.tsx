@@ -3,10 +3,11 @@
 import { useState, useCallback } from "react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Images, Trash2, Link2, Link2Off, Check, Palette, Blend, Layers, RotateCcw } from "lucide-react";
+import { Images, Trash2, Link2, Link2Off, Check, Palette, Blend, Layers, RotateCcw, Maximize2 } from "lucide-react";
 import type { ImageFrame, ObjectFit, ImageGradient } from "@/types/extractor";
 import {
   imageGradientToCss,
@@ -85,6 +86,12 @@ export function ImageFrameControls({
       updateTransform({ height });
     }
   }, [linkedDimensions, transform, updateTransform]);
+
+  // Fit the frame to the whole artboard (canvas) — same transform the dynamic
+  // surface uses, so a newly added image can fill the board in one click.
+  const handleFitToCanvas = useCallback(() => {
+    updateTransform({ x: 0, y: 0, width: canvasWidth, height: canvasHeight });
+  }, [canvasWidth, canvasHeight, updateTransform]);
 
   const handleRemoveImage = useCallback(() => {
     updateImageSettings({ imageUrl: null });
@@ -225,10 +232,10 @@ export function ImageFrameControls({
             <div className="flex justify-between items-center text-xs">
               <span className="text-muted-foreground">Phóng to</span>
               <div className="flex items-center gap-1">
-                <Input
-                  type="number"
+                <NumberInput
                   value={Math.round(surfacePan.scale * 100)}
-                  onChange={(e) => updateSurfacePan({ scale: Math.max(0.1, Math.min(10, Number(e.target.value) / 100)) })}
+                  onChange={(v) => updateSurfacePan({ scale: v / 100 })}
+                  fallback={100}
                   min={10}
                   max={1000}
                   className="h-6 w-16 text-xs px-1.5 text-right"
@@ -251,10 +258,9 @@ export function ImageFrameControls({
             <div className="flex justify-between items-center text-xs">
               <span className="text-muted-foreground">Ngang (X)</span>
               <div className="flex items-center gap-1">
-                <Input
-                  type="number"
+                <NumberInput
                   value={Math.round(surfacePan.x * 100)}
-                  onChange={(e) => updateSurfacePan({ x: Math.max(-3, Math.min(3, Number(e.target.value) / 100)) })}
+                  onChange={(v) => updateSurfacePan({ x: v / 100 })}
                   min={-300}
                   max={300}
                   className="h-6 w-16 text-xs px-1.5 text-right"
@@ -276,10 +282,9 @@ export function ImageFrameControls({
             <div className="flex justify-between items-center text-xs">
               <span className="text-muted-foreground">Dọc (Y)</span>
               <div className="flex items-center gap-1">
-                <Input
-                  type="number"
+                <NumberInput
                   value={Math.round(surfacePan.y * 100)}
-                  onChange={(e) => updateSurfacePan({ y: Math.max(-3, Math.min(3, Number(e.target.value) / 100)) })}
+                  onChange={(v) => updateSurfacePan({ y: v / 100 })}
                   min={-300}
                   max={300}
                   className="h-6 w-16 text-xs px-1.5 text-right"
@@ -479,10 +484,10 @@ export function ImageFrameControls({
           <div className="grid grid-cols-2 gap-2">
             <div>
               <Label className="text-xs text-muted-foreground">W</Label>
-              <Input
-                type="number"
+              <NumberInput
                 value={transform.width}
-                onChange={(e) => handleSurfaceWidthChange(Number(e.target.value))}
+                onChange={handleSurfaceWidthChange}
+                fallback={50}
                 min={50}
                 max={canvasWidth}
                 className="h-8"
@@ -509,23 +514,34 @@ export function ImageFrameControls({
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <Label className="text-xs font-medium text-muted-foreground">Kích thước</Label>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-5 px-1.5"
-            onClick={() => setLinkedDimensions(!linkedDimensions)}
-            disabled={imageSettings.objectFit !== 'custom'}
-          >
-            {linkedDimensions ? <Link2 className="h-3 w-3" /> : <Link2Off className="h-3 w-3" />}
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 px-1.5 text-[11px]"
+              onClick={handleFitToCanvas}
+              title={`Bằng khung nền (${canvasWidth}×${canvasHeight})`}
+            >
+              <Maximize2 className="h-3 w-3 mr-1" /> Vừa khung nền
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 px-1.5"
+              onClick={() => setLinkedDimensions(!linkedDimensions)}
+              disabled={imageSettings.objectFit !== 'custom'}
+            >
+              {linkedDimensions ? <Link2 className="h-3 w-3" /> : <Link2Off className="h-3 w-3" />}
+            </Button>
+          </div>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div>
             <Label className="text-xs text-muted-foreground">W</Label>
-            <Input
-              type="number"
+            <NumberInput
               value={transform.width}
-              onChange={(e) => handleWidthChange(Number(e.target.value))}
+              onChange={handleWidthChange}
+              fallback={50}
               min={50}
               max={2048}
               className="h-8"
@@ -533,10 +549,10 @@ export function ImageFrameControls({
           </div>
           <div>
             <Label className="text-xs text-muted-foreground">H</Label>
-            <Input
-              type="number"
+            <NumberInput
               value={transform.height}
-              onChange={(e) => handleHeightChange(Number(e.target.value))}
+              onChange={handleHeightChange}
+              fallback={50}
               min={50}
               max={2048}
               className="h-8"

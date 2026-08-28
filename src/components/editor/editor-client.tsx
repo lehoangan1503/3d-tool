@@ -16,6 +16,7 @@ import { buildProductGlb, downloadBlob } from "@/lib/three/export-product-3d";
 import { safeFileName } from "@/lib/three/export-glb";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Label } from "@/components/ui/label";
 import { CollapsibleCard } from "@/components/ui/collapsible-card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -892,18 +893,13 @@ export function EditorClient({
 
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="hdriExposure-mobile">Cường độ</Label>
-                    <Input
+                    <NumberInput
                       id="hdriExposure-mobile"
-                      type="number"
+                      value={config.hdriExposure}
                       min={0}
                       max={3}
-                      step={0.05}
-                      value={config.hdriExposure}
-                      onChange={(e) =>
-                        updateConfig({
-                          hdriExposure: Math.min(3, Math.max(0, parseFloat(e.target.value) || 0)),
-                        })
-                      }
+                      fallback={0}
+                      onChange={(v) => updateConfig({ hdriExposure: v })}
                     />
                   </div>
 
@@ -951,64 +947,46 @@ export function EditorClient({
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="ambientLight-mobile">Ambient Light</Label>
-                    <Input
+                    <NumberInput
                       id="ambientLight-mobile"
-                      type="number"
+                      value={config.ambientLight}
                       min={0}
                       max={2}
-                      step={0.05}
-                      value={config.ambientLight}
-                      onChange={(e) =>
-                        updateConfig({
-                          ambientLight: Math.min(2, Math.max(0, parseFloat(e.target.value) || 0)),
-                        })
-                      }
+                      fallback={0}
+                      onChange={(v) => updateConfig({ ambientLight: v })}
                     />
                   </div>
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="hemisphereLight-mobile">Hemisphere Light</Label>
-                    <Input
+                    <NumberInput
                       id="hemisphereLight-mobile"
-                      type="number"
+                      value={config.hemisphereLight}
                       min={0}
                       max={2}
-                      step={0.05}
-                      value={config.hemisphereLight}
-                      onChange={(e) =>
-                        updateConfig({
-                          hemisphereLight: Math.min(2, Math.max(0, parseFloat(e.target.value) || 0)),
-                        })
-                      }
+                      fallback={0}
+                      onChange={(v) => updateConfig({ hemisphereLight: v })}
                     />
                   </div>
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="clearcoat-mobile">Clearcoat</Label>
-                    <Input
+                    <NumberInput
                       id="clearcoat-mobile"
-                      type="number"
+                      value={config.clearcoat}
                       min={0}
                       max={100}
-                      value={config.clearcoat}
-                      onChange={(e) =>
-                        updateConfig({
-                          clearcoat: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
-                        })
-                      }
+                      fallback={0}
+                      onChange={(v) => updateConfig({ clearcoat: v })}
                     />
                   </div>
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="bodyRoughness-mobile">Body Roughness</Label>
-                    <Input
+                    <NumberInput
                       id="bodyRoughness-mobile"
-                      type="number"
+                      value={config.bodyRoughness}
                       min={0}
                       max={255}
-                      value={config.bodyRoughness}
-                      onChange={(e) =>
-                        updateConfig({
-                          bodyRoughness: Math.min(255, Math.max(0, parseInt(e.target.value) || 0)),
-                        })
-                      }
+                      fallback={0}
+                      onChange={(v) => updateConfig({ bodyRoughness: v })}
                     />
                   </div>
                 </div>
@@ -1023,50 +1001,35 @@ export function EditorClient({
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="cylinderRoughness-mobile">Roughness</Label>
-                    <Input
+                    <NumberInput
                       id="cylinderRoughness-mobile"
-                      type="number"
+                      value={config.cylinderRoughness}
                       min={0}
                       max={255}
-                      step={1}
-                      value={config.cylinderRoughness}
-                      onChange={(e) =>
-                        updateConfig({
-                          cylinderRoughness: Math.min(255, Math.max(0, parseInt(e.target.value) || 0)),
-                        })
-                      }
+                      fallback={0}
+                      onChange={(v) => updateConfig({ cylinderRoughness: v })}
                     />
                   </div>
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="cylinderClearcoat-mobile">Clearcoat</Label>
-                    <Input
+                    <NumberInput
                       id="cylinderClearcoat-mobile"
-                      type="number"
+                      value={config.cylinderClearcoat}
                       min={0}
                       max={100}
-                      step={1}
-                      value={config.cylinderClearcoat}
-                      onChange={(e) =>
-                        updateConfig({
-                          cylinderClearcoat: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
-                        })
-                      }
+                      fallback={0}
+                      onChange={(v) => updateConfig({ cylinderClearcoat: v })}
                     />
                   </div>
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="cylinderMetalness-mobile">Metalness</Label>
-                    <Input
+                    <NumberInput
                       id="cylinderMetalness-mobile"
-                      type="number"
+                      value={config.cylinderMetalness}
                       min={0}
                       max={1}
-                      step={0.01}
-                      value={config.cylinderMetalness}
-                      onChange={(e) =>
-                        updateConfig({
-                          cylinderMetalness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
-                        })
-                      }
+                      fallback={0}
+                      onChange={(v) => updateConfig({ cylinderMetalness: v })}
                     />
                   </div>
                   <div className="flex flex-col gap-2">
@@ -1089,34 +1052,24 @@ export function EditorClient({
                   </div>
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="cylinderNormalScale-mobile">Texture Depth</Label>
-                    <Input
+                    <NumberInput
                       id="cylinderNormalScale-mobile"
-                      type="number"
+                      value={config.cylinderNormalScale}
                       min={0}
                       max={10}
-                      step={0.1}
-                      value={config.cylinderNormalScale}
-                      onChange={(e) =>
-                        updateConfig({
-                          cylinderNormalScale: Math.min(10, Math.max(0, parseFloat(e.target.value) || 0)),
-                        })
-                      }
+                      fallback={0}
+                      onChange={(v) => updateConfig({ cylinderNormalScale: v })}
                     />
                   </div>
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="cylinderSheen-mobile">Sheen</Label>
-                    <Input
+                    <NumberInput
                       id="cylinderSheen-mobile"
-                      type="number"
+                      value={config.cylinderSheen}
                       min={0}
                       max={100}
-                      step={1}
-                      value={config.cylinderSheen}
-                      onChange={(e) =>
-                        updateConfig({
-                          cylinderSheen: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
-                        })
-                      }
+                      fallback={0}
+                      onChange={(v) => updateConfig({ cylinderSheen: v })}
                     />
                   </div>
                   <div className="flex flex-col gap-2">
@@ -1146,50 +1099,35 @@ export function EditorClient({
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="jointRoughness-mobile">Độ nhám</Label>
-                    <Input
+                    <NumberInput
                       id="jointRoughness-mobile"
-                      type="number"
+                      value={config.jointRoughness}
                       min={0}
                       max={255}
-                      step={1}
-                      value={config.jointRoughness}
-                      onChange={(e) =>
-                        updateConfig({
-                          jointRoughness: Math.min(255, Math.max(0, parseInt(e.target.value) || 0)),
-                        })
-                      }
+                      fallback={0}
+                      onChange={(v) => updateConfig({ jointRoughness: v })}
                     />
                   </div>
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="jointClearcoat-mobile">Độ bóng</Label>
-                    <Input
+                    <NumberInput
                       id="jointClearcoat-mobile"
-                      type="number"
+                      value={config.jointClearcoat}
                       min={0}
                       max={100}
-                      step={1}
-                      value={config.jointClearcoat}
-                      onChange={(e) =>
-                        updateConfig({
-                          jointClearcoat: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
-                        })
-                      }
+                      fallback={0}
+                      onChange={(v) => updateConfig({ jointClearcoat: v })}
                     />
                   </div>
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="jointMetalness-mobile">Độ kim loại</Label>
-                    <Input
+                    <NumberInput
                       id="jointMetalness-mobile"
-                      type="number"
+                      value={config.jointMetalness}
                       min={0}
                       max={1}
-                      step={0.01}
-                      value={config.jointMetalness}
-                      onChange={(e) =>
-                        updateConfig({
-                          jointMetalness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
-                        })
-                      }
+                      fallback={0}
+                      onChange={(v) => updateConfig({ jointMetalness: v })}
                     />
                   </div>
                 </div>
@@ -1223,48 +1161,35 @@ export function EditorClient({
                     <div className="flex flex-col gap-4">
                       <div className="flex flex-col gap-2">
                         <Label htmlFor="leatherRoughness-mobile">Roughness</Label>
-                        <Input
+                        <NumberInput
                           id="leatherRoughness-mobile"
-                          type="number"
+                          value={config.leatherRoughness}
                           min={0}
                           max={255}
-                          value={config.leatherRoughness}
-                          onChange={(e) =>
-                            updateConfig({
-                              leatherRoughness: Math.min(255, Math.max(0, parseInt(e.target.value) || 0)),
-                            })
-                          }
+                          fallback={0}
+                          onChange={(v) => updateConfig({ leatherRoughness: v })}
                         />
                       </div>
                       <div className="flex flex-col gap-2">
                         <Label htmlFor="normalStrength-mobile">Normal Strength</Label>
-                        <Input
+                        <NumberInput
                           id="normalStrength-mobile"
-                          type="number"
+                          value={config.normalStrength}
                           min={0}
                           max={10}
-                          step={0.1}
-                          value={config.normalStrength}
-                          onChange={(e) =>
-                            updateConfig({
-                              normalStrength: Math.min(10, Math.max(0, parseFloat(e.target.value) || 0)),
-                            })
-                          }
+                          fallback={0}
+                          onChange={(v) => updateConfig({ normalStrength: v })}
                         />
                       </div>
                       <div className="flex flex-col gap-2">
                         <Label htmlFor="textureScale-mobile">Texture Scale</Label>
-                        <Input
+                        <NumberInput
                           id="textureScale-mobile"
-                          type="number"
+                          value={config.textureScale}
                           min={1}
                           max={8}
-                          value={config.textureScale}
-                          onChange={(e) =>
-                            updateConfig({
-                              textureScale: Math.min(8, Math.max(1, parseInt(e.target.value) || 1)),
-                            })
-                          }
+                          fallback={1}
+                          onChange={(v) => updateConfig({ textureScale: v })}
                         />
                       </div>
                     </div>
@@ -1391,18 +1316,13 @@ export function EditorClient({
 
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="hdriExposure">Cường độ</Label>
-                  <Input
+                  <NumberInput
                     id="hdriExposure"
-                    type="number"
+                    value={config.hdriExposure}
                     min={0}
                     max={3}
-                    step={0.05}
-                    value={config.hdriExposure}
-                    onChange={(e) =>
-                      updateConfig({
-                        hdriExposure: Math.min(3, Math.max(0, parseFloat(e.target.value) || 0)),
-                      })
-                    }
+                    fallback={0}
+                    onChange={(v) => updateConfig({ hdriExposure: v })}
                   />
                   <p className="text-xs text-muted-foreground">0 - 3 (default: 1.0)</p>
                 </div>
@@ -1451,67 +1371,49 @@ export function EditorClient({
               <div className="flex flex-col gap-4">
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="ambientLight">Ambient Light</Label>
-                  <Input
+                  <NumberInput
                     id="ambientLight"
-                    type="number"
+                    value={config.ambientLight}
                     min={0}
                     max={2}
-                    step={0.05}
-                    value={config.ambientLight}
-                    onChange={(e) =>
-                      updateConfig({
-                        ambientLight: Math.min(2, Math.max(0, parseFloat(e.target.value) || 0)),
-                      })
-                    }
+                    fallback={0}
+                    onChange={(v) => updateConfig({ ambientLight: v })}
                   />
                   <p className="text-xs text-muted-foreground">0 - 2 (default: 0.55)</p>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="hemisphereLight">Hemisphere Light</Label>
-                  <Input
+                  <NumberInput
                     id="hemisphereLight"
-                    type="number"
+                    value={config.hemisphereLight}
                     min={0}
                     max={2}
-                    step={0.05}
-                    value={config.hemisphereLight}
-                    onChange={(e) =>
-                      updateConfig({
-                        hemisphereLight: Math.min(2, Math.max(0, parseFloat(e.target.value) || 0)),
-                      })
-                    }
+                    fallback={0}
+                    onChange={(v) => updateConfig({ hemisphereLight: v })}
                   />
                   <p className="text-xs text-muted-foreground">0 - 2 (default: 0.4)</p>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="clearcoat">Clearcoat</Label>
-                  <Input
+                  <NumberInput
                     id="clearcoat"
-                    type="number"
+                    value={config.clearcoat}
                     min={0}
                     max={100}
-                    value={config.clearcoat}
-                    onChange={(e) =>
-                      updateConfig({
-                        clearcoat: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
-                      })
-                    }
+                    fallback={0}
+                    onChange={(v) => updateConfig({ clearcoat: v })}
                   />
                   <p className="text-xs text-muted-foreground">Độ chi tiết - 0 to 100 (default: 5)</p>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="bodyRoughness">Body Roughness</Label>
-                  <Input
+                  <NumberInput
                     id="bodyRoughness"
-                    type="number"
+                    value={config.bodyRoughness}
                     min={0}
                     max={255}
-                    value={config.bodyRoughness}
-                    onChange={(e) =>
-                      updateConfig({
-                        bodyRoughness: Math.min(255, Math.max(0, parseInt(e.target.value) || 0)),
-                      })
-                    }
+                    fallback={0}
+                    onChange={(v) => updateConfig({ bodyRoughness: v })}
                   />
                   <p className="text-xs text-muted-foreground">Độ bóng thân gậy - 0 to 255 (default: 50)</p>
                 </div>
@@ -1527,52 +1429,37 @@ export function EditorClient({
               <div className="flex flex-col gap-4">
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="cylinderRoughness">Roughness</Label>
-                  <Input
+                  <NumberInput
                     id="cylinderRoughness"
-                    type="number"
+                    value={config.cylinderRoughness}
                     min={0}
                     max={255}
-                    step={1}
-                    value={config.cylinderRoughness}
-                    onChange={(e) =>
-                      updateConfig({
-                        cylinderRoughness: Math.min(255, Math.max(0, parseInt(e.target.value) || 0)),
-                      })
-                    }
+                    fallback={0}
+                    onChange={(v) => updateConfig({ cylinderRoughness: v })}
                   />
                   <p className="text-xs text-muted-foreground">0 - 255 (default: 102)</p>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="cylinderClearcoat">Clearcoat</Label>
-                  <Input
+                  <NumberInput
                     id="cylinderClearcoat"
-                    type="number"
+                    value={config.cylinderClearcoat}
                     min={0}
                     max={100}
-                    step={1}
-                    value={config.cylinderClearcoat}
-                    onChange={(e) =>
-                      updateConfig({
-                        cylinderClearcoat: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
-                      })
-                    }
+                    fallback={0}
+                    onChange={(v) => updateConfig({ cylinderClearcoat: v })}
                   />
                   <p className="text-xs text-muted-foreground">0 - 100 (default: 10)</p>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="cylinderMetalness">Metalness</Label>
-                  <Input
+                  <NumberInput
                     id="cylinderMetalness"
-                    type="number"
+                    value={config.cylinderMetalness}
                     min={0}
                     max={1}
-                    step={0.01}
-                    value={config.cylinderMetalness}
-                    onChange={(e) =>
-                      updateConfig({
-                        cylinderMetalness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
-                      })
-                    }
+                    fallback={0}
+                    onChange={(v) => updateConfig({ cylinderMetalness: v })}
                   />
                   <p className="text-xs text-muted-foreground">0 - 1 (default: 0)</p>
                 </div>
@@ -1597,35 +1484,25 @@ export function EditorClient({
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="cylinderNormalScale">Texture Depth</Label>
-                  <Input
+                  <NumberInput
                     id="cylinderNormalScale"
-                    type="number"
+                    value={config.cylinderNormalScale}
                     min={0}
                     max={10}
-                    step={0.1}
-                    value={config.cylinderNormalScale}
-                    onChange={(e) =>
-                      updateConfig({
-                        cylinderNormalScale: Math.min(10, Math.max(0, parseFloat(e.target.value) || 0)),
-                      })
-                    }
+                    fallback={0}
+                    onChange={(v) => updateConfig({ cylinderNormalScale: v })}
                   />
                   <p className="text-xs text-muted-foreground">0 - 10 (default: 1.0) — Normal map intensity</p>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="cylinderSheen">Sheen</Label>
-                  <Input
+                  <NumberInput
                     id="cylinderSheen"
-                    type="number"
+                    value={config.cylinderSheen}
                     min={0}
                     max={100}
-                    step={1}
-                    value={config.cylinderSheen}
-                    onChange={(e) =>
-                      updateConfig({
-                        cylinderSheen: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
-                      })
-                    }
+                    fallback={0}
+                    onChange={(v) => updateConfig({ cylinderSheen: v })}
                   />
                   <p className="text-xs text-muted-foreground">0 - 100 (default: 0) — Leather sheen highlight</p>
                 </div>
@@ -1657,52 +1534,37 @@ export function EditorClient({
               <div className="flex flex-col gap-4">
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="jointRoughness">Độ nhám</Label>
-                  <Input
+                  <NumberInput
                     id="jointRoughness"
-                    type="number"
+                    value={config.jointRoughness}
                     min={0}
                     max={255}
-                    step={1}
-                    value={config.jointRoughness}
-                    onChange={(e) =>
-                      updateConfig({
-                        jointRoughness: Math.min(255, Math.max(0, parseInt(e.target.value) || 0)),
-                      })
-                    }
+                    fallback={0}
+                    onChange={(v) => updateConfig({ jointRoughness: v })}
                   />
                   <p className="text-xs text-muted-foreground">0 - 255 (default: 255)</p>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="jointClearcoat">Độ bóng</Label>
-                  <Input
+                  <NumberInput
                     id="jointClearcoat"
-                    type="number"
+                    value={config.jointClearcoat}
                     min={0}
                     max={100}
-                    step={1}
-                    value={config.jointClearcoat}
-                    onChange={(e) =>
-                      updateConfig({
-                        jointClearcoat: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)),
-                      })
-                    }
+                    fallback={0}
+                    onChange={(v) => updateConfig({ jointClearcoat: v })}
                   />
                   <p className="text-xs text-muted-foreground">0 - 100 (default: 0)</p>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="jointMetalness">Độ kim loại</Label>
-                  <Input
+                  <NumberInput
                     id="jointMetalness"
-                    type="number"
+                    value={config.jointMetalness}
                     min={0}
                     max={1}
-                    step={0.01}
-                    value={config.jointMetalness}
-                    onChange={(e) =>
-                      updateConfig({
-                        jointMetalness: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
-                      })
-                    }
+                    fallback={0}
+                    onChange={(v) => updateConfig({ jointMetalness: v })}
                   />
                   <p className="text-xs text-muted-foreground">0 - 1 (default: 1)</p>
                 </div>
@@ -1737,50 +1599,37 @@ export function EditorClient({
                   <div className="flex flex-col gap-4">
                     <div className="flex flex-col gap-2">
                       <Label htmlFor="leatherRoughness">Roughness</Label>
-                      <Input
+                      <NumberInput
                         id="leatherRoughness"
-                        type="number"
+                        value={config.leatherRoughness}
                         min={0}
                         max={255}
-                        value={config.leatherRoughness}
-                        onChange={(e) =>
-                          updateConfig({
-                            leatherRoughness: Math.min(255, Math.max(0, parseInt(e.target.value) || 0)),
-                          })
-                        }
+                        fallback={0}
+                        onChange={(v) => updateConfig({ leatherRoughness: v })}
                       />
                       <p className="text-xs text-muted-foreground">Độ bóng mượt của gậy - 0 to 255 (default: 120)</p>
                     </div>
                     <div className="flex flex-col gap-2">
                       <Label htmlFor="normalStrength">Normal Strength</Label>
-                      <Input
+                      <NumberInput
                         id="normalStrength"
-                        type="number"
+                        value={config.normalStrength}
                         min={0}
                         max={10}
-                        step={0.1}
-                        value={config.normalStrength}
-                        onChange={(e) =>
-                          updateConfig({
-                            normalStrength: Math.min(10, Math.max(0, parseFloat(e.target.value) || 0)),
-                          })
-                        }
+                        fallback={0}
+                        onChange={(v) => updateConfig({ normalStrength: v })}
                       />
                       <p className="text-xs text-muted-foreground">Mật độ vân da sần sùi - 0 to 10 (default: 3.0)</p>
                     </div>
                     <div className="flex flex-col gap-2">
                       <Label htmlFor="textureScale">Texture Scale</Label>
-                      <Input
+                      <NumberInput
                         id="textureScale"
-                        type="number"
+                        value={config.textureScale}
                         min={1}
                         max={8}
-                        value={config.textureScale}
-                        onChange={(e) =>
-                          updateConfig({
-                            textureScale: Math.min(8, Math.max(1, parseInt(e.target.value) || 1)),
-                          })
-                        }
+                        fallback={1}
+                        onChange={(v) => updateConfig({ textureScale: v })}
                       />
                       <p className="text-xs text-muted-foreground">Độ chi tiết vân da - 1 to 8 (1=lớn, 8=nhỏ & dày đặc)</p>
                     </div>

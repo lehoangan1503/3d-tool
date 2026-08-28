@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -261,7 +262,6 @@ export function FrameControlsPanel({
   const [localRotationX, setLocalRotationX] = useState<number | null>(null);
   const [localRotationY, setLocalRotationY] = useState<number | null>(null);
   const [localIntensity, setLocalIntensity] = useState<number | null>(null);
-  const [zoomInputValue, setZoomInputValue] = useState<string | null>(null);
 
   // Copy/paste clipboard: cue config (excluding studioShadow) + frame size
   type CueConfigClipboard = {
@@ -294,12 +294,6 @@ export function FrameControlsPanel({
       ...selectedFrame,
       cue: { ...selectedFrame.cue, studioShadow: { ...current, ...updates } },
     });
-  };
-
-  // Parse number from text input, handling empty/invalid values
-  const parseNumber = (value: string, fallback: number = 0): number => {
-    const parsed = parseFloat(value);
-    return isNaN(parsed) ? fallback : parsed;
   };
 
   // HDRI Layer management (only for CueFrame)
@@ -549,7 +543,7 @@ export function FrameControlsPanel({
 
             <div>
               <Label className="text-xs text-muted-foreground">Khoảng cách (px)</Label>
-              <Input type="text" inputMode="numeric" value={gap} onChange={(e) => onGapChange(parseNumber(e.target.value, 0))} className="h-8 mt-1" />
+              <NumberInput value={gap} onChange={onGapChange} className="h-8 mt-1" />
               <p className="text-[10px] text-muted-foreground/70 mt-1">Thay đổi giá trị và nhấn Tự động căn chỉnh</p>
             </div>
           </div>
@@ -642,21 +636,17 @@ export function FrameControlsPanel({
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">X</Label>
-              <Input
-                type="text"
-                inputMode="numeric"
+              <NumberInput
                 value={Math.round(selectedFrame.transform.x)}
-                onChange={(e) => updateTransform("x", parseNumber(e.target.value, 0))}
+                onChange={(v) => updateTransform("x", v)}
                 className="h-8"
               />
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Y</Label>
-              <Input
-                type="text"
-                inputMode="numeric"
+              <NumberInput
                 value={Math.round(selectedFrame.transform.y)}
-                onChange={(e) => updateTransform("y", parseNumber(e.target.value, 0))}
+                onChange={(v) => updateTransform("y", v)}
                 className="h-8"
               />
             </div>
@@ -670,21 +660,21 @@ export function FrameControlsPanel({
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Chiều rộng</Label>
-              <Input
-                type="text"
-                inputMode="numeric"
+              <NumberInput
                 value={Math.round(selectedFrame.transform.width)}
-                onChange={(e) => updateTransform("width", Math.max(100, parseNumber(e.target.value, 100)))}
+                onChange={(v) => updateTransform("width", v)}
+                fallback={100}
+                min={100}
                 className="h-8"
               />
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Chiều cao</Label>
-              <Input
-                type="text"
-                inputMode="numeric"
+              <NumberInput
                 value={Math.round(selectedFrame.transform.height)}
-                onChange={(e) => updateTransform("height", Math.max(100, parseNumber(e.target.value, 100)))}
+                onChange={(v) => updateTransform("height", v)}
+                fallback={100}
+                min={100}
                 className="h-8"
               />
             </div>
@@ -696,11 +686,9 @@ export function FrameControlsPanel({
             <RotateCw className="w-4 h-4" /> Xoay
           </Label>
           <div className="flex items-center gap-2">
-            <Input
-              type="text"
-              inputMode="numeric"
+            <NumberInput
               value={Math.round(selectedFrame.transform.rotation)}
-              onChange={(e) => updateTransform("rotation", parseNumber(e.target.value, 0))}
+              onChange={(v) => updateTransform("rotation", v)}
               className="h-8"
             />
             <span className="text-sm text-muted-foreground">°</span>
@@ -715,21 +703,17 @@ export function FrameControlsPanel({
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Xoay Y (°)</Label>
-                <Input
-                  type="text"
-                  inputMode="numeric"
+                <NumberInput
                   value={Math.round(selectedFrame.cue.spinY * (180 / Math.PI))}
-                  onChange={(e) => updateCue("spinY", parseNumber(e.target.value, 0) * (Math.PI / 180))}
+                  onChange={(v) => updateCue("spinY", v * (Math.PI / 180))}
                   className="h-8"
                 />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Góc Camera (°)</Label>
-                <Input
-                  type="text"
-                  inputMode="numeric"
+                <NumberInput
                   value={Math.round(selectedFrame.cue.phi * (180 / Math.PI))}
-                  onChange={(e) => updateCue("phi", parseNumber(e.target.value, 0) * (Math.PI / 180))}
+                  onChange={(v) => updateCue("phi", v * (Math.PI / 180))}
                   className="h-8"
                 />
               </div>
@@ -740,23 +724,13 @@ export function FrameControlsPanel({
                 <ZoomIn className="w-3 h-3" /> Thu phóng
               </Label>
               <div className="flex items-center gap-2">
-                <Input
-                  type="text"
-                  inputMode="decimal"
-                  value={zoomInputValue ?? selectedFrame.cue.zoom.toFixed(1)}
-                  onChange={(e) => {
-                    setZoomInputValue(e.target.value);
-                    const parsed = parseFloat(e.target.value);
-                    if (!isNaN(parsed)) {
-                      updateCue("zoom", Math.max(0.5, Math.min(5, parsed)));
-                    }
-                  }}
-                  onBlur={() => {
-                    const parsed = parseFloat(zoomInputValue ?? "");
-                    const clamped = Math.max(0.5, Math.min(5, isNaN(parsed) ? 1 : parsed));
-                    updateCue("zoom", clamped);
-                    setZoomInputValue(null);
-                  }}
+                <NumberInput
+                  value={selectedFrame.cue.zoom}
+                  onChange={(v) => updateCue("zoom", v)}
+                  fallback={1}
+                  min={0.5}
+                  max={5}
+                  decimals={1}
                   className="h-8"
                 />
                 <span className="text-sm text-muted-foreground">x</span>
@@ -768,21 +742,19 @@ export function FrameControlsPanel({
                 <Label className="text-xs text-muted-foreground flex items-center gap-1">
                   <Crosshair className="w-3 h-3" /> Bù trừ X
                 </Label>
-                <Input
-                  type="text"
-                  inputMode="decimal"
-                  value={selectedFrame.cue.offsetX.toFixed(2)}
-                  onChange={(e) => updateCue("offsetX", parseNumber(e.target.value, 0))}
+                <NumberInput
+                  value={selectedFrame.cue.offsetX}
+                  onChange={(v) => updateCue("offsetX", v)}
+                  decimals={2}
                   className="h-8"
                 />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Bù trừ Y</Label>
-                <Input
-                  type="text"
-                  inputMode="decimal"
-                  value={selectedFrame.cue.offsetY.toFixed(2)}
-                  onChange={(e) => updateCue("offsetY", parseNumber(e.target.value, 0))}
+                <NumberInput
+                  value={selectedFrame.cue.offsetY}
+                  onChange={(v) => updateCue("offsetY", v)}
+                  decimals={2}
                   className="h-8"
                 />
               </div>

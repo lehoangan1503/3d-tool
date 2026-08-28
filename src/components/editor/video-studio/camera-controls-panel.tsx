@@ -454,10 +454,8 @@ export function CameraControlsPanel({
         {isFixed ? (
           <div className="flex items-center gap-1.5">
             <input
-              type="number"
-              min={3}
-              max={300}
-              step={1}
+              type="text"
+              inputMode="numeric"
               value={localDuration !== null ? localDuration : fixedCameraDuration}
               onChange={(e) => setLocalDuration(e.target.value)}
               onBlur={(e) => commitDuration(e.target.value)}

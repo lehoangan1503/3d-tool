@@ -5,6 +5,7 @@ import { ImageIcon, RotateCcw, RotateCw, Trash2, Upload } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { uploadBlobToStorage } from "@/lib/supabase/upload";
 import type { ShaftConfig, ShaftPreviewImageConfig, ShaftPreviewTextFrame } from "@/types/product";
 
@@ -375,13 +376,12 @@ export function ShaftConfigEditor({ productId, open, onOpenChange, value, onSave
 
             <label className="grid grid-cols-[72px_1fr] items-center gap-2 text-sm">
               <span className="font-medium">Size</span>
-              <Input
-                type="number"
+              <NumberInput
                 min={0.5}
                 max={20}
-                step={0.1}
+                fallback={DEFAULT_FRAME.fontSize}
                 value={frame.fontSize}
-                onChange={(event) => updateFrame({ fontSize: Number(event.target.value) || DEFAULT_FRAME.fontSize })}
+                onChange={(v) => updateFrame({ fontSize: v })}
               />
             </label>
             <label className="grid grid-cols-[72px_1fr] items-center gap-2 text-sm">
@@ -400,13 +400,11 @@ export function ShaftConfigEditor({ productId, open, onOpenChange, value, onSave
             </label>
             <label className="grid grid-cols-[72px_1fr] items-center gap-2 text-sm">
               <span className="font-medium">Rotate</span>
-              <Input
-                type="number"
+              <NumberInput
                 min={-90}
                 max={90}
-                step={1}
                 value={frame.rotate}
-                onChange={(event) => updateFrame({ rotate: Number(event.target.value) || 0 })}
+                onChange={(v) => updateFrame({ rotate: v })}
               />
             </label>
             <label className="grid grid-cols-[72px_1fr] items-center gap-2 text-sm">

@@ -51,6 +51,7 @@ import type { VideoStudioConfig } from "@/types/video-studio";
 import { ensureFullConfig, computeVideoDuration, isCameraFixed } from "@/types/video-studio";
 import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import { renderReferenceToBlob } from "@/components/editor/image-extractor";
+import { sortGalleryByName, isMetafieldImageName } from "@/lib/shopify/image-order";
 import { uploadBlobToStorage } from "@/lib/supabase/upload";
 import { StoreSwitcher, useStore } from "@/components/shopify/store-switcher";
 import { createClient } from "@/lib/supabase/client";
@@ -717,6 +718,19 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Put a rendered set into final deploy order: gallery images sorted by NAME
+  // (Mockup-Web-1 → 2 → 3 …, version images per slot), then user uploads, then
+  // the metafield images (Details-* / Package-*) last. That last-place ordering
+  // mirrors the server, which appends metafield images after the gallery and
+  // then moves them off it — so array index still lines up with imageNames[].
+  const orderForGallery = useCallback(
+    (rendered: RenderedImage[], uploads: RenderedImage[]): RenderedImage[] => {
+      const { gallery, metafield } = sortGalleryByName(rendered, (ri) => ri.refName, versions);
+      return [...gallery, ...uploads, ...metafield];
+    },
+    [versions],
+  );
+
   // ── Render images ──
   const handleRenderImages = useCallback(async () => {
     if (!sceneManager || !groupRefs.length) return;
@@ -751,8 +765,11 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
         const url = URL.createObjectURL(blob);
         renderedImageUrlsRef.current.push(url);
         results.push({ refId: ref.id, refName: ref.name, url, blob });
-        // Rendered images first, uploads kept after them.
-        setRenderedImages([...results, ...preservedUploads]);
+        // Sort by NAME into final gallery order (Mockup-Web-1 → 2 → 3 …) rather
+        // than the reference group's arbitrary order, and drop Details-*/
+        // Package-* out of the gallery grid — they go to metafields. Uploads
+        // keep their spot after the rendered set.
+        setRenderedImages(orderForGallery(results, preservedUploads));
         setImageProgress({ done: i + 1, total: groupRefs.length });
       } catch (err) {
         console.error(`[ShopifyDeploy] Failed to render ref ${ref.name}:`, err);
@@ -760,7 +777,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       }
     }
     setRenderingImages(false);
-  }, [sceneManager, groupRefs, renderedImages, product.surface_url]);
+  }, [sceneManager, groupRefs, renderedImages, product.surface_url, orderForGallery]);
 
   // ── Render video ──
   const handleRenderVideo = useCallback(async () => {
@@ -1133,16 +1150,25 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     });
   }, []);
 
-  // Final deploy order preview: image #1, then all videos (2,3,...), then the
-  // rest of the images. Mirrors the server rule (video block after 1st image).
-  // Returns a 1-based position for each image by its array index.
+  // Final deploy order preview: gallery image #1, then all videos (2,3,...),
+  // then the remaining gallery images. Mirrors the server rule (video block
+  // after the 1st image). Details-* / Package-* images get no position — they
+  // leave the gallery for a metafield, so numbering skips them entirely.
+  // Returns a 1-based gallery position, or null for a metafield image.
   const imagePosition = useCallback(
-    (imageIndex: number): number => {
-      if (imageIndex === 0) return 1;
-      // After the first image come all videos, then image #2 onward.
-      return 1 + renderedVideos.length + imageIndex;
+    (imageIndex: number): number | null => {
+      if (isMetafieldImageName(renderedImages[imageIndex]?.refName ?? "")) return null;
+      // Count only the gallery images before this one, so a metafield image
+      // sitting earlier in the array doesn't consume a slot number.
+      let slot = 0;
+      for (let i = 0; i <= imageIndex; i++) {
+        if (!isMetafieldImageName(renderedImages[i]?.refName ?? "")) slot++;
+      }
+      if (slot === 1) return 1;
+      // After the first image come all videos, then gallery image #2 onward.
+      return renderedVideos.length + slot;
     },
-    [renderedVideos.length],
+    [renderedVideos.length, renderedImages],
   );
 
   // Build the form payload shared by Deploy and Save. customText/customTextPaid

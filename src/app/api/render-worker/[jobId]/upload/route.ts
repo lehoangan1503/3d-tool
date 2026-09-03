@@ -29,6 +29,23 @@ const ALLOWED = new Set([
   "video/mp4",
 ]);
 
+/**
+ * Strips MIME parameters before matching.
+ *
+ * MediaRecorder reports the codec it actually chose, so a studio video arrives
+ * as `video/webm;codecs=vp9` (see getSupportedMimeType) — never the bare
+ * `video/webm` this list holds. Comparing the raw header therefore rejected
+ * every video upload with "Unsupported content type" while images sailed
+ * through, since canvas.toBlob emits no parameters.
+ *
+ * The parameter is dropped rather than added to the allowlist: the codec is
+ * chosen at runtime from what the pod's Chrome supports, so enumerating the
+ * combinations would just be a list to forget to update.
+ */
+function baseContentType(raw: string): string {
+  return raw.split(";")[0].trim().toLowerCase();
+}
+
 const EXT: Record<string, string> = {
   "image/png": "png",
   "image/jpeg": "jpg",
@@ -91,10 +108,11 @@ export async function POST(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
 
-    const contentType = file.type || "application/octet-stream";
+    const rawContentType = file.type || "application/octet-stream";
+    const contentType = baseContentType(rawContentType);
     if (!ALLOWED.has(contentType)) {
       return NextResponse.json(
-        { error: `Unsupported content type: ${contentType}` },
+        { error: `Unsupported content type: ${rawContentType}` },
         { status: 400 }
       );
     }

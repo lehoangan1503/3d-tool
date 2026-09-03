@@ -47,6 +47,9 @@ export default async function DashboardPage() {
   // deploy (superadmin, tool admin, or mode) — its page re-checks canDeploy.
   const isSuperAdmin = user.app_metadata?.role === "admin";
   const canDeploy = isSuperAdmin || profile.role === "admin" || profile.role === "mode";
+  // GPU rendering costs rented-card time, so it stops at admin — 'mode' may
+  // deploy but not spend GPU minutes.
+  const canRender = isSuperAdmin || profile.role === "admin";
 
   return (
     <DashboardClient
@@ -54,6 +57,7 @@ export default async function DashboardPage() {
       showFirstLoginDialog={showFirstLoginDialog}
       isSuperAdmin={isSuperAdmin}
       canDeploy={canDeploy}
+      canRender={canRender}
     />
   );
 }

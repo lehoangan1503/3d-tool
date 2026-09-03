@@ -10,7 +10,7 @@ import { StudioTemplatesGrid } from "@/components/products/studio-templates-grid
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UserDropdown } from "@/components/user-dropdown";
 import { FirstLoginDialog } from "@/components/first-login-dialog";
-import { LogOut, ShieldCheck, Rocket } from "lucide-react";
+import { LogOut, ShieldCheck, Rocket, Sparkles } from "lucide-react";
 import { StoreSwitcher } from "@/components/shopify/store-switcher";
 import type { UserProfile } from "@/types/product";
 
@@ -21,6 +21,8 @@ interface DashboardClientProps {
   isSuperAdmin?: boolean;
   /** Superadmin, tool admin, or mode — may use the auto-deploy tool. */
   canDeploy?: boolean;
+  /** GPU rendering is admin-only — it spends rented-card time. */
+  canRender?: boolean;
 }
 
 /** Which list the dashboard is showing. */
@@ -32,7 +34,7 @@ const VIEW_TABS: Array<{ value: DashboardView; label: string }> = [
   { value: "studio", label: "Video 3D" },
 ];
 
-export function DashboardClient({ profile: initialProfile, showFirstLoginDialog, isSuperAdmin, canDeploy }: DashboardClientProps) {
+export function DashboardClient({ profile: initialProfile, showFirstLoginDialog, isSuperAdmin, canDeploy, canRender }: DashboardClientProps) {
   const [profile, setProfile] = useState(initialProfile);
   const [firstLoginOpen, setFirstLoginOpen] = useState(showFirstLoginDialog);
   const [view, setView] = useState<DashboardView>("products");
@@ -70,6 +72,14 @@ export function DashboardClient({ profile: initialProfile, showFirstLoginDialog,
             <h1 className="text-xl font-semibold text-foreground">Cue Customizer</h1>
             <div className="flex items-center gap-2">
               <StoreSwitcher />
+              {canRender && (
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/renders" target="_blank" rel="noopener noreferrer">
+                    <Sparkles className="h-4 w-4" />
+                    <span className="hidden sm:inline">Render GPU</span>
+                  </Link>
+                </Button>
+              )}
               {canDeploy && (
                 <Button variant="outline" size="sm" asChild>
                   <Link href="/auto-deploy" target="_blank" rel="noopener noreferrer">

@@ -11,29 +11,29 @@
  * It shows a real countdown rather than the words "24 hours", because by the
  * time somebody reopens the page the honest answer is usually "3 hours left",
  * and "24 hours" would then be a lie that costs them the files.
+ *
+ * The countdown targets the PURGE SWEEP, not `expires_at` — see
+ * lib/render/retention.ts. Files outlive their expiry until the hourly cron
+ * collects them, so counting to `expires_at` would hit zero with the files
+ * still sitting there.
  */
 
 import { useEffect, useState } from "react";
 import { AlertTriangle, Clock, Download, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  formatDeadlineClock,
+  formatRemaining,
+  msUntilPurge,
+  purgeDeadline,
+} from "@/lib/render/retention";
 import type { RenderJob } from "@/types/render-job";
 
 /** Under this much time left, the banner switches to the urgent styling. */
 const URGENT_MS = 2 * 3600_000;
 
-/** Formats a duration the way a deadline reads: "6 giờ 12 phút", "48 phút". */
-function formatRemaining(ms: number): string {
-  const totalMinutes = Math.floor(ms / 60_000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-
-  if (hours >= 1) return `${hours} giờ ${minutes} phút`;
-  if (totalMinutes >= 1) return `${totalMinutes} phút`;
-  return "dưới 1 phút";
-}
-
 interface RenderExpiryNoticeProps {
-  /** The jobs whose results are on screen. The soonest deadline wins. */
+  /** The jobs whose results are on screen. The soonest sweep wins. */
   jobs: RenderJob[];
   className?: string;
 }
@@ -52,9 +52,11 @@ export function RenderExpiryNotice({ jobs, className }: RenderExpiryNoticeProps)
   // Only jobs that still HAVE files get a countdown. A purged job keeps its
   // expires_at, so filtering on that alone would count down for files that are
   // already gone.
+  // Deadlines are SWEEP times, so jobs finished minutes apart collapse onto the
+  // same value — which is the truth: one cron run takes them both.
   const deadlines = jobs
     .filter((job) => job.purgedAt === null && job.outputs.length > 0 && job.expiresAt)
-    .map((job) => new Date(job.expiresAt as string).getTime())
+    .map((job) => purgeDeadline(job.expiresAt as string).getTime())
     .filter((t) => Number.isFinite(t));
 
   if (deadlines.length === 0 && purged.length === 0) return null;
@@ -81,6 +83,10 @@ export function RenderExpiryNotice({ jobs, className }: RenderExpiryNoticeProps)
 
   const soonest = Math.min(...deadlines);
   const remaining = soonest - now;
+  // More than one distinct sweep on screen: the banner speaks for the earliest
+  // and says so, instead of quietly applying that number to newer jobs too.
+  // Per-job times stay exact on each card.
+  const multipleSweeps = new Set(deadlines).size > 1;
   const expired = remaining <= 0;
   const urgent = expired || remaining < URGENT_MS;
 
@@ -106,16 +112,20 @@ export function RenderExpiryNotice({ jobs, className }: RenderExpiryNoticeProps)
         {expired ? (
           <>
             <span className="font-medium text-foreground">
-              Kết quả đã quá hạn lưu trữ và sẽ bị xoá trong ít phút nữa.
+              Đợt dọn tiếp theo sẽ xoá kết quả bất cứ lúc nào.
             </span>{" "}
             Tải về ngay nếu còn cần.
           </>
         ) : (
           <>
             <span className="font-medium text-foreground">
-              Tải về ngay — kết quả sẽ bị xoá sau {formatRemaining(remaining)}.
+              {multipleSweeps ? "Sớm nhất: xoá" : "Tải về ngay — kết quả sẽ bị xoá"} sau khoảng{" "}
+              {formatRemaining(remaining)}
+              {" "}({formatDeadlineClock(new Date(soonest), now)}).
             </span>{" "}
-            Ảnh và video render nằm trên server tạm thời, không lưu vĩnh viễn.
+            {multipleSweeps
+              ? "Job mới hơn giữ lâu hơn — xem thời gian riêng trên từng job."
+              : "Ảnh và video render nằm trên server tạm thời, không lưu vĩnh viễn."}
           </>
         )}
         {purged.length > 0 && (
@@ -150,7 +160,8 @@ export function RenderExpiryBadge({ job }: { job: RenderJob }) {
 
   if (!job.expiresAt || job.outputs.length === 0) return null;
 
-  const remaining = new Date(job.expiresAt).getTime() - now;
+  // Same sweep-based deadline as the banner, so the two never disagree.
+  const remaining = msUntilPurge(job.expiresAt, now);
   if (!Number.isFinite(remaining)) return null;
 
   const urgent = remaining < URGENT_MS;

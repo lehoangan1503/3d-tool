@@ -23,6 +23,17 @@ interface ClaimBody {
 }
 
 /**
+ * Postgres rejects a non-UUID `p_job_id` with a hard error, which would
+ * otherwise surface as a 500 — "server broken" — for what is really a bad
+ * request. Worse, that error short-circuits the fallback below, so a pod woken
+ * with a malformed id would exit instead of draining the queue it can see.
+ *
+ * A pod can be handed a junk id by a manual test request or a stale dispatch
+ * record, so this is validated rather than assumed.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
  * POST /api/render-worker/claim
  *
  * Called by the GPU container on start-up (and again after each finished job,
@@ -45,15 +56,26 @@ export async function POST(request: Request) {
     const provider = body.provider ?? "runpod";
     const workerJobId = body.workerJobId ?? auth.ctx.workerId;
 
+    // A malformed id is treated as "no specific job" rather than an error: the
+    // pod is already warm and the queue may well have work for it, so drainage
+    // is a better outcome than a failed run. Logged so a dispatcher that keeps
+    // sending junk is still visible.
+    const targetJobId = body.jobId && UUID_RE.test(body.jobId) ? body.jobId : null;
+    if (body.jobId && !targetJobId) {
+      console.warn(
+        `[render-worker] ignoring malformed jobId "${body.jobId.slice(0, 64)}" — draining queue instead`
+      );
+    }
+
     // Atomic either way: FOR UPDATE SKIP LOCKED inside the functions means two
     // pods polling at the same instant never take the same job.
     //
     // A pod woken for a specific job takes THAT job. Only if it is already
     // gone (claimed by a retry, canceled, finished) does the pod fall back to
     // draining the queue — the card is warm, so an extra job is nearly free.
-    const { data, error } = body.jobId
+    const { data, error } = targetJobId
       ? await auth.ctx.admin.rpc<RenderJobRow | RenderJobRow[] | null>("claim_render_job_by_id", {
-          p_job_id: body.jobId,
+          p_job_id: targetJobId,
           p_worker_provider: provider,
           p_worker_job_id: workerJobId,
           p_lease_seconds: leaseSeconds,
@@ -75,7 +97,7 @@ export async function POST(request: Request) {
 
     // Targeted claim missed — the job was already taken, canceled, or done.
     // Drain the queue instead of wasting a warm GPU on an immediate exit.
-    if (!row?.id && body.jobId) {
+    if (!row?.id && targetJobId) {
       const { data: fallback, error: fallbackError } = await auth.ctx.admin.rpc<
         RenderJobRow | RenderJobRow[] | null
       >("claim_render_job", {

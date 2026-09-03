@@ -63,4 +63,28 @@ UPDATE shopify_customizer.render_jobs
    AND finished_at IS NULL
    AND status IN ('failed', 'canceled');
 
+-- =====================================================
+-- Table grants missing from 029.
+--
+-- `shopify_customizer` is not the `public` schema, so nothing inherits the
+-- default privileges PostgREST roles get there — every other migration in this
+-- repo grants explicitly for exactly this reason (see 017/018: "custom schema
+-- needs explicit table grants; service_role too"). 029 granted EXECUTE on the
+-- two claim functions but never the table itself.
+--
+-- The gap was invisible until deployment because the claim functions are
+-- SECURITY DEFINER: they run as the owner and worked fine, while every route
+-- that reads the table DIRECTLY failed with "permission denied for table
+-- render_jobs" — /queue-depth (500) and the purge sweep. Measured against the
+-- live app, not inferred.
+--
+-- RLS still applies to anon/authenticated; these grants only make the table
+-- reachable at all. service_role remains RLS-exempt, which is what the worker
+-- routes rely on.
+-- =====================================================
+GRANT USAGE ON SCHEMA shopify_customizer TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON TABLE shopify_customizer.render_jobs
+  TO anon, authenticated, service_role;
+
 NOTIFY pgrst, 'reload schema';

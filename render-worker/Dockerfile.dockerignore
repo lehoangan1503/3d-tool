@@ -1,0 +1,21 @@
+# Build context for the worker is the REPO ROOT (RunPod's GitHub integration
+# clones the whole repo and builds from its root), but the worker image only
+# needs render-worker/. Without this, Docker uploads ~5GB of context — most of
+# it public/ models and HDRIs the worker fetches over HTTP at render time, not
+# from the image.
+#
+# Docker picks up "<dockerfile-path>.dockerignore" in preference to the root
+# .dockerignore, so this file applies ONLY to the worker build and leaves the
+# app's own .dockerignore (which must keep public/) untouched.
+
+# Exclude everything...
+*
+
+# ...then re-include just the worker.
+!render-worker/package.json
+!render-worker/package-lock.json
+!render-worker/check-context.mjs
+!render-worker/worker.mjs
+!render-worker/runpod-handler.mjs
+!render-worker/serve.mjs
+!render-worker/entrypoint.sh

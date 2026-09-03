@@ -1,0 +1,18 @@
+{
+  "name": "cue-render-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless-Chrome GPU render worker for cue mockups and studio videos",
+  "scripts": {
+    "start": "node runpod-handler.mjs",
+    "serve": "node serve.mjs",
+    "job": "node worker.mjs"
+  },
+  "dependencies": {
+    "puppeteer-core": "^24.10.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

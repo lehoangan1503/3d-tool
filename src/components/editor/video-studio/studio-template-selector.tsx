@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useImperativeHandle, forwardRef } from "react";
+import { useState, useEffect, useCallback, useRef, useImperativeHandle, forwardRef } from "react";
 import type { Ref } from "react";
 import {
   Select,
@@ -25,8 +25,6 @@ import type {
   VideoStudioTemplate,
 } from "@/types/video-studio";
 
-type TemplateWithMeta = VideoStudioTemplate & { isOwner?: boolean };
-
 const NEW_TEMPLATE_VALUE = "__new__";
 
 export interface StudioTemplateSelectorHandle {
@@ -50,6 +48,8 @@ interface StudioTemplateSelectorProps {
    * each studio only ever lists its own.
    */
   variant?: "v1" | "v2";
+  /** Template to select and load automatically (deep link from the dashboard). */
+  initialTemplateId?: string | null;
 }
 
 export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector(
@@ -59,10 +59,11 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
     currentConfig,
     onLoadConfig,
     onNewTemplate,
+    initialTemplateId,
   }: StudioTemplateSelectorProps,
   ref: Ref<StudioTemplateSelectorHandle>
 ) {
-  const [templates, setTemplates] = useState<TemplateWithMeta[]>([]);
+  const [templates, setTemplates] = useState<VideoStudioTemplate[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
@@ -94,6 +95,18 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
     fetchTemplates();
   }, [fetchTemplates]);
 
+  // Deep link from the dashboard: select and load the requested template once
+  // it shows up in this variant's list.
+  const autoLoadedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialTemplateId || autoLoadedRef.current === initialTemplateId) return;
+    const template = templates.find((t) => t.id === initialTemplateId);
+    if (!template) return;
+    autoLoadedRef.current = initialTemplateId;
+    setSelectedId(template.id);
+    onLoadConfig(template.config);
+  }, [initialTemplateId, templates, onLoadConfig]);
+
   const handleSelectChange = (value: string) => {
     if (value === NEW_TEMPLATE_VALUE) {
       setSelectedId(null);
@@ -108,7 +121,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
   /** Open save — if a template is selected AND owned, show choice dialog; otherwise go straight to "save new" */
   const handleSaveClick = useCallback(() => {
     const selected = selectedId ? templates.find((t) => t.id === selectedId) : null;
-    if (selected?.isOwner) {
+    if (selected?.canEdit) {
       setShowSaveChoiceDialog(true);
     } else {
       setSaveName("");
@@ -124,7 +137,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
       silentSave: async () => {
         if (!selectedId) return;
         const selected = templates.find((t) => t.id === selectedId);
-        if (!selected?.isOwner) return;
+        if (!selected?.canEdit) return;
         setIsSaving(true);
         try {
           await fetch(`/api/video-studio-templates/${selectedId}`, {
@@ -263,7 +276,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
           variant="ghost"
           size="icon"
           className="h-8 w-8"
-          disabled={isLoading || isSaving || (!!selectedId && !templates.find(t => t.id === selectedId)?.isOwner)}
+          disabled={isLoading || isSaving || (!!selectedId && !templates.find(t => t.id === selectedId)?.canEdit)}
           onClick={handleSaveClick}
           title={selectedId ? "Lưu mẫu" : "Lưu thành mẫu mới"}
         >
@@ -274,7 +287,7 @@ export const StudioTemplateSelector = forwardRef(function StudioTemplateSelector
           variant="ghost"
           size="icon"
           className="h-8 w-8"
-          disabled={!selectedId || isLoading || isSaving || !templates.find(t => t.id === selectedId)?.isOwner}
+          disabled={!selectedId || isLoading || isSaving || !templates.find(t => t.id === selectedId)?.canEdit}
           onClick={handleDelete}
           title="Xóa mẫu"
         >

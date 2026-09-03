@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminServiceClient } from "@/lib/supabase/server";
+import { getSessionRole } from "@/lib/auth/roles";
 import type { ExtractorFrame, CueFrame, ImageFrame } from "@/types/extractor";
 import { isCueFrame, isImageFrame } from "@/types/extractor";
 
@@ -21,7 +22,7 @@ export async function GET(request: Request, { params }: RouteParams) {
     const { data: reference, error } = await supabase
       .from("extractor_references")
       .select(`
-        id, name, thumb_url, canvas_width, canvas_height, created_at, updated_at,
+        id, user_id, name, thumb_url, canvas_width, canvas_height, created_at, updated_at,
         extractor_frames (*, frame_name)
       `)
       .eq("id", id)
@@ -30,6 +31,9 @@ export async function GET(request: Request, { params }: RouteParams) {
     if (error || !reference) {
       return NextResponse.json({ error: "Reference not found" }, { status: 404 });
     }
+
+    const isOwned = (reference as any).user_id === user.id;
+    const { canEditAnyProduct } = await getSessionRole();
 
     // Map DB fields to discriminated union (cue or image frame)
     const result = {
@@ -40,6 +44,8 @@ export async function GET(request: Request, { params }: RouteParams) {
       canvasHeight: (reference as any).canvas_height ?? 2048,
       createdAt: reference.created_at,
       updatedAt: reference.updated_at,
+      isOwned,
+      canEdit: isOwned || canEditAnyProduct,
       frames: (reference.extractor_frames || [])
         .sort((a: any, b: any) => a.frame_order - b.frame_order)
         .map((f: any): ExtractorFrame => {
@@ -116,17 +122,30 @@ export async function PUT(request: Request, { params }: RouteParams) {
     const body = await request.json();
     const { name, frames, canvasWidth, canvasHeight } = body as { name?: string; frames?: ExtractorFrame[]; canvasWidth?: number; canvasHeight?: number };
 
-    // Verify ownership
+    // Verify ownership — owners edit their own; tool admins may edit anyone's
     const { data: existing } = await supabase
       .from("extractor_references")
-      .select("id")
+      .select("id, user_id")
       .eq("id", id)
-      .eq("user_id", user.id)
-      .single();
+      .maybeSingle();
 
     if (!existing) {
       return NextResponse.json({ error: "Reference not found" }, { status: 404 });
     }
+
+    const isOwner = existing.user_id === user.id;
+    const { canEditAnyProduct } = await getSessionRole();
+
+    if (!isOwner && !canEditAnyProduct) {
+      return NextResponse.json(
+        { error: "Bạn không có quyền sửa tham chiếu của người dùng khác." },
+        { status: 403 }
+      );
+    }
+
+    // Owners write as themselves (RLS applies). Cross-owner admin edits bypass
+    // RLS via the service client, only after the check above passed.
+    const writeClient = isOwner ? supabase : createAdminServiceClient();
 
     // Update name and/or canvas dims if provided
     if (name || canvasWidth !== undefined || canvasHeight !== undefined) {
@@ -134,7 +153,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
       if (name) updates.name = name;
       if (canvasWidth !== undefined) updates.canvas_width = canvasWidth;
       if (canvasHeight !== undefined) updates.canvas_height = canvasHeight;
-      await supabase
+      await writeClient
         .from("extractor_references")
         .update(updates)
         .eq("id", id);
@@ -143,7 +162,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
     // Update frames if provided - handle both cue and image types
     if (frames && Array.isArray(frames)) {
       // Delete existing frames
-      await supabase.from("extractor_frames").delete().eq("reference_id", id);
+      await writeClient.from("extractor_frames").delete().eq("reference_id", id);
 
       // Insert new frames
       const frameRows = frames.map((f, idx) => {
@@ -189,7 +208,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
         return baseRow;
       });
 
-      await supabase.from("extractor_frames").insert(frameRows);
+      await writeClient.from("extractor_frames").insert(frameRows);
     }
 
     return NextResponse.json({ success: true });
@@ -210,11 +229,32 @@ export async function DELETE(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { error } = await supabase
+    const { data: existing } = await supabase
       .from("extractor_references")
-      .delete()
+      .select("user_id")
       .eq("id", id)
-      .eq("user_id", user.id);
+      .maybeSingle();
+
+    if (!existing) {
+      return NextResponse.json({ error: "Reference not found" }, { status: 404 });
+    }
+
+    const isOwner = existing.user_id === user.id;
+    const { canEditAnyProduct } = await getSessionRole();
+
+    if (!isOwner && !canEditAnyProduct) {
+      return NextResponse.json(
+        { error: "Bạn không có quyền xoá tham chiếu của người dùng khác." },
+        { status: 403 }
+      );
+    }
+
+    const writeClient = isOwner ? supabase : createAdminServiceClient();
+
+    let query = writeClient.from("extractor_references").delete().eq("id", id);
+    if (isOwner) query = query.eq("user_id", user.id);
+
+    const { error } = await query;
 
     if (error) {
       return NextResponse.json({ error: "Failed to delete" }, { status: 500 });

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminServiceClient } from "@/lib/supabase/server";
+import { getSessionRole } from "@/lib/auth/roles";
 import { resolveStorageUrl } from "@/lib/resolve-storage-url";
 
 interface RouteParams {
@@ -17,17 +18,30 @@ export async function POST(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Verify ownership
+    // Verify ownership — owners write their own; tool admins may write anyone's
     const { data: existing } = await supabase
       .from("extractor_references")
-      .select("id")
+      .select("id, user_id")
       .eq("id", id)
-      .eq("user_id", user.id)
-      .single();
+      .maybeSingle();
 
     if (!existing) {
       return NextResponse.json({ error: "Reference not found" }, { status: 404 });
     }
+
+    const isOwner = existing.user_id === user.id;
+    const { canEditAnyProduct } = await getSessionRole();
+
+    if (!isOwner && !canEditAnyProduct) {
+      return NextResponse.json(
+        { error: "Bạn không có quyền sửa tham chiếu của người dùng khác." },
+        { status: 403 }
+      );
+    }
+
+    // Owners write as themselves (RLS applies). Cross-owner admin writes bypass
+    // RLS via the service client, only after the check above passed.
+    const writeClient = isOwner ? supabase : createAdminServiceClient();
 
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
@@ -36,15 +50,15 @@ export async function POST(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
 
-    const filePath = `${user.id}/reference-thumbnails/${id}.png`;
+    const filePath = `${existing.user_id}/reference-thumbnails/${id}.png`;
     const arrayBuffer = await file.arrayBuffer();
     const buffer = new Uint8Array(arrayBuffer);
 
     // Remove old image first so upsert starts clean
-    await supabase.storage.from("product-assets").remove([filePath]);
+    await writeClient.storage.from("product-assets").remove([filePath]);
 
     // Upload new image
-    const { error: uploadError } = await supabase.storage
+    const { error: uploadError } = await writeClient.storage
       .from("product-assets")
       .upload(filePath, buffer, {
         contentType: "image/png",
@@ -57,7 +71,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     }
 
     // Get public URL
-    const { data: urlData } = supabase.storage
+    const { data: urlData } = writeClient.storage
       .from("product-assets")
       .getPublicUrl(filePath);
 
@@ -65,7 +79,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     const thumbUrl = `${resolveStorageUrl(urlData.publicUrl)}?v=${Date.now()}`;
 
     // Save thumb_url on the reference record
-    const { error: updateError } = await supabase
+    const { error: updateError } = await writeClient
       .from("extractor_references")
       .update({ thumb_url: thumbUrl })
       .eq("id", id);

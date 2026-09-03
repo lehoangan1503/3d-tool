@@ -217,6 +217,8 @@ interface VideoStudioProps {
    * the user having to pick anything.
    */
   productLogoId?: string | null;
+  /** Studio template to select automatically on open (deep link from the dashboard). */
+  initialTemplateId?: string | null;
 }
 
 const SELECTION_LABELS_VN: Record<string, string> = {
@@ -235,7 +237,7 @@ const MODE_LABELS_VN: Record<string, string> = {
   scale: "Tỷ lệ",
 };
 
-export function VideoStudio({ sceneManager, productName, productId, onClose, open, variant = "v1", productLogoId }: VideoStudioProps) {
+export function VideoStudio({ sceneManager, productName, productId, onClose, open, variant = "v1", productLogoId, initialTemplateId }: VideoStudioProps) {
   const isV2 = variant === "v2";
   const [config, setConfig] = useState<VideoStudioConfig>(() =>
     structuredClone(isV2 ? DEFAULT_STUDIO_CONFIG_V2 : DEFAULT_STUDIO_CONFIG)
@@ -1924,6 +1926,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                   ref={templateSelectorRef}
                   variant={variant}
                   productId={productId}
+                  initialTemplateId={initialTemplateId}
                   currentConfig={config}
                   onLoadConfig={(c) => {
                     const loaded = migrateVideoStudioConfig(ensureFullConfig(c));

@@ -5,6 +5,8 @@ import Link from "next/link";
 import { logout } from "@/app/login/actions";
 import { Button } from "@/components/ui/button";
 import { ProductsGrid } from "@/components/products/products-grid";
+import { ReferencesGrid } from "@/components/products/references-grid";
+import { StudioTemplatesGrid } from "@/components/products/studio-templates-grid";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UserDropdown } from "@/components/user-dropdown";
 import { FirstLoginDialog } from "@/components/first-login-dialog";
@@ -21,9 +23,36 @@ interface DashboardClientProps {
   canDeploy?: boolean;
 }
 
+/** Which list the dashboard is showing. */
+type DashboardView = "products" | "references" | "studio";
+
+const VIEW_TABS: Array<{ value: DashboardView; label: string }> = [
+  { value: "products", label: "Sản Phẩm" },
+  { value: "references", label: "Tham Chiếu 2D" },
+  { value: "studio", label: "Video 3D" },
+];
+
 export function DashboardClient({ profile: initialProfile, showFirstLoginDialog, isSuperAdmin, canDeploy }: DashboardClientProps) {
   const [profile, setProfile] = useState(initialProfile);
   const [firstLoginOpen, setFirstLoginOpen] = useState(showFirstLoginDialog);
+  const [view, setView] = useState<DashboardView>("products");
+
+  // Shared by all three lists so the tabs sit right next to each heading.
+  // mr-auto keeps them left-aligned inside the heading row's justify-between.
+  const viewTabs = (
+    <div className="flex items-center gap-2 mr-auto">
+      {VIEW_TABS.map((t) => (
+        <Button
+          key={t.value}
+          variant={view === t.value ? "default" : "outline"}
+          size="sm"
+          onClick={() => setView(t.value)}
+        >
+          {t.label}
+        </Button>
+      ))}
+    </div>
+  );
 
   function handleFirstLoginComplete(nickname: string | null) {
     if (nickname) {
@@ -72,7 +101,9 @@ export function DashboardClient({ profile: initialProfile, showFirstLoginDialog,
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <ProductsGrid currentUserId={profile.user_id} />
+        {view === "products" && <ProductsGrid currentUserId={profile.user_id} tabs={viewTabs} />}
+        {view === "references" && <ReferencesGrid tabs={viewTabs} />}
+        {view === "studio" && <StudioTemplatesGrid tabs={viewTabs} />}
       </main>
 
       <FirstLoginDialog open={firstLoginOpen} onComplete={handleFirstLoginComplete} />

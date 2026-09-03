@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect, notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionRole } from "@/lib/auth/roles";
@@ -140,16 +141,20 @@ export default async function ProductEditorPage({ params }: PageProps) {
   }
 
   return (
-    <EditorClient
-      key={product.id}
-      product={product as Product}
-      initialConfig={initialConfig}
-      isOwner={isOwner}
-      canEdit={canEdit}
-      ownerProfile={ownerProfile}
-      canDeploy={canDeploy}
-      canDelete={canDelete}
-      deployment={deployment}
-    />
+    // EditorClient reads ?tool= / ?ref= / ?template= deep links via
+    // useSearchParams, which needs a Suspense boundary.
+    <Suspense fallback={null}>
+      <EditorClient
+        key={product.id}
+        product={product as Product}
+        initialConfig={initialConfig}
+        isOwner={isOwner}
+        canEdit={canEdit}
+        ownerProfile={ownerProfile}
+        canDeploy={canDeploy}
+        canDelete={canDelete}
+        deployment={deployment}
+      />
+    </Suspense>
   );
 }

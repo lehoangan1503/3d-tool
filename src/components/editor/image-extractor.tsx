@@ -359,11 +359,13 @@ interface ImageExtractorProps {
   productType: ProductType;
   /** Current product's flat surface design URL — used by dynamic-surface frames. */
   productSurfaceUrl?: string | null;
+  /** Reference to select automatically on open (deep link from the dashboard). */
+  initialReferenceId?: string | null;
   onClose: () => void;
   open: boolean;
 }
 
-export function ImageExtractor({ sceneManager, productName, productType, productSurfaceUrl, onClose, open }: ImageExtractorProps) {
+export function ImageExtractor({ sceneManager, productName, productType, productSurfaceUrl, initialReferenceId, onClose, open }: ImageExtractorProps) {
   // Frames state with full undo/redo support
   const {
     value: frames,
@@ -386,7 +388,7 @@ export function ImageExtractor({ sceneManager, productName, productType, product
   const [references, setReferences] = useState<ExtractorReference[]>([]);
   const [selectedReferenceId, setSelectedReferenceId] = useState<string | null>(null);
   // Snapshot of selected reference metadata — survives FrameControlsPanel unmount during loading.
-  const [selectedRefMeta, setSelectedRefMeta] = useState<{ id: string; name: string; isOwned: boolean } | null>(null);
+  const [selectedRefMeta, setSelectedRefMeta] = useState<{ id: string; name: string; isOwned: boolean; canEdit: boolean } | null>(null);
   const [gap, setGap] = useState(20);
 
   // Screenshot cache for static frames
@@ -574,6 +576,19 @@ export function ImageExtractor({ sceneManager, productName, productType, product
     loadReferences();
   }, [open]);
 
+  // Deep link from the dashboard: select the requested reference once per open.
+  const autoLoadedRefRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open) {
+      autoLoadedRefRef.current = null;
+      return;
+    }
+    if (!initialReferenceId || autoLoadedRefRef.current === initialReferenceId) return;
+    autoLoadedRefRef.current = initialReferenceId;
+    loadReference(initialReferenceId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialReferenceId]);
+
   const loadReferences = async () => {
     try {
       const res = await fetch("/api/extractor-references?limit=40");
@@ -595,6 +610,13 @@ export function ImageExtractor({ sceneManager, productName, productType, product
         resetFrames(data.frames); // load → clear history
         setSelectedReferenceId(id);
         setSelectedFrameId(null);
+        // Deep-linked loads have no picker click, so seed the meta from the payload.
+        setSelectedRefMeta({
+          id,
+          name: data.name,
+          isOwned: data.isOwned ?? false,
+          canEdit: data.canEdit ?? data.isOwned ?? false,
+        });
         // Restore canvas ratio saved with the reference
         if (data.canvasWidth && data.canvasHeight) {
           setCanvasWidth(data.canvasWidth);
@@ -652,7 +674,7 @@ export function ImageExtractor({ sceneManager, productName, productType, product
     }
   };
 
-  const handleSelectReference = (id: string | null, meta: { id: string; name: string; isOwned: boolean } | null) => {
+  const handleSelectReference = (id: string | null, meta: { id: string; name: string; isOwned: boolean; canEdit: boolean } | null) => {
     setSelectedRefMeta(meta);
     if (id) {
       loadReference(id);

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resolveCreatorNames } from "@/lib/supabase/creator";
+import { getSessionRole } from "@/lib/auth/roles";
 import type { ExtractorReference, ExtractorFrame, CueFrame, ImageFrame } from "@/types/extractor";
 import { isCueFrame, isImageFrame } from "@/types/extractor";
 
@@ -68,6 +69,10 @@ export async function GET(request: Request) {
     const creatorIds = (references ?? []).map((r: any) => r.user_id).filter(Boolean) as string[];
     const creatorMap = await resolveCreatorNames(supabase, creatorIds);
 
+    // Tool admins may rename/delete anyone's reference, so the UI needs a flag
+    // separate from plain ownership.
+    const { canEditAnyProduct } = await getSessionRole();
+
     const result: ExtractorReference[] = (references || []).map((ref: any) => ({
       id: ref.id,
       name: ref.name,
@@ -78,6 +83,7 @@ export async function GET(request: Request) {
       updatedAt: ref.updated_at,
       createdByName: ref.user_id ? (creatorMap[ref.user_id] ?? "Unknown") : undefined,
       isOwned: ref.user_id === user.id,
+      canEdit: ref.user_id === user.id || canEditAnyProduct,
       frames: (ref.extractor_frames || [])
         .sort((a: any, b: any) => a.frame_order - b.frame_order)
         .map((f: any): ExtractorFrame => {

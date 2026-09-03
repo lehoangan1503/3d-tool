@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { CuePreview } from "@/components/editor/cue-preview";
 import { LeatherPicker } from "@/components/editor/leather-picker";
@@ -193,6 +193,20 @@ export function EditorClient({
   const [showVideoStudioV2, setShowVideoStudioV2] = useState(false);
   const [showShopifyDeploy, setShowShopifyDeploy] = useState(false);
   const [cloning, setCloning] = useState(false);
+
+  // Deep links from the dashboard's "Tham chiếu" / "Mẫu 3D" tabs:
+  //   ?tool=extractor&ref=<id>          → open the extractor on that layout
+  //   ?tool=studio|studio2&template=<id> → open that studio on that template
+  const searchParams = useSearchParams();
+  const deepLinkTool = searchParams.get("tool");
+  const deepLinkRefId = searchParams.get("ref");
+  const deepLinkTemplateId = searchParams.get("template");
+
+  useEffect(() => {
+    if (deepLinkTool === "extractor") setShowImageExtractor(true);
+    else if (deepLinkTool === "studio") setShowVideoExtractor(true);
+    else if (deepLinkTool === "studio2") setShowVideoStudioV2(true);
+  }, [deepLinkTool]);
 
   const [hdriOptions, setHdriOptions] = useState<Array<{ id: string; label: string }>>([]);
 
@@ -1665,16 +1679,18 @@ export function EditorClient({
         productName={product.name}
         productType={product.type}
         productSurfaceUrl={product.surface_url}
+        initialReferenceId={deepLinkTool === "extractor" ? deepLinkRefId : null}
         open={showImageExtractor}
         onClose={() => setShowImageExtractor(false)}
       />
-      <VideoStudio sceneManager={sceneManager} productName={product.name} productId={product.id} productLogoId={config.logoId} open={showVideoExtractor} onClose={() => setShowVideoExtractor(false)} />
+      <VideoStudio sceneManager={sceneManager} productName={product.name} productId={product.id} productLogoId={config.logoId} initialTemplateId={deepLinkTool === "studio" ? deepLinkTemplateId : null} open={showVideoExtractor} onClose={() => setShowVideoExtractor(false)} />
       <VideoStudio
         variant="v2"
         sceneManager={sceneManager}
         productName={product.name}
         productId={product.id}
         productLogoId={config.logoId}
+        initialTemplateId={deepLinkTool === "studio2" ? deepLinkTemplateId : null}
         open={showVideoStudioV2}
         onClose={() => setShowVideoStudioV2(false)}
       />

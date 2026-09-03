@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resolveCreatorNames } from "@/lib/supabase/creator";
+import { getSessionRole } from "@/lib/auth/roles";
 
 // GET /api/extractor-reference-groups - List ALL reference groups globally (with creator info)
 export async function GET() {
@@ -25,6 +26,9 @@ export async function GET() {
     const creatorIds = (groups ?? []).map((g: any) => g.user_id).filter(Boolean) as string[];
     const creatorMap = await resolveCreatorNames(supabase, creatorIds);
 
+    // Tool admins may edit/delete anyone's group.
+    const { canEditAnyProduct } = await getSessionRole();
+
     const result = (groups || []).map((g) => ({
       id: g.id,
       name: g.name,
@@ -33,6 +37,7 @@ export async function GET() {
       updatedAt: g.updated_at,
       createdByName: (g as any).user_id ? (creatorMap[(g as any).user_id] ?? "Unknown") : undefined,
       isOwner: (g as any).user_id === user.id,
+      canEdit: (g as any).user_id === user.id || canEditAnyProduct,
     }));
 
     return NextResponse.json({ items: result });
@@ -76,6 +81,8 @@ export async function POST(request: Request) {
       referenceIds: group.reference_ids ?? [],
       createdAt: group.created_at,
       updatedAt: group.updated_at,
+      isOwner: true,
+      canEdit: true,
     });
   } catch (error) {
     console.error("POST /api/extractor-reference-groups error:", error);

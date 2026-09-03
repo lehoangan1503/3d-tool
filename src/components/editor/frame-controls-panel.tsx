@@ -85,8 +85,8 @@ interface FrameControlsPanelProps {
   // Reference management
   references: ExtractorReference[];
   selectedReferenceId: string | null;
-  selectedRefMeta: { id: string; name: string; isOwned: boolean } | null;
-  onSelectReference: (id: string | null, meta: { id: string; name: string; isOwned: boolean } | null) => void;
+  selectedRefMeta: { id: string; name: string; isOwned: boolean; canEdit: boolean } | null;
+  onSelectReference: (id: string | null, meta: { id: string; name: string; isOwned: boolean; canEdit: boolean } | null) => void;
 
   // Frame management
   frames: ExtractorFrame[];
@@ -358,8 +358,8 @@ export function FrameControlsPanel({
   const selectedRefName = selectedReferenceId
     ? (seenRefsMap.current.get(selectedReferenceId)?.name ?? selectedRefMeta?.name ?? "Chưa đặt tên")
     : null;
-  const selectedRefIsOwned = selectedReferenceId
-    ? (seenRefsMap.current.get(selectedReferenceId)?.isOwned ?? selectedRefMeta?.isOwned ?? false)
+  const selectedRefCanEdit = selectedReferenceId
+    ? (seenRefsMap.current.get(selectedReferenceId)?.canEdit ?? selectedRefMeta?.canEdit ?? false)
     : false;
 
   // No frame selected - show reference/template controls
@@ -434,7 +434,7 @@ export function FrameControlsPanel({
                           onClick={() => {
                             setIsRenamingRef(false);
                             setConfirmDeleteRef(false);
-                            onSelectReference(ref.id, { id: ref.id, name: ref.name, isOwned: ref.isOwned ?? false });
+                            onSelectReference(ref.id, { id: ref.id, name: ref.name, isOwned: ref.isOwned ?? false, canEdit: ref.canEdit ?? ref.isOwned ?? false });
                             setRefPopoverOpen(false);
                           }}
                         >
@@ -496,7 +496,7 @@ export function FrameControlsPanel({
               ) : (
                 <>
                   <span className="flex-1 text-sm truncate text-muted-foreground">{selectedRefName ?? "Bố cục mới"}</span>
-                  {selectedReferenceId && selectedRefIsOwned && (
+                  {selectedReferenceId && selectedRefCanEdit && (
                     <>
                       <Button
                         variant="ghost"

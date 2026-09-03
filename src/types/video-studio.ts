@@ -812,9 +812,14 @@ export interface VideoStudioTemplate {
   id: string;
   name: string;
   config: VideoStudioConfig;
+  productId?: string;
+  productName?: string | null;
   createdAt?: string;
   updatedAt?: string;
+  createdBy?: string | null;
   createdByName?: string; // nickname or email of the creator
+  isOwner?: boolean;      // true if the current user created this template
+  canEdit?: boolean;      // true if the current user created it OR is a tool admin
 }
 
 // ── Quality Presets ──

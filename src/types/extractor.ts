@@ -490,6 +490,7 @@ export interface ExtractorReference {
   canvasWidth?: number;  // default 2048
   canvasHeight?: number; // default 2048
   isOwned?: boolean;     // true if the current user owns this reference
+  canEdit?: boolean;     // true if the current user owns it OR is a tool admin
 }
 
 export interface ExtractorReferenceGroup {
@@ -500,6 +501,7 @@ export interface ExtractorReferenceGroup {
   updatedAt?: string;
   createdByName?: string; // nickname or email of the creator
   isOwner?: boolean;      // true if the current user created this group
+  canEdit?: boolean;      // true if the current user created it OR is a tool admin
 }
 
 /** Default frame transform */

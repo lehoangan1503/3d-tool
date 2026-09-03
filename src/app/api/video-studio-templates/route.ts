@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminServiceClient } from "@/lib/supabase/server";
 import { resolveCreatorNames } from "@/lib/supabase/creator";
+import { getSessionRole } from "@/lib/auth/roles";
 
 // GET /api/video-studio-templates - List ALL templates globally (with creator info)
 export async function GET(request: Request) {
@@ -43,9 +44,25 @@ export async function GET(request: Request) {
       .filter(Boolean) as string[];
     const creatorMap = await resolveCreatorNames(supabase, creatorIds);
 
+    // Tool admins may overwrite/delete anyone's template.
+    const { canEditAnyProduct } = await getSessionRole();
+
+    // Product names let the dashboard's "Video 3D" tab show which cue a
+    // template belongs to (templates are per-product).
+    const listProductIds = [...new Set((templates ?? []).map((t: any) => t.product_id).filter(Boolean))] as string[];
+    const productNameMap: Record<string, string> = {};
+    if (listProductIds.length > 0) {
+      const { data: listProducts } = await supabase
+        .from("products")
+        .select("id, name")
+        .in("id", listProductIds);
+      for (const p of listProducts ?? []) productNameMap[p.id] = p.name;
+    }
+
     const items = (templates ?? []).map((t: any) => ({
       id: t.id,
       productId: t.product_id,
+      productName: t.product_id ? (productNameMap[t.product_id] ?? null) : null,
       name: t.name,
       config: t.config,
       createdAt: t.created_at,
@@ -53,6 +70,7 @@ export async function GET(request: Request) {
       createdBy: t.created_by ?? null,
       createdByName: t.created_by ? (creatorMap[t.created_by] ?? "Unknown") : null,
       isOwner: t.created_by === user.id,
+      canEdit: (!!t.created_by && t.created_by === user.id) || canEditAnyProduct,
     }));
 
     return NextResponse.json({ items, total: count ?? 0 });
@@ -83,7 +101,32 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
     }
 
-    const { data: template, error } = await supabase
+    // The INSERT policy requires the product to be the caller's own, so a tool
+    // admin saving a template on someone else's product needs the service
+    // client. created_by stays the real author either way.
+    const { data: product } = await supabase
+      .from("products")
+      .select("user_id")
+      .eq("id", product_id)
+      .maybeSingle();
+
+    if (!product) {
+      return NextResponse.json({ error: "Product not found" }, { status: 404 });
+    }
+
+    const isOwner = product.user_id === user.id;
+    const { canEditAnyProduct: mayEditAny } = await getSessionRole();
+
+    if (!isOwner && !mayEditAny) {
+      return NextResponse.json(
+        { error: "Bạn không có quyền tạo mẫu studio cho sản phẩm của người dùng khác." },
+        { status: 403 }
+      );
+    }
+
+    const writeClient = isOwner ? supabase : createAdminServiceClient();
+
+    const { data: template, error } = await writeClient
       .from("video_studio_templates")
       .insert({ product_id, name, config, created_by: user.id })
       .select()

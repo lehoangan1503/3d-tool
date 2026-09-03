@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminServiceClient } from "@/lib/supabase/server";
+import { getSessionRole } from "@/lib/auth/roles";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -44,19 +45,32 @@ export async function PUT(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Verify ownership — only the creator may update
+    // Verify ownership — the creator, or a tool admin for anyone's template.
+    // Legacy rows with a NULL created_by have no owner, so only admins may
+    // touch them.
     const { data: existing } = await supabase
       .from("video_studio_templates")
       .select("created_by")
       .eq("id", id)
-      .single();
+      .maybeSingle();
 
     if (!existing) {
       return NextResponse.json({ error: "Template not found" }, { status: 404 });
     }
-    if (existing.created_by && existing.created_by !== user.id) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+    const isOwner = !!existing.created_by && existing.created_by === user.id;
+    const { canEditAnyProduct } = await getSessionRole();
+
+    if (!isOwner && !canEditAnyProduct) {
+      return NextResponse.json(
+        { error: "Bạn không có quyền sửa mẫu studio của người dùng khác." },
+        { status: 403 }
+      );
     }
+
+    // Owners write as themselves (RLS applies). Cross-owner admin edits bypass
+    // RLS via the service client, only after the check above passed.
+    const writeClient = isOwner ? supabase : createAdminServiceClient();
 
     const body = await request.json();
     const { name, config } = body as {
@@ -70,7 +84,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
     if (name !== undefined) updates.name = name;
     if (config !== undefined) updates.config = config;
 
-    const { data: template, error } = await supabase
+    const { data: template, error } = await writeClient
       .from("video_studio_templates")
       .update(updates)
       .eq("id", id)
@@ -99,21 +113,32 @@ export async function DELETE(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Verify ownership — only the creator may delete
+    // Verify ownership — the creator, or a tool admin for anyone's template.
+    // Legacy rows with a NULL created_by have no owner, so only admins may
+    // delete them.
     const { data: existing } = await supabase
       .from("video_studio_templates")
       .select("created_by")
       .eq("id", id)
-      .single();
+      .maybeSingle();
 
     if (!existing) {
       return NextResponse.json({ error: "Template not found" }, { status: 404 });
     }
-    if (existing.created_by && existing.created_by !== user.id) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+    const isOwner = !!existing.created_by && existing.created_by === user.id;
+    const { canEditAnyProduct } = await getSessionRole();
+
+    if (!isOwner && !canEditAnyProduct) {
+      return NextResponse.json(
+        { error: "Bạn không có quyền xoá mẫu studio của người dùng khác." },
+        { status: 403 }
+      );
     }
 
-    const { error } = await supabase
+    const writeClient = isOwner ? supabase : createAdminServiceClient();
+
+    const { error } = await writeClient
       .from("video_studio_templates")
       .delete()
       .eq("id", id);

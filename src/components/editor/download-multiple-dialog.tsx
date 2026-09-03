@@ -47,7 +47,7 @@ function TemplateRow({
           )}
         </div>
       </div>
-      {onDelete && r.isOwned && (
+      {onDelete && (r.canEdit ?? r.isOwned) && (
         <button onClick={onDelete} className="opacity-0 group-hover/row:opacity-100 transition-opacity text-muted-foreground hover:text-destructive p-1 rounded" title="Xóa mẫu">
           <Trash2 className="h-3.5 w-3.5" />
         </button>
@@ -315,8 +315,10 @@ export function DownloadMultipleDialog({ open, onOpenChange, productName, onRend
       });
       if (res.ok) {
         const updated = await res.json();
-        setGroups((prev) => prev.map((g) => (g.id === updated.id ? { ...updated, isOwner: true } : g)));
-        setDetailGroup((prev) => (prev ? { ...updated, isOwner: true } : null));
+        // Trust the server's ownership/permission flags — an admin editing
+        // someone else's group is not its owner.
+        setGroups((prev) => prev.map((g) => (g.id === updated.id ? updated : g)));
+        setDetailGroup(updated);
         setSaveDetailStatus("success");
       } else {
         setSaveDetailStatus("error");
@@ -589,10 +591,10 @@ export function DownloadMultipleDialog({ open, onOpenChange, productName, onRend
                   )}
                 </div>
 
-                <div className={`flex items-center justify-end gap-3  border-t ${detailGroup.isOwner ? "py-2" : ""}`}>
+                <div className={`flex items-center justify-end gap-3  border-t ${(detailGroup.canEdit ?? detailGroup.isOwner) ? "py-2" : ""}`}>
                   {saveDetailStatus === "success" && <span className="text-xs text-green-500">Đã lưu thành công!</span>}
                   {saveDetailStatus === "error" && <span className="text-xs text-destructive">Lưu thất bại. Vui lòng thử lại.</span>}
-                  {detailGroup.isOwner && (
+                  {(detailGroup.canEdit ?? detailGroup.isOwner) && (
                     <Button size="sm" onClick={handleSaveGroupDetail} disabled={savingDetail}>
                       {savingDetail ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Lưu Thay Đổi"}
                     </Button>
@@ -728,7 +730,7 @@ export function DownloadMultipleDialog({ open, onOpenChange, productName, onRend
                                 )}
                               </div>
                             </div>
-                            {group.isOwner && (
+                            {(group.canEdit ?? group.isOwner) && (
                               <>
                                 {/* Edit button */}
                                 <button

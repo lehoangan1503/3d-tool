@@ -21,9 +21,11 @@ const PAGE_SIZE = 20;
 
 interface ProductsGridProps {
   currentUserId: string;
+  /** Rendered next to the heading — the dashboard's view tabs. */
+  tabs?: React.ReactNode;
 }
 
-export function ProductsGrid({ currentUserId }: ProductsGridProps) {
+export function ProductsGrid({ currentUserId, tabs }: ProductsGridProps) {
   const [products, setProducts] = useState<Product[]>([]);
   const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -351,6 +353,7 @@ export function ProductsGrid({ currentUserId }: ProductsGridProps) {
       >
         <div className="flex items-center justify-between gap-3 pt-4">
           <h2 className="text-2xl font-bold shrink-0">{myOnly ? "Bản Của Tôi" : "Tất Cả Sản Phẩm"}</h2>
+          {tabs}
           <div className="flex items-center gap-2">
             {/* Bulk 3D model download */}
             {selectedIds.size > 0 && (

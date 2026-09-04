@@ -24,6 +24,12 @@ export interface RenderJobRow {
   error_message: string | null;
   worker_provider: string | null;
   worker_job_id: string | null;
+  /**
+   * The provider's own run id (RunPod /run). Kept apart from worker_job_id
+   * because the claiming pod overwrites that one with its own id — see
+   * migration 035.
+   */
+  provider_run_id: string | null;
   claimed_at?: string | null;
   lease_until?: string | null;
   attempts: number;
@@ -38,7 +44,7 @@ export interface RenderJobRow {
 export const RENDER_JOB_COLUMNS =
   "id, user_id, product_id, kind, group_id, template_id, status, " +
   "progress_done, progress_total, progress_label, outputs, error_message, " +
-  "worker_provider, worker_job_id, attempts, created_at, started_at, finished_at, " +
+  "worker_provider, worker_job_id, provider_run_id, attempts, created_at, started_at, finished_at, " +
   "expires_at, purged_at";
 
 export function mapRenderJob(row: RenderJobRow, productName?: string | null): RenderJob {

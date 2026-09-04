@@ -164,7 +164,10 @@ export async function dispatchInBackground(
         d.dispatched
           ? admin
               .from("render_jobs")
-              .update({ worker_provider: d.provider, worker_job_id: d.workerJobId })
+              // provider_run_id, not worker_job_id: the claiming pod overwrites
+              // worker_job_id with its OWN id, which would destroy the only
+              // handle we have for cancelling the run (see migration 035).
+              .update({ worker_provider: d.provider, provider_run_id: d.workerJobId })
               .eq("id", jobs[i].id)
           : Promise.resolve(null)
       )

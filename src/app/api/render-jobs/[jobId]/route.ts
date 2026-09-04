@@ -98,9 +98,13 @@ export async function DELETE(_request: Request, { params }: RouteParams) {
     // Fire-and-forget, like dispatch: the row is already 'canceled', so the
     // operator's cancel must not wait on a provider round-trip (or fail because
     // of one). Anything that goes wrong is logged inside cancelRenderJob.
+    // provider_run_id is the run the provider knows about. Rows enqueued before
+    // migration 035 only have worker_job_id, which for those is still the run id
+    // when no pod ever claimed them — worth trying rather than not cancelling.
     const provider = asWorkerProvider(data.worker_provider);
-    if (data.worker_job_id && provider) {
-      void cancelRenderJob(provider, data.worker_job_id);
+    const runId = data.provider_run_id ?? data.worker_job_id;
+    if (runId && provider) {
+      void cancelRenderJob(provider, runId);
     }
 
     const [job] = await attachProductNames(auth.ctx.supabase, [data]);

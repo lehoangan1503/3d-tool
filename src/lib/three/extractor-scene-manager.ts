@@ -28,6 +28,7 @@ import {
 } from './studio-background';
 import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig, CueHdriConfig, CornerFillConfig, LogoBackdropConfig } from '@/types/video-studio';
 import { computeVideoDuration, createEasingFunction, applyDirection, isCameraFixed, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI, DEFAULT_CORNER_FILL, DEFAULT_FRAME_IMAGE_SCALE, clampFrameImageScale, frameImageTileSize, frameTileGrid, DEFAULT_LOGO_BACKDROP, DEFAULT_SCENE_BACKGROUND, WALL_WIDTH, WALL_HEIGHT, getRecordingDimensions } from '@/types/video-studio';
+import type { DeterministicFrameSink } from '@/types/video-studio';
 import { compositeSurfaceFrames, preloadFrameImages } from './background-compositor';
 import { applyBumperEmissiveShaderMask, applyLogoToExistingMaterial } from './leather-material';
 import { LogoBackdrop, resolveLogoBackdropUrl } from './logo-backdrop';
@@ -4026,7 +4027,17 @@ export class ExtractorSceneManager {
   /** Record video using the new start/end camera animation system */
   async startStudioRecording(
     config: VideoStudioConfig,
-    onProgress?: (progress: number) => void
+    onProgress?: (progress: number) => void,
+    /**
+     * When provided, recording switches to the DETERMINISTIC path: frames are
+     * rendered one at a time and pushed into this sink, with no wall clock and
+     * no MediaRecorder anywhere in the pipeline.
+     *
+     * Omitting it keeps the original real-time captureStream + MediaRecorder
+     * behaviour byte for byte, which is what every browser caller still uses.
+     * That is the rollback: pass no sink, get the old path.
+     */
+    sink?: DeterministicFrameSink
   ): Promise<Blob> {
     if (!this.model) throw new Error('No model loaded');
 
@@ -4124,7 +4135,13 @@ export class ExtractorSceneManager {
           this.renderer.shadowMap.autoUpdate = false;
         }
 
-        this._startStudioRecordingLoop(config, dims, onProgress, resolve, reject);
+        if (sink) {
+          this._runDeterministicRecording(config, dims, sink, onProgress)
+            .then(resolve)
+            .catch(reject);
+        } else {
+          this._startStudioRecordingLoop(config, dims, onProgress, resolve, reject);
+        }
       }).catch(reject);
     });
   }
@@ -4618,6 +4635,212 @@ export class ExtractorSceneManager {
     // Regular flushes keep memory pressure low → fewer GC pauses → smooth encoding.
     this.mediaRecorder.start(ENCODER_WARMUP_MS);
     this.animationFrameId = requestAnimationFrame(animate);
+  }
+
+
+  /**
+   * Deterministic, frame-by-frame recording.
+   *
+   * The real-time path in _startStudioRecordingLoop advances the animation from
+   * the wall clock and lets captureStream sample the canvas whenever it likes.
+   * That has two failure modes this method exists to remove:
+   *
+   *  1. A render that overruns 1000/fps ms loses every frame it stepped past —
+   *     captureStream offers no backpressure, so the camera jumps and the file
+   *     stutters even though the GPU was never the limit.
+   *  2. MediaRecorder's VP9 encoder runs in software inside the container. Asked
+   *     for 20 Mbps it delivers roughly 8, because it silently trades quality
+   *     for keeping up with real time.
+   *
+   * Here time is an INDEX, not a clock. Frame N is rendered, handed to the sink,
+   * and only when the sink resolves does frame N+1 begin. A frame may take a
+   * second; the output is unaffected, because nothing is sampling. Encoding
+   * happens later, offline, from lossless PNGs — so the requested quality is the
+   * quality that lands.
+   *
+   * The trade is wall-clock time: every frame must actually be rendered, so this
+   * is slower than real time by roughly (render_ms * fps / 1000). Callers on a
+   * metered pod must size their job timeout accordingly.
+   */
+  private async _runDeterministicRecording(
+    config: VideoStudioConfig,
+    dims: { readonly width: number; readonly height: number; readonly bitrate: number; readonly fps: number },
+    sink: DeterministicFrameSink,
+    onProgress?: (progress: number) => void
+  ): Promise<Blob> {
+    this.stopVideoPreview();
+
+    // Same start-of-take reset as the real-time path: the warmup renders yield to
+    // the event loop, and a stale orbit handler could have moved the camera since.
+    this.setCameraFromKeyframe(this.resolveStartKeyframe(config));
+    this.setHelpersVisible(false);
+
+    // ── Scene graph freeze (identical to the real-time path) ──────────────────
+    // Studio geometry is static; only the camera moves. Skipping the scene-graph
+    // traversal in WebGLRenderer.render() is worth more here than in real time,
+    // because here every single frame is rendered rather than sampled.
+    this.scene.matrixWorldAutoUpdate = false;
+    const frozenObjects: THREE.Object3D[] = ([
+      this.backdrop,
+      this.shadowFloor,
+      this.wallShadowPlane,
+      this.tableSurface,
+      this.studioCornerFill,
+      this.frameShadowFloor,
+      this.frameWallBackdrop,
+      this.frameTableBackdrop,
+      ...this.backgroundLayerMeshes,
+      ...this.wallFramePlanes,
+      ...this.tableFramePlanes,
+      ...this.instancedMeshes,
+      ...this.hdriShadowLights.map(l => l.light as THREE.Object3D),
+      this.frameShadowLight as THREE.Object3D | null,
+    ] as (THREE.Object3D | null)[]).filter((o): o is THREE.Object3D => !!o);
+    for (const obj of frozenObjects) {
+      obj.matrixAutoUpdate = false;
+      obj.frustumCulled = false;
+    }
+
+    const savedSpinY = config.cueConfig.spinY || 0;
+    const savedSpinX = config.cueConfig.spinX || 0;
+    const savedSpinZ = config.cueConfig.spinZ || 0;
+
+    this.camera.fov = 50;
+    this.camera.updateProjectionMatrix();
+
+    const effectiveEnd = applyDirection(config.cameraStart, config.cameraEnd, "xyz");
+    const duration = computeVideoDuration(
+      config.cameraStart,
+      config.cameraEnd,
+      config.cameraSpeed,
+      "xyz",
+      isCameraFixed(config.cameraStart, config.cameraEnd, config.cameraPath)
+        ? config.fixedCameraDuration
+        : undefined,
+      config.cameraPath
+    );
+    const easingFn = createEasingFunction(config.easing);
+
+    const fps = dims.fps;
+    // Exact frame count. There is no encoder warmup to trim and no wall clock to
+    // over- or under-run: the file is exactly this many frames long, so the
+    // duration in the container is exactly `duration` seconds.
+    const totalFrames = Math.max(1, Math.round(duration * fps));
+
+    // Spin per frame, matching the real-time path so a config recorded either
+    // way spins at the same angular velocity.
+    const SPIN_REF_MS = 1000 / 60;
+    const spinPerFrame = (1000 / fps) / SPIN_REF_MS;
+
+    const cue = config.cueConfig;
+    const hasSpinY = cue.spinSpeed > 0;
+    const hasSpinX = (cue.spinSpeedX || 0) > 0;
+    const hasAnySpin = hasSpinY || hasSpinX;
+
+    const start = config.cameraStart;
+    const kf = {
+      x: start.x, y: start.y, z: start.z,
+      rotationX: start.rotationX ?? 0,
+      rotationY: start.rotationY ?? 0,
+      rotationZ: start.rotationZ ?? 0,
+    };
+    const pathSampler = createCameraPathSampler(
+      start,
+      effectiveEnd,
+      config.cameraPath,
+      this.getCuePathLookTarget()
+    );
+
+    console.log('[VideoStudio] deterministic recording', {
+      frames: totalFrames,
+      fps,
+      duration: `${duration.toFixed(1)}s`,
+      size: `${dims.width}x${dims.height}`,
+    });
+
+    const canvas = this.renderer.domElement;
+    let slowestFrameMs = 0;
+    const startedAt = performance.now();
+
+    try {
+      for (let frame = 0; frame < totalFrames; frame++) {
+        if (this.isDisposed) throw new Error('Recording disposed');
+
+        const frameT0 = performance.now();
+
+        // Spin is advanced BEFORE the render, once per frame, exactly like the
+        // real-time loop — so frame N shows N steps of rotation in both paths.
+        if (hasAnySpin) {
+          this.spinCueInstances(
+            hasSpinY ? cue.spinSpeed * 0.02 * spinPerFrame : 0,
+            hasSpinX ? (cue.spinSpeedX || 0) * 0.02 * spinPerFrame : 0
+          );
+        }
+
+        // Progress is the frame's position in the sequence. Dividing by
+        // (totalFrames - 1) makes the last frame land exactly on easing(1), so a
+        // camera path ends precisely where the operator placed its end keyframe.
+        const t = totalFrames > 1 ? frame / (totalFrames - 1) : 1;
+        pathSampler.sample(easingFn(t), kf);
+        this.camera.position.set(kf.x, kf.y, kf.z);
+        this.camera.rotation.set(kf.rotationX, kf.rotationY, kf.rotationZ);
+        if (hasAnySpin && this.clonedModel && this.instancedMeshes.length === 0) {
+          this.clonedModel.updateMatrixWorld(true);
+        }
+        this.logoBackdrop?.setElapsed(frame / fps);
+        this.renderWithBackdrop(this.camera);
+
+        // Pull the finished frame off the canvas as lossless PNG. toBlob is async
+        // and resolves after the GPU has finished the draw, which doubles as the
+        // fence that keeps us from reading a half-drawn frame.
+        const blob = await new Promise<Blob>((resolveBlob, rejectBlob) => {
+          canvas.toBlob(
+            (b) => (b ? resolveBlob(b) : rejectBlob(new Error(`toBlob returned null at frame ${frame}`))),
+            'image/png'
+          );
+        });
+
+        // THE backpressure point. Until the sink has the frame, no further
+        // rendering happens — which is precisely why no frame can be lost.
+        await sink.writeFrame(frame, blob);
+
+        const frameMs = performance.now() - frameT0;
+        if (frameMs > slowestFrameMs) slowestFrameMs = frameMs;
+
+        onProgress?.(Math.round(((frame + 1) / totalFrames) * 100));
+      }
+
+      const renderMs = performance.now() - startedAt;
+      console.log('[VideoStudio] frames complete', {
+        frames: totalFrames,
+        renderSec: Number((renderMs / 1000).toFixed(1)),
+        avgFrameMs: Number((renderMs / totalFrames).toFixed(1)),
+        slowestFrameMs: Number(slowestFrameMs.toFixed(1)),
+        note: 'no frames can be dropped on this path',
+      });
+
+      const muxed = await sink.finish(totalFrames, fps);
+      if (!muxed) {
+        throw new Error('Frame sink returned no video: nothing muxed the frames');
+      }
+      return muxed;
+    } finally {
+      // Restore everything the freeze above changed, so a later preview or a
+      // second take is unaffected. Mirrors restoreRecordingState in the
+      // real-time path.
+      this.setHelpersVisible(true);
+      this.scene.matrixWorldAutoUpdate = true;
+      for (const obj of frozenObjects) {
+        obj.matrixAutoUpdate = true;
+      }
+      this.renderer.shadowMap.autoUpdate = true;
+      if (this._recordingSavedShadowType !== null) {
+        this.renderer.shadowMap.type = this._recordingSavedShadowType;
+      }
+      config.cueConfig.spinY = savedSpinY;
+      config.cueConfig.spinX = savedSpinX;
+      config.cueConfig.spinZ = savedSpinZ;
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

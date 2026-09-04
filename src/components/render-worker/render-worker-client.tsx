@@ -7,6 +7,7 @@ import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import { renderReferenceToBlob } from "@/components/editor/image-extractor";
 import { MODEL_PATHS } from "@/types/product";
 import { ensureFullConfig } from "@/types/video-studio";
+import type { DeterministicFrameSink } from "@/types/video-studio";
 import type { ExtractorReference } from "@/types/extractor";
 import type {
   ClaimedRenderJob,
@@ -37,7 +38,70 @@ declare global {
     __renderWorkerResult?: WorkerResult;
     /** Human-readable trail, dumped to the pod log when a render fails. */
     __renderWorkerLog?: string[];
+    /**
+     * Node-side frame writer, installed by worker.mjs via page.exposeFunction.
+     *
+     * Present ONLY in the GPU container, and only on a worker build that
+     * supports deterministic recording. Its absence is what makes this page
+     * fall back to the real-time MediaRecorder path in a plain browser — and
+     * what makes an old worker image keep working against a new app deploy.
+     *
+     * The PNG crosses to Node base64-encoded because CDP carries JSON, not
+     * binary. Node writes it straight to the pod's disk.
+     */
+    __writeFrame?: (index: number, base64Png: string) => Promise<void>;
+    /**
+     * Asks Node to mux the written frames with ffmpeg. Resolves to the finished
+     * video as base64, or an error message.
+     */
+    __muxFrames?: (
+      frameCount: number,
+      fps: number
+    ) => Promise<{ ok: true; base64: string; mimeType: string } | { ok: false; error: string }>;
   }
+}
+
+/**
+ * Builds the frame sink that writes through to the pod's disk.
+ *
+ * Returns null when the Node bridges are absent — a plain browser, or a worker
+ * image predating deterministic recording — so the caller keeps the real-time
+ * path instead of failing.
+ */
+function createWorkerFrameSink(): DeterministicFrameSink | null {
+  const writeFrame = window.__writeFrame;
+  const muxFrames = window.__muxFrames;
+  if (!writeFrame || !muxFrames) return null;
+
+  return {
+    async writeFrame(index: number, frame: Blob): Promise<void> {
+      // FileReader rather than a manual byte loop: a 2K PNG is megabytes, and
+      // building a JS string one charCode at a time stalls the render loop far
+      // longer than the render itself.
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const url = String(reader.result);
+          // Strip the "data:image/png;base64," prefix — Node wants raw base64.
+          const comma = url.indexOf(",");
+          resolve(comma >= 0 ? url.slice(comma + 1) : url);
+        };
+        reader.onerror = () => reject(new Error(`frame ${index}: could not read blob`));
+        reader.readAsDataURL(frame);
+      });
+      await writeFrame(index, base64);
+    },
+
+    async finish(frameCount: number, fps: number): Promise<Blob | null> {
+      const result = await muxFrames(frameCount, fps);
+      if (!result.ok) throw new Error(`ffmpeg failed: ${result.error}`);
+      // Base64 back to bytes. Done once per job, so the simple decode is fine.
+      const binary = atob(result.base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return new Blob([bytes], { type: result.mimeType });
+    },
+  };
 }
 
 function log(message: string): void {
@@ -309,6 +373,16 @@ export default function RenderWorkerClient() {
         // take it from, only the frozen payload.
         esm.setProductLogoId(product.config?.logoId ?? null);
 
+        // Deterministic when the worker exposed its frame bridges, real-time
+        // otherwise. Logged either way: the two paths produce visibly different
+        // files, so which one ran must be evident from the pod log alone.
+        const sink = createWorkerFrameSink();
+        log(
+          sink
+            ? "recording mode: deterministic (frame-by-frame -> ffmpeg, no dropped frames)"
+            : "recording mode: real-time (MediaRecorder) — worker exposed no frame sink"
+        );
+
         let lastBeat = 0;
         const blob = await esm.startStudioRecording(ensureFullConfig(config), (pct: number) => {
           // The recorder callback cannot await, so cancellation is checked on a
@@ -323,7 +397,7 @@ export default function RenderWorkerClient() {
             void reportProgress(activeJobId, Math.round(pct), 100, `Render video ${Math.round(pct)}%`)
               .catch(() => { canceledRef.current = true; esm.stopRecording(); });
           }
-        });
+        }, sink ?? undefined);
 
         if (canceledRef.current) throw new JobCanceledError();
 

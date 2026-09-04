@@ -967,6 +967,36 @@ export const VIDEO_RATIO_PRESETS: VideoRatioPreset[] = [
   { id: "9:16", label: "9:16 Dọc",    width:  810, height: 1440 },
 ];
 
+/**
+ * Contract between the deterministic recorder and whatever consumes its frames.
+ *
+ * The wall-clock recorder hands back a finished Blob because MediaRecorder
+ * encodes as it goes. The deterministic recorder cannot: it renders frame N,
+ * waits for that frame to be safely stored, and only then renders frame N+1 —
+ * so it needs somewhere to put each frame. In the GPU worker that sink writes
+ * a PNG to the pod's disk over CDP and ffmpeg muxes them afterwards; in a
+ * browser it can collect blobs in memory.
+ *
+ * `writeFrame` MUST NOT resolve until the frame is durably handed off. That
+ * promise is the entire backpressure mechanism — the reason no frame can ever
+ * be dropped, however slow the render or the disk.
+ */
+export interface DeterministicFrameSink {
+  /**
+   * Stores one encoded PNG frame. `index` is zero-based and gap-free, so the
+   * consumer can rely on a contiguous sequence for ffmpeg's image demuxer.
+   */
+  writeFrame(index: number, frame: Blob): Promise<void>;
+  /**
+   * Called once after the last frame. Returns the finished video when the sink
+   * muxes (the worker's ffmpeg path), or null when the caller assembles it.
+   */
+  finish(frameCount: number, fps: number): Promise<Blob | null>;
+}
+
+/** How a studio recording turns rendered frames into a video file. */
+export type VideoRecordingMode = "realtime" | "deterministic";
+
 /** Resolve final recording dimensions from quality + ratio */
 export function getRecordingDimensions(
   quality: "2k" | "2k120",

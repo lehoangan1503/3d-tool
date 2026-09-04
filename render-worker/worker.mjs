@@ -26,13 +26,26 @@
 // puppeteer-core, not puppeteer: the image already installs Chromium via apt,
 // and the bundled download would add ~400MB and a second, unused browser.
 import puppeteer from "puppeteer-core";
+import { mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const APP_BASE_URL = (process.env.APP_BASE_URL ?? "").replace(/\/$/, "");
 const WORKER_SECRET = process.env.RENDER_WORKER_SECRET ?? "";
 const WORKER_ID = process.env.RUNPOD_POD_ID ?? process.env.HOSTNAME ?? "worker";
 const PROVIDER = process.env.RENDER_GPU_PROVIDER ?? "runpod";
 
-/** A single mockup can take ~30s; a long video studio path far more. */
+/**
+ * A single mockup can take ~30s; a long video studio path far more.
+ *
+ * Deterministic video needs MORE headroom than the real-time path, and not
+ * because it is inefficient: the real-time path finishes in the video's own
+ * duration by DROPPING whatever it could not render in time, while this one
+ * renders every frame. Budget roughly (frames x per-frame render) + ffmpeg,
+ * i.e. a 20s 60fps take is 1200 real renders, not 20 seconds of wall clock.
+ * A pod killed mid-render strands the job until its lease expires.
+ */
 const JOB_TIMEOUT_MS = Number(process.env.RENDER_JOB_TIMEOUT_MS ?? 20 * 60 * 1000);
 /**
  * Ceiling on jobs drained per cold start.
@@ -85,6 +98,31 @@ const JOB_KIND =
 const RUN_BUDGET_MS = Number(process.env.RENDER_RUN_BUDGET_MS ?? 0);
 /** Chrome executable — the base image ships one. */
 const CHROME_PATH = process.env.PUPPETEER_EXECUTABLE_PATH ?? "/usr/bin/chromium";
+
+/**
+ * Deterministic video recording: render every frame, write it to disk, then mux
+ * with ffmpeg. Slower in wall-clock than the real-time path, but no frame can be
+ * dropped and the encoder is not racing a clock.
+ *
+ * Set RENDER_DETERMINISTIC_VIDEO=0 to fall back to the in-page MediaRecorder
+ * path with no redeploy: the page checks whether these bridges exist, so not
+ * installing them IS the rollback.
+ */
+const DETERMINISTIC_VIDEO = process.env.RENDER_DETERMINISTIC_VIDEO !== "0";
+
+/** ffmpeg binary. The image installs one; override for an odd host. */
+const FFMPEG_PATH = process.env.RENDER_FFMPEG_PATH ?? "ffmpeg";
+
+/**
+ * x264 quality. CRF is a quality target, not a bitrate: the encoder spends
+ * whatever bits the frame needs. 16 is visually near-transparent for the studio
+ * content (polished metal, wood grain, smooth backdrop gradients) that the
+ * software VP9 encoder was banding badly at its real ~8 Mbps.
+ */
+const FFMPEG_CRF = process.env.RENDER_FFMPEG_CRF ?? "16";
+
+/** x264 preset. "veryslow" buys real quality per bit; encoding is offline anyway. */
+const FFMPEG_PRESET = process.env.RENDER_FFMPEG_PRESET ?? "veryslow";
 
 function log(...args) {
   console.log(`[worker ${WORKER_ID}]`, ...args);
@@ -334,11 +372,135 @@ async function queueHasWork() {
   return (data.queued ?? 0) > 0;
 }
 
+/**
+ * Runs ffmpeg over a numbered PNG sequence and returns the muxed video.
+ *
+ * Why PNG-in / x264-out rather than letting the browser encode:
+ * MediaRecorder's VP9 encoder has no hardware path in this container, so it
+ * encodes in software while the page is still rendering and quietly trades away
+ * quality to keep up — asked for 20 Mbps it delivered about 8. ffmpeg runs after
+ * every frame already exists, from lossless input, so a CRF target is actually
+ * met.
+ *
+ * -pix_fmt yuv420p and the even-dimension scale filter are both for players
+ * rather than for quality: 4:4:4 or an odd width makes H.264 unplayable in
+ * Safari and in most social embeds.
+ */
+async function muxFrames(framesDir, outPath, frameCount, fps) {
+  const args = [
+    "-y",
+    "-framerate", String(fps),
+    "-i", join(framesDir, "frame-%06d.png"),
+    "-frames:v", String(frameCount),
+    "-c:v", "libx264",
+    "-preset", FFMPEG_PRESET,
+    "-crf", FFMPEG_CRF,
+    // Chroma subsampling every player understands.
+    "-pix_fmt", "yuv420p",
+    // H.264 requires even dimensions; a 9:16 ratio can land on an odd width.
+    "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+    // Puts the moov atom first so the file starts playing before it is fully
+    // downloaded — it is served straight to a browser.
+    "-movflags", "+faststart",
+    outPath,
+  ];
+
+  log(`ffmpeg: ${frameCount} frames @ ${fps}fps, crf=${FFMPEG_CRF} preset=${FFMPEG_PRESET}`);
+  const startedAt = Date.now();
+
+  await new Promise((resolve, reject) => {
+    const proc = spawn(FFMPEG_PATH, args, { stdio: ["ignore", "ignore", "pipe"] });
+    // ffmpeg writes everything to stderr; keep only the tail so a failure is
+    // explained in the pod log without dumping hundreds of progress lines.
+    let stderr = "";
+    proc.stderr.on("data", (chunk) => {
+      stderr = (stderr + chunk.toString()).slice(-4000);
+    });
+    proc.on("error", (error) =>
+      reject(new Error(`could not start ffmpeg (${FFMPEG_PATH}): ${error.message}`))
+    );
+    proc.on("close", (code) => {
+      if (code === 0) return resolve();
+      reject(new Error(`ffmpeg exited ${code}: ${stderr.split("\n").slice(-8).join(" | ")}`));
+    });
+  });
+
+  const video = await readFile(outPath);
+  log(
+    `ffmpeg done in ${Math.round((Date.now() - startedAt) / 1000)}s — ` +
+    `${Math.round(video.length / 1024)}KB ` +
+    `(~${((video.length * 8) / (frameCount / fps) / 1e6).toFixed(1)} Mbps)`
+  );
+  return video;
+}
+
+/**
+ * Installs the frame-writing bridges the render page looks for.
+ *
+ * The page treats their ABSENCE as "use the real-time path", which is what
+ * keeps an older app deploy and a `RENDER_DETERMINISTIC_VIDEO=0` pod working
+ * unchanged. Returns a cleanup function that removes the scratch directory.
+ */
+async function installFrameSink(page, jobId) {
+  // Under the OS temp dir, not the repo: on a RunPod pod this is container-local
+  // disk that dies with the pod, which is exactly the lifetime we want. A 2K
+  // sequence is several GB, so it must never land somewhere persistent.
+  const framesDir = join(tmpdir(), `render-frames-${jobId ?? "queue"}-${Date.now()}`);
+  await mkdir(framesDir, { recursive: true });
+  const outPath = join(framesDir, "out.mp4");
+  let written = 0;
+
+  await page.exposeFunction("__writeFrame", async (index, base64Png) => {
+    // Zero-padded so ffmpeg's image demuxer reads them in order — frame-10 must
+    // not sort before frame-9.
+    const name = `frame-${String(index).padStart(6, "0")}.png`;
+    await writeFile(join(framesDir, name), Buffer.from(base64Png, "base64"));
+    written += 1;
+    // One line per second of footage at 60fps, so a long render still shows
+    // progress in the pod log without flooding it.
+    if (written % 60 === 0) log(`frames written: ${written}`);
+  });
+
+  await page.exposeFunction("__muxFrames", async (frameCount, fps) => {
+    try {
+      if (written < frameCount) {
+        // Should be impossible: the page awaits each write before rendering on.
+        // Muxing anyway would silently produce a short video, so fail loudly.
+        throw new Error(`only ${written} of ${frameCount} frames reached disk`);
+      }
+      const video = await muxFrames(framesDir, outPath, frameCount, fps);
+      return { ok: true, base64: video.toString("base64"), mimeType: "video/mp4" };
+    } catch (error) {
+      log(`mux failed: ${error.message}`);
+      return { ok: false, error: String(error.message ?? error) };
+    }
+  });
+
+  return async () => {
+    // Several GB per video job. A pod that drains multiple jobs would fill its
+    // disk within a few takes if these were left behind.
+    await rm(framesDir, { recursive: true, force: true }).catch(() => undefined);
+  };
+}
+
 /** Renders one job in a fresh page and returns its result. */
 async function runJob(browser, jobId) {
   const jobStartedAt = Date.now();
   const page = await browser.newPage();
   await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
+
+  // Must be installed BEFORE navigation: the page reads window.__writeFrame to
+  // decide which recording path to take, and it reads it on load.
+  let cleanupFrames = null;
+  if (DETERMINISTIC_VIDEO) {
+    try {
+      cleanupFrames = await installFrameSink(page, jobId);
+    } catch (error) {
+      // Not fatal — without the bridges the page records in real time, which is
+      // exactly the previous behaviour.
+      log(`frame sink unavailable, falling back to real-time recording: ${error.message}`);
+    }
+  }
 
   // Surface the page's own logs into the pod log — without this a failing
   // render is invisible.
@@ -395,6 +557,7 @@ async function runJob(browser, jobId) {
   } finally {
     // A page holding a WebGL context leaks GPU memory across jobs.
     await page.close().catch(() => undefined);
+    if (cleanupFrames) await cleanupFrames();
   }
 }
 

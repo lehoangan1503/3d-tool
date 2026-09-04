@@ -27,9 +27,10 @@ interface RouteParams {
  * over half a minute, the caller gets job ids back immediately and polls
  * /api/render-jobs/[jobId].
  *
- * Body: { groupId, productIds?, format?, quality? }
- *   groupId    — extractor_reference_groups.id ("NOVERA-D (6 ảnh)")
- *   productIds — extra products to render the same group for (batch)
+ * Body: { groupId, productIds?, referenceIds?, format?, quality? }
+ *   groupId      — extractor_reference_groups.id ("NOVERA-D (6 ảnh)")
+ *   productIds   — extra products to render the same group for (batch)
+ *   referenceIds — render only this subset of the group (omit = all of it)
  *
  * One job is created per product.
  */
@@ -60,7 +61,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     // Both reads use the caller's client, so RLS decides what they may render.
     const [products, group] = await Promise.all([
       loadRenderProducts(auth.ctx.supabase, productIds),
-      loadGroupReferences(auth.ctx.supabase, body.groupId),
+      loadGroupReferences(auth.ctx.supabase, body.groupId, body.referenceIds),
     ]);
 
     const seeds: JobSeed[] = products.map((product) => ({

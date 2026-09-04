@@ -14,6 +14,10 @@
  */
 
 import JSZip from "jszip";
+import {
+  downloadableSections,
+  type ProductRenderGroup,
+} from "@/lib/render/group-jobs";
 import type { RenderJob, RenderJobOutput } from "@/types/render-job";
 
 /** Parallel fetches. Enough to hide latency, low enough to stay predictable. */
@@ -116,18 +120,27 @@ export async function downloadJobAsZip(
 }
 
 /**
- * Zips several jobs at once, one folder per product.
+ * Zips one product's whole render output, one folder per section.
  *
- * Two jobs can share a product name (a re-render, or images and video for the
- * same cue), so folder names are de-duplicated with a suffix — otherwise
- * JSZip would silently merge them and the second set would overwrite the first.
+ * The folder rule is the point of this function. A product card merges several
+ * jobs (two image groups and a video template, say), and dropping 20 files into
+ * one flat zip would leave the operator sorting "which of these came from
+ * Mockup-Web and which from Gallery" by hand — the exact busywork the merged
+ * card would otherwise create. So each section keeps its own directory, named
+ * after the image group or video template that produced it.
+ *
+ * Two sections can share a name (the same group rendered twice, or a group and
+ * a template named alike), so folders are de-duplicated with a numeric suffix.
+ * Without it JSZip silently merges them and the second render overwrites the
+ * first — a data loss that looks like a successful download.
  */
-export async function downloadJobsAsZip(
-  jobs: RenderJob[],
+export async function downloadProductGroupAsZip(
+  group: ProductRenderGroup,
   onProgress?: (progress: DownloadProgress) => void
 ): Promise<void> {
-  const entries = jobs.flatMap((job) =>
-    job.outputs.filter((o) => o.url).map((output) => ({ job, output }))
+  const sections = downloadableSections(group);
+  const entries = sections.flatMap((section) =>
+    section.job.outputs.filter((o) => o.url).map((output) => ({ section, output }))
   );
   if (entries.length === 0) return;
 
@@ -135,26 +148,92 @@ export async function downloadJobsAsZip(
   const folderNames = new Map<string, string>();
   const used = new Set<string>();
 
-  for (const job of jobs) {
-    if (folderNames.has(job.id)) continue;
-    const base = safeName(job.productName ?? job.productId ?? "render");
+  for (const section of sections) {
+    const base = safeName(section.targetName) || (section.kind === "video" ? "video" : "images");
     let name = base;
     let n = 2;
     while (used.has(name)) name = `${base}_${n++}`;
     used.add(name);
-    folderNames.set(job.id, name);
+    // Keyed by job id, not by target: the same group rendered twice is two
+    // sections that must land in two folders.
+    folderNames.set(section.job.id, name);
   }
 
   let done = 0;
 
-  await mapLimit(entries, FETCH_CONCURRENCY, async ({ job, output }) => {
+  await mapLimit(entries, FETCH_CONCURRENCY, async ({ section, output }) => {
     const res = await fetch(output.url);
     if (!res.ok) throw new Error(`Tải ${output.name} thất bại (${res.status})`);
-    const folder = folderNames.get(job.id) ?? "render";
+    const folder = folderNames.get(section.job.id) ?? "render";
     zip.file(
       `${folder}/${safeName(output.name)}.${extensionFor(output)}`,
       await res.blob()
     );
+    onProgress?.({ done: ++done, total: entries.length });
+  });
+
+  const label = safeName(group.productName ?? group.productId ?? "render");
+  triggerDownload(await zip.generateAsync({ type: "blob" }), `${label}.zip`);
+}
+
+/**
+ * Zips every product on screen: one folder per product, one sub-folder per
+ * section inside it.
+ *
+ * Same folder rule as the single-product zip, one level deeper — "tải tất cả"
+ * across a batch must not flatten two products' Mockup-Web-1.png onto each
+ * other, nor merge two groups of the same product.
+ */
+export async function downloadProductGroupsAsZip(
+  groups: ProductRenderGroup[],
+  onProgress?: (progress: DownloadProgress) => void
+): Promise<void> {
+  interface ZipEntry {
+    path: string;
+    output: RenderJobOutput;
+  }
+
+  const entries: ZipEntry[] = [];
+  const usedProducts = new Set<string>();
+
+  for (const group of groups) {
+    const sections = downloadableSections(group);
+    if (sections.length === 0) continue;
+
+    const productBase = safeName(group.productName ?? group.productId ?? "render");
+    let productFolder = productBase;
+    let pn = 2;
+    while (usedProducts.has(productFolder)) productFolder = `${productBase}_${pn++}`;
+    usedProducts.add(productFolder);
+
+    const usedSections = new Set<string>();
+    for (const section of sections) {
+      const base =
+        safeName(section.targetName) || (section.kind === "video" ? "video" : "images");
+      let sectionFolder = base;
+      let sn = 2;
+      while (usedSections.has(sectionFolder)) sectionFolder = `${base}_${sn++}`;
+      usedSections.add(sectionFolder);
+
+      for (const output of section.job.outputs) {
+        if (!output.url) continue;
+        entries.push({
+          path: `${productFolder}/${sectionFolder}/${safeName(output.name)}.${extensionFor(output)}`,
+          output,
+        });
+      }
+    }
+  }
+
+  if (entries.length === 0) return;
+
+  const zip = new JSZip();
+  let done = 0;
+
+  await mapLimit(entries, FETCH_CONCURRENCY, async ({ path, output }) => {
+    const res = await fetch(output.url);
+    if (!res.ok) throw new Error(`Tải ${output.name} thất bại (${res.status})`);
+    zip.file(path, await res.blob());
     onProgress?.({ done: ++done, total: entries.length });
   });
 

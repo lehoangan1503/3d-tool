@@ -27,7 +27,7 @@ import {
   loadPBRTexturePack,
 } from './studio-background';
 import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CueConfig, CueInstance, BackgroundFrame, SurfaceConfig, CueHdriConfig, CornerFillConfig, LogoBackdropConfig } from '@/types/video-studio';
-import { computeVideoDuration, createEasingFunction, applyDirection, isCameraFixed, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI, DEFAULT_CORNER_FILL, DEFAULT_LOGO_BACKDROP, DEFAULT_SCENE_BACKGROUND, getRecordingDimensions } from '@/types/video-studio';
+import { computeVideoDuration, createEasingFunction, applyDirection, isCameraFixed, VIDEO_QUALITY_PRESETS, GRADIENT_PRESETS, DEFAULT_CUE_HDRI, DEFAULT_CORNER_FILL, DEFAULT_FRAME_IMAGE_SCALE, clampFrameImageScale, frameImageTileSize, frameTileGrid, DEFAULT_LOGO_BACKDROP, DEFAULT_SCENE_BACKGROUND, WALL_WIDTH, WALL_HEIGHT, getRecordingDimensions } from '@/types/video-studio';
 import { compositeSurfaceFrames, preloadFrameImages } from './background-compositor';
 import { applyBumperEmissiveShaderMask, applyLogoToExistingMaterial } from './leather-material';
 import { LogoBackdrop, resolveLogoBackdropUrl } from './logo-backdrop';
@@ -50,7 +50,184 @@ import { normalizeEnvironmentConfig } from '@/types/studio-environment';
  * set to not influence surfaces, lit (Standard) when they are. Both expose the
  * `map` and `opacity` fields the frame-plane update paths rely on.
  */
+/**
+ * How far neighbouring tiles overlap, in canvas pixels.
+ *
+ * Two separate artefacts show up at a tile boundary and both need this:
+ *
+ *  1. Tile size is almost never a whole number of canvas pixels, so consecutive
+ *     `drawImage` calls land on fractional boundaries. The rasteriser antialiases each
+ *     tile's outer edge against what is already there, which leaves a one-pixel lighter
+ *     line — the white hairlines between tiles.
+ *  2. Even with perfect alignment, a photo's own edges rarely match, so the join reads
+ *     as a straight line the eye immediately picks out of an organic texture.
+ *
+ * Overlapping by a few pixels removes (1) outright — there is no gap left to show
+ * through — and gives (2) a band to cross-fade across.
+ */
+const TILE_OVERLAP_PX = 3;
+
+/**
+ * Quality floor for a surface texture that carries a background image, in pixels on its
+ * longest side.
+ *
+ * The wall (and the cove continuing it) is the largest thing in any shot — a close camera
+ * fills the whole frame with it — so it is the one texture that must never be economised.
+ * Both the wall's frame planes and the cove's composite floor their canvas here, which
+ * also decouples resolution from the shrink slider: making a tile smaller changes how the
+ * texture *reads*, never how much detail it holds.
+ */
+const SURFACE_MIN_TEX = 4096;
+
+/**
+ * Ceiling for a single-tile surface texture.
+ *
+ * A tile is uploaded at the source's own resolution so the camera can push in without the
+ * backdrop going soft. 8192 on the longest side is ~240 MB with mipmaps for a 3:2 photo,
+ * which is affordable for the one texture that fills most of the frame, and is the common
+ * GPU limit anyway.
+ */
+const SURFACE_MAX_TEX = 8192;
+
+/**
+ * Draw one image as a seamless repeating grid into a canvas.
+ *
+ * Each tile is drawn `TILE_OVERLAP_PX` larger than its slot and feathered on the two
+ * edges that meet an already-drawn neighbour (left and top), so the overlap band
+ * cross-fades instead of butting up against a hard line. Tiles are composited onto an
+ * offscreen canvas first: feathering needs per-tile alpha, and applying that directly to
+ * the destination would also fade whatever is underneath.
+ *
+ * `originX`/`originY` may be negative — the grid deliberately overhangs the surface so no
+ * strip is left uncovered, and the caller clips the result.
+ */
+function drawSeamlessTileGrid(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  originX: number,
+  originY: number,
+  tileW: number,
+  tileH: number,
+  cols: number,
+  rows: number
+): void {
+  const gridW = Math.ceil(cols * tileW) + TILE_OVERLAP_PX * 2;
+  const gridH = Math.ceil(rows * tileH) + TILE_OVERLAP_PX * 2;
+  if (gridW <= 0 || gridH <= 0) return;
+
+  const layer = document.createElement('canvas');
+  layer.width = gridW;
+  layer.height = gridH;
+  const lctx = layer.getContext('2d');
+  if (!lctx) {
+    // No offscreen context — fall back to a plain overlapping grid. The hairlines are
+    // gone (the tiles overlap), only the cross-fade is missing.
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        ctx.drawImage(
+          img,
+          originX + col * tileW - TILE_OVERLAP_PX,
+          originY + row * tileH - TILE_OVERLAP_PX,
+          tileW + TILE_OVERLAP_PX * 2,
+          tileH + TILE_OVERLAP_PX * 2
+        );
+      }
+    }
+    return;
+  }
+  lctx.imageSmoothingEnabled = true;
+  lctx.imageSmoothingQuality = 'high';
+
+  // Feather width: the overlap band, but never more than a fraction of the tile itself
+  // (a tiny tile must not be mostly gradient).
+  const feather = Math.max(
+    1,
+    Math.min(TILE_OVERLAP_PX * 2, Math.floor(Math.min(tileW, tileH) / 4))
+  );
+
+  // One tile, pre-rendered at its drawn size with its leading edges feathered. Every
+  // tile is identical, so this is built once and stamped.
+  const stampW = Math.ceil(tileW) + TILE_OVERLAP_PX * 2;
+  const stampH = Math.ceil(tileH) + TILE_OVERLAP_PX * 2;
+  const stamp = document.createElement('canvas');
+  stamp.width = stampW;
+  stamp.height = stampH;
+  const sctx = stamp.getContext('2d');
+  if (!sctx) return;
+  sctx.imageSmoothingEnabled = true;
+  sctx.imageSmoothingQuality = 'high';
+  sctx.drawImage(img, 0, 0, stampW, stampH);
+
+  // Fade the left and top edges to transparent. Only two edges are feathered: a tile is
+  // drawn over its left/top neighbours, so those are the joins it has to blend into.
+  // Feathering all four would double-fade every seam and darken it instead.
+  sctx.globalCompositeOperation = 'destination-in';
+  const gx = sctx.createLinearGradient(0, 0, feather, 0);
+  gx.addColorStop(0, 'rgba(0,0,0,0)');
+  gx.addColorStop(1, 'rgba(0,0,0,1)');
+  // Horizontal ramp first, multiplied into the existing alpha across the whole tile.
+  sctx.fillStyle = gx;
+  sctx.fillRect(0, 0, stampW, stampH);
+  // Then the vertical fade, applied only over the top band. `destination-out` subtracts
+  // alpha, so this ramp runs opaque->transparent downwards: it removes the most alpha at
+  // y = 0 and none by y = feather. Doing it this way (rather than a second
+  // `destination-in` over the whole tile) leaves the rest of the tile untouched, so the
+  // two ramps combine in the corner instead of the second one erasing the first.
+  sctx.globalCompositeOperation = 'destination-out';
+  const gyOut = sctx.createLinearGradient(0, 0, 0, feather);
+  gyOut.addColorStop(0, 'rgba(0,0,0,1)');
+  gyOut.addColorStop(1, 'rgba(0,0,0,0)');
+  sctx.fillStyle = gyOut;
+  sctx.fillRect(0, 0, stampW, feather);
+  sctx.globalCompositeOperation = 'source-over';
+
+  // Two passes. First lay every tile down unfeathered: this guarantees full opaque
+  // coverage, so even where a feathered edge is partly transparent there is always image
+  // underneath and never a gap for the background to show through as a hairline.
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      lctx.drawImage(
+        img,
+        TILE_OVERLAP_PX + col * tileW,
+        TILE_OVERLAP_PX + row * tileH,
+        Math.ceil(tileW),
+        Math.ceil(tileH)
+      );
+    }
+  }
+  // Then stamp the feathered tile over the top. Its faded left/top edges cross-fade into
+  // the neighbour already painted there, which is what dissolves the straight boundary
+  // line the eye picks out of an organic texture.
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      lctx.drawImage(
+        stamp,
+        TILE_OVERLAP_PX + col * tileW - TILE_OVERLAP_PX,
+        TILE_OVERLAP_PX + row * tileH - TILE_OVERLAP_PX
+      );
+    }
+  }
+
+  ctx.drawImage(layer, originX - TILE_OVERLAP_PX, originY - TILE_OVERLAP_PX);
+}
+
 type FramePlaneMaterial = THREE.MeshBasicMaterial | THREE.MeshStandardMaterial;
+
+/**
+ * Native-size layout for one frame's image on a surface.
+ *
+ * `tile` is the size of a single copy of the image in wall units, derived from its pixel
+ * dimensions at a fixed pixels-per-unit. `cols`/`rows` is how many copies are drawn
+ * ("contain" is always 1x1). `planeWidth`/`planeHeight` is the rectangle the copies are
+ * drawn into — the tile itself when contained, the whole surface when covering.
+ */
+interface FrameTileLayout {
+  tile: { width: number; height: number };
+  cols: number;
+  rows: number;
+  planeWidth: number;
+  planeHeight: number;
+}
 
 // Available HDRI options (same as editor-client)
 export const HDRI_OPTIONS_FALLBACK = [
@@ -139,6 +316,20 @@ export class ExtractorSceneManager {
   private tableSurface: THREE.Mesh | null = null;
   // Curved corner fill — backs the shadow mesh's curved section so shadows look natural
   private studioCornerFill: THREE.Mesh | null = null;
+  /**
+   * Monotonic token for `setupStudioFromStudioConfig`.
+   *
+   * That method is async and awaits the texture manifest, PBR packs and every frame
+   * image. The studio's rebuild effect is debounced but not serialised, so a second
+   * rebuild can start while the first is still awaiting. Without a token the first call
+   * resumes after the second has already run `clearStudioElements()`, then adds its wall
+   * and cove to the scene and overwrites the fields — leaving the earlier meshes
+   * orphaned in the scene (never removed, never disposed). Two wall planes and two coves
+   * on the identical arc z-fight, and the stacked `depthWrite: false` frame planes blend
+   * down to black. Each call captures this value and abandons its work as soon as it no
+   * longer matches.
+   */
+  private studioSetupGeneration = 0;
   /** Seconds fed to the logo plate's flicker clock. Advances with preview/recording time. */
   private _logoElapsed = 0;
 
@@ -497,6 +688,47 @@ export class ExtractorSceneManager {
       (mesh.material as THREE.Material).dispose();
     }
     this.backgroundLayerMeshes = [];
+    this.sweepOrphanedStudioMeshes();
+  }
+
+  /**
+   * Remove any studio mesh still in the scene that the manager no longer tracks.
+   *
+   * The tracked-field teardown above is the normal path. This is the backstop for a mesh
+   * that was added by a setup pass which then lost its field reference — the wall, for
+   * instance, is added before the table's texture pack is awaited, so a rebuild that
+   * overtakes that await leaves the earlier wall in the scene with `this.backdrop`
+   * already null. An untracked duplicate is invisible to every later teardown, so it
+   * accumulates: two wall planes at the same z z-fight, and the stacked
+   * `depthWrite: false` frame planes over them blend down to black.
+   *
+   * Every studio mesh is tagged in `userData.type` at creation, which is what makes the
+   * sweep safe: nothing else in the scene carries these tags.
+   */
+  private sweepOrphanedStudioMeshes(): void {
+    const STUDIO_TYPES = new Set([
+      'wall', 'table', 'corner-fill', 'wallFrame', 'tableFrame',
+    ]);
+    const tracked = new Set<THREE.Object3D>(
+      [
+        this.backdrop, this.tableSurface, this.studioCornerFill,
+        ...this.wallFramePlanes, ...this.tableFramePlanes,
+      ].filter((o): o is THREE.Mesh => !!o)
+    );
+    const orphans: THREE.Mesh[] = [];
+    for (const child of this.scene.children) {
+      const type = (child.userData as { type?: string } | undefined)?.type;
+      if (type && STUDIO_TYPES.has(type) && !tracked.has(child)) {
+        orphans.push(child as THREE.Mesh);
+      }
+    }
+    for (const mesh of orphans) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      if (mat.map) mat.map.dispose();
+      mat.dispose();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -2390,6 +2622,10 @@ export class ExtractorSceneManager {
 
   /** Setup studio environment from the new VideoStudioConfig (compositor-based backgrounds) */
   async setupStudioFromStudioConfig(config: VideoStudioConfig): Promise<void> {
+    const generation = ++this.studioSetupGeneration;
+    /** True once a newer setup has taken over — this call must add nothing more. */
+    const superseded = () => this.studioSetupGeneration !== generation;
+
     this.clearStudioElements();
 
     // Ensure scene.environment is null — cue and surfaces each get their own envMap
@@ -2434,12 +2670,14 @@ export class ExtractorSceneManager {
     // and (for GLB) actual geometry the cue can be occluded by.
     if (config.environment) {
       await this.setupRoomEnvironment(config);
+      if (superseded()) return;
       this.setupCueInstances(config.cueConfig);
       return;
     }
 
     // ── Load PBR textures for wall and table ──
     const manifest = await loadTextureManifest();
+    if (superseded()) return;
 
     // Wall: PBR texture with subdivided geometry for displacement
     const wallPack = findTexturePack(manifest, config.wallSurface.texturePreset);
@@ -2448,13 +2686,23 @@ export class ExtractorSceneManager {
       wallMaterial = await loadPBRTexturePack(wallPack);
     } else {
       const wallImages = await preloadFrameImages(config.wallSurface.frames);
-      const wallTex = compositeSurfaceFrames(config.wallSurface, 2048, 2048, wallImages);
+      // Fallback path (no PBR pack matched the preset). Sized at the same quality floor
+      // as the frame planes so this branch is not the one that softens the backdrop.
+      const wallTex = compositeSurfaceFrames(
+        config.wallSurface, SURFACE_MIN_TEX, SURFACE_MIN_TEX, wallImages
+      );
       wallTex.wrapS = THREE.ClampToEdgeWrapping;
       wallTex.wrapT = THREE.ClampToEdgeWrapping;
       wallTex.repeat.set(1, 1);
       wallMaterial = new THREE.MeshStandardMaterial({
         map: wallTex, roughness: 0.95, metalness: 0, side: THREE.FrontSide,
       });
+    }
+    if (superseded()) {
+      // A newer setup already cleared the scene. This material was built for a wall that
+      // will never be added, so drop it here rather than leaking it.
+      wallMaterial.dispose();
+      return;
     }
     // Surfaces use a solid-color env map (tinted by studio light color) instead of
     // scene.environment, providing uniform ambient lighting without HDRI reflections.
@@ -2470,7 +2718,7 @@ export class ExtractorSceneManager {
     applySurfaceTint(wallMaterial, config.wallSurface.baseTint);
 
     // Subdivided wall geometry for better displacement mapping
-    const wallGeo = new THREE.PlaneGeometry(34, 24, 64, 64);
+    const wallGeo = new THREE.PlaneGeometry(WALL_WIDTH, WALL_HEIGHT, 64, 64);
     const wallMeshMat: THREE.Material = config.surfaceLightDisabled
       ? createWhiteImmuneMaterial(config.wallSurface.baseTint)
       : wallMaterial;
@@ -2489,13 +2737,19 @@ export class ExtractorSceneManager {
       tableMaterial = await loadPBRTexturePack(tablePack);
     } else {
       const tableImages = await preloadFrameImages(config.tableSurface.frames);
-      const tableTex = compositeSurfaceFrames(config.tableSurface, 2048, 2048, tableImages);
+      const tableTex = compositeSurfaceFrames(
+        config.tableSurface, SURFACE_MIN_TEX, SURFACE_MIN_TEX, tableImages
+      );
       tableTex.wrapS = THREE.ClampToEdgeWrapping;
       tableTex.wrapT = THREE.ClampToEdgeWrapping;
       tableTex.repeat.set(1, 1);
       tableMaterial = new THREE.MeshStandardMaterial({
         map: tableTex, roughness: 0.35, metalness: 0, side: THREE.FrontSide,
       });
+    }
+    if (superseded()) {
+      tableMaterial.dispose();
+      return;
     }
     tableMaterial.envMap = surfaceEnv;
     tableMaterial.envMapIntensity = 0.6;
@@ -2505,7 +2759,7 @@ export class ExtractorSceneManager {
     applySurfaceTint(tableMaterial, config.tableSurface.baseTint);
 
     // Subdivided table geometry for displacement
-    const tableGeo = new THREE.PlaneGeometry(34, tableDepth, 64, 64);
+    const tableGeo = new THREE.PlaneGeometry(WALL_WIDTH, tableDepth, 64, 64);
     const tableMeshMat: THREE.Material = config.surfaceLightDisabled
       ? createWhiteImmuneMaterial(config.tableSurface.baseTint)
       : tableMaterial;
@@ -2520,6 +2774,9 @@ export class ExtractorSceneManager {
     // Build frame overlay planes for interactive scene view
     const wallImages2 = await preloadFrameImages(config.wallSurface.frames);
     const tableImages2 = await preloadFrameImages(config.tableSurface.frames);
+    // Last await before the frame planes, shadow mesh and cove are added — after this
+    // point the build is synchronous and cannot be overtaken.
+    if (superseded()) return;
     // Frame planes follow the same lighting rule as the surfaces they sit on:
     // studio lights shade the background image unless surface influence is disabled.
     const framesLit = !config.surfaceLightDisabled;
@@ -2563,9 +2820,9 @@ export class ExtractorSceneManager {
     // shadows off would square off the wall/table junction as a side effect.
     if (cornerFill.enabled) {
       this.studioCornerFill = createCornerFillMesh(
-        34, tableY, wallZ, cornerFill.color, cornerRadius,
-        24,      // wall plane height — matches the PlaneGeometry(34, 24) backdrop
-        tableY   // wall plane bottom edge (backdrop y=10, height 24 -> bottom at -2)
+        WALL_WIDTH, tableY, wallZ, cornerFill.color, cornerRadius,
+        WALL_HEIGHT,  // wall plane height — matches the backdrop's PlaneGeometry
+        tableY        // wall plane bottom edge (backdrop y=10, height 24 -> bottom at -2)
       );
       (this.studioCornerFill.material as THREE.Material).dispose();
       this.studioCornerFill.material = this.buildCornerFillMaterial(
@@ -2661,12 +2918,24 @@ export class ExtractorSceneManager {
     // Resolution is driven by the wall's aspect so nothing is stretched, and by the largest
     // source image so a high-res photo is not pre-downsampled before the cove samples it.
     const gpuMaxTex = this.renderer.capabilities.maxTextureSize ?? 4096;
-    const HARD_MAX_TEX = Math.min(gpuMaxTex, 4096);
+    // Matches the frame planes' cap. The cove is a continuation of the wall and is
+    // sampled at a grazing angle, so capping it lower than the wall is what would make
+    // the curve read as a blurrier strip than the surface it joins.
+    const HARD_MAX_TEX = Math.min(gpuMaxTex, 8192);
+    // A tiled frame draws its (shrunken) image several times across this canvas, so the
+    // canvas needs one tile's worth of pixels times the tile count — the same reasoning as
+    // createFramePlaneMaterial, floored at the same quality minimum so shrinking the tile
+    // never costs resolution.
     let srcMaxSide = 0;
     for (const f of enabledFrames) {
       if (!f.imageUrl) continue;
       const img = loadedImages.get(f.imageUrl);
-      if (img) srcMaxSide = Math.max(srcMaxSide, img.naturalWidth, img.naturalHeight);
+      if (!img) continue;
+      const layout = this.computeFrameTileLayout(f, img, wallWidth, wallHeight);
+      const scale = clampFrameImageScale(f.imageScale ?? DEFAULT_FRAME_IMAGE_SCALE);
+      const spanTiles = layout ? Math.max(layout.cols, layout.rows) : 1;
+      const needed = Math.max(img.naturalWidth, img.naturalHeight) * scale * spanTiles;
+      srcMaxSide = Math.max(srcMaxSide, Math.ceil(needed), SURFACE_MIN_TEX);
     }
     const MAX_TEX = Math.min(Math.max(2048, srcMaxSide), HARD_MAX_TEX);
     const wallAR = wallWidth / wallHeight;
@@ -2697,26 +2966,57 @@ export class ExtractorSceneManager {
     let drewAnything = false;
 
     for (const frame of enabledFrames) {
+      // An image frame's rectangle comes from the native tile layout, exactly as the wall
+      // plane's geometry does — the cove's picture has to be the same picture, so the two
+      // must derive their size from the same call. Colour/gradient frames keep using
+      // frame.width / frame.height.
+      const frameImg = frame.imageUrl ? loadedImages.get(frame.imageUrl) : undefined;
+      const layout = this.computeFrameTileLayout(frame, frameImg, wallWidth, wallHeight);
+
       // Frame rect in wall units, then in canvas pixels. frame.x / frame.y are the CENTRE
       // in 0..1 wall space with y = 0 at the top, matching the canvas' own y direction.
-      const fwPx = frame.width * wallWidth * pxPerU;
-      const fhPx = frame.height * wallHeight * pxPerV;
-      const cxPx = frame.x * canvasW;
-      const cyPx = frame.y * canvasH;
+      const fwPx = (layout ? layout.planeWidth : frame.width * wallWidth) * pxPerU;
+      const fhPx = (layout ? layout.planeHeight : frame.height * wallHeight) * pxPerV;
+      // A covering frame's plane is the whole wall, so it is centred regardless of
+      // frame.x / frame.y — matching buildFramePlanes.
+      const covers = !!layout;
+      const cxPx = covers ? canvasW / 2 : frame.x * canvasW;
+      const cyPx = covers ? canvasH / 2 : frame.y * canvasH;
 
       ctx.save();
       ctx.translate(cxPx, cyPx);
-      if (frame.rotation) ctx.rotate((frame.rotation * Math.PI) / 180);
+      if (frame.rotation && !covers) ctx.rotate((frame.rotation * Math.PI) / 180);
 
       const outer = frame.opacity ?? 1;
 
-      // ── object-fit: contain, matching createFramePlaneMaterial's drawImageContain ──
-      const drawContain = (img: HTMLImageElement, alpha: number) => {
-        const scale = Math.min(fwPx / img.naturalWidth, fhPx / img.naturalHeight);
-        const dw = img.naturalWidth * scale;
-        const dh = img.naturalHeight * scale;
+      // ── Same native-scale tiling as createFramePlaneMaterial's drawImageTiled ──
+      // The cove's picture must be pixel-for-pixel what the wall plane shows, so any
+      // divergence here reopens the seam this mesh exists to hide. Note this canvas is
+      // centred on the frame (ctx is translated to its centre), so tiles are laid out
+      // around the origin rather than from a corner.
+      const drawTiled = (img: HTMLImageElement, alpha: number) => {
         ctx.globalAlpha = alpha;
-        ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
+        if (!layout) {
+          const scale = Math.min(fwPx / img.naturalWidth, fhPx / img.naturalHeight);
+          const dw = img.naturalWidth * scale;
+          const dh = img.naturalHeight * scale;
+          ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
+          ctx.globalAlpha = 1;
+          return;
+        }
+
+        const tileWpx = layout.tile.width * pxPerU;
+        const tileHpx = layout.tile.height * pxPerV;
+        const { cols, rows } = layout;
+        const originX = -(cols * tileWpx) / 2;
+        const originY = -(rows * tileHpx) / 2;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(-fwPx / 2, -fhPx / 2, fwPx, fhPx);
+        ctx.clip();
+        drawSeamlessTileGrid(ctx, img, originX, originY, tileWpx, tileHpx, cols, rows);
+        ctx.restore();
         ctx.globalAlpha = 1;
       };
 
@@ -2751,11 +3051,15 @@ export class ExtractorSceneManager {
           }
         } else if (frame.type === 'image' && frame.imageUrl) {
           const img = loadedImages.get(frame.imageUrl);
-          if (img) { drawContain(img, outer); drewAnything = true; }
+          if (img) { drawTiled(img, outer); drewAnything = true; }
         }
       } else {
         // ── Current format: background layer, then image layer on top ──
-        if (frame.backgroundEnabled !== false) {
+        // A fully opaque "cover" image reaches every edge of the frame, so the background
+        // layer beneath it can only ever show as a dark rim where the two disagree by a
+        // pixel — the black band that used to cut across the cove. Skip painting it.
+        const imageHidesBackground = !!layout && (frame.imageOpacity ?? 1) >= 1;
+        if (frame.backgroundEnabled !== false && !imageHidesBackground) {
           const bgAlpha = outer * (frame.backgroundOpacity ?? 1);
           if (frame.backgroundType === 'gradient' && frame.backgroundGradient) {
             const g = frame.backgroundGradient;
@@ -2767,7 +3071,7 @@ export class ExtractorSceneManager {
         }
         if (frame.imageUrl) {
           const img = loadedImages.get(frame.imageUrl);
-          if (img) { drawContain(img, outer * (frame.imageOpacity ?? 1)); drewAnything = true; }
+          if (img) { drawTiled(img, outer * (frame.imageOpacity ?? 1)); drewAnything = true; }
         }
       }
 
@@ -2807,8 +3111,55 @@ export class ExtractorSceneManager {
     surfaceEnv: THREE.Texture | null,
     wallImages: Map<string, HTMLImageElement>
   ): THREE.Material {
+    /**
+     * Fast path, matching the wall's own: a single frame that is a plain opaque tiled
+     * image gets that tile at full source resolution, GPU-wrapped.
+     *
+     * The cove's UVs are a straight-down projection into the wall plane's UV space (see
+     * `createCornerFillMesh`), so the wall's repeat/offset applies here unchanged — which
+     * is precisely what keeps the curve identical to the surface above it. Taking the
+     * baked-canvas path here while the wall takes the fast path would make the cove the
+     * blurry strip instead.
+     */
+    const coveFrames = config.wallSurface.frames.filter(f => f.enabled);
+    if (
+      coveFrames.length === 1 &&
+      coveFrames[0].imageUrl &&
+      !coveFrames[0].type &&
+      (coveFrames[0].imageOpacity ?? 1) >= 1 &&
+      (coveFrames[0].opacity ?? 1) >= 1
+    ) {
+      const frame = coveFrames[0];
+      const img = wallImages.get(frame.imageUrl!);
+      const layout = img
+        ? this.computeFrameTileLayout(frame, img, WALL_WIDTH, WALL_HEIGHT)
+        : null;
+      if (img && layout) {
+        const tex = this.createTiledSourceTexture(img, layout, WALL_WIDTH, WALL_HEIGHT);
+        if (tex) {
+          this.coveShowsBareWall = false;
+          if (config.surfaceLightDisabled) {
+            const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.FrontSide });
+            mat.toneMapped = false;
+            return mat;
+          }
+          const mat = new THREE.MeshStandardMaterial({
+            map: tex,
+            roughness: config.wallSurface.roughness ?? 0.95,
+            metalness: 0,
+            side: THREE.FrontSide,
+          });
+          if (surfaceEnv) {
+            mat.envMap = surfaceEnv;
+            mat.envMapIntensity = 0.6;
+          }
+          return mat;
+        }
+      }
+    }
+
     const composite = this.renderWallCompositeCanvas(
-      config.wallSurface, wallImages, 34, 24, config.wallSurface.baseTint
+      config.wallSurface, wallImages, WALL_WIDTH, WALL_HEIGHT, config.wallSurface.baseTint
     );
     this.coveShowsBareWall = !composite;
 
@@ -2873,6 +3224,106 @@ export class ExtractorSceneManager {
   }
 
   /**
+   * Work out how one tile of a frame's image should be laid out on a surface.
+   *
+   * The image is always drawn at its native scale — `frameImageTileSize` converts its
+   * pixel dimensions into wall units at a fixed pixels-per-unit — so the photo is never
+   * stretched to fit a rectangle and never resampled to a size it was not authored at.
+   *
+   * `contain` places exactly one such tile in the middle of the surface. `cover` repeats
+   * it from the centre outwards until the surface is covered, so a material photo reads
+   * as the wall itself. The tile count is always odd (1, 3, 5, …) which keeps a tile
+   * centred and makes the clipped overflow symmetric at both edges.
+   *
+   * Returns null when the frame has no usable image, which tells the caller to fall back
+   * to the frame's own width/height (the pre-native-size behaviour, still used by frames
+   * that are pure colour or gradient).
+   */
+  private computeFrameTileLayout(
+    frame: BackgroundFrame,
+    img: HTMLImageElement | undefined,
+    surfaceWidth: number,
+    surfaceHeight: number
+  ): FrameTileLayout | null {
+    if (!img || img.naturalWidth <= 0 || img.naturalHeight <= 0) return null;
+
+    const tile = frameImageTileSize(
+      img.naturalWidth,
+      img.naturalHeight,
+      frame.imageScale ?? DEFAULT_FRAME_IMAGE_SCALE
+    );
+    if (!(tile.width > 0) || !(tile.height > 0)) return null;
+
+    // Always repeat-to-fill. The grid overhangs the surface on every side (see
+    // frameTileGrid) so there is never an uncovered strip; the overhang is clipped.
+    const { cols, rows } = frameTileGrid(tile.width, tile.height, surfaceWidth, surfaceHeight);
+    // The plane itself is the size of the surface — that is what "hide the overflow" means.
+    return { tile, cols, rows, planeWidth: surfaceWidth, planeHeight: surfaceHeight };
+  }
+
+  /**
+   * Upload one tile of a frame's image at the source's own resolution, wrapped so the GPU
+   * repeats it across the plane.
+   *
+   * `repeat` is the plane divided by the tile, in wall units — a fractional repeat is
+   * expected and correct: the tile grid deliberately overhangs the surface so no strip is
+   * left uncovered, and wrapping simply continues the pattern past the edge. `offset`
+   * centres the pattern so the middle of the plane holds the middle of a tile, matching
+   * where the canvas path drew it.
+   *
+   * The tile is capped to the GPU's max texture size and to a sane ceiling; a source
+   * larger than that is downscaled once, on upload, which is still far more detail than
+   * the baked-canvas path could hold.
+   */
+  private createTiledSourceTexture(
+    img: HTMLImageElement,
+    layout: FrameTileLayout,
+    planeW: number,
+    planeH: number
+  ): THREE.Texture | null {
+    if (img.naturalWidth <= 0 || img.naturalHeight <= 0) return null;
+    if (!(layout.tile.width > 0) || !(layout.tile.height > 0)) return null;
+
+    const gpuMax = this.renderer.capabilities.maxTextureSize ?? 4096;
+    const cap = Math.min(gpuMax, SURFACE_MAX_TEX);
+    const longest = Math.max(img.naturalWidth, img.naturalHeight);
+
+    let source: HTMLImageElement | HTMLCanvasElement = img;
+    if (longest > cap) {
+      // One clean downscale to the cap. Done here rather than letting the driver do it so
+      // the resample is high quality and mipmaps are built from the good result.
+      const k = cap / longest;
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.naturalWidth * k));
+      c.height = Math.max(1, Math.round(img.naturalHeight * k));
+      const cctx = c.getContext('2d');
+      if (!cctx) return null;
+      cctx.imageSmoothingEnabled = true;
+      cctx.imageSmoothingQuality = 'high';
+      cctx.drawImage(img, 0, 0, c.width, c.height);
+      source = c;
+    }
+
+    const tex = new THREE.Texture(source);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(planeW / layout.tile.width, planeH / layout.tile.height);
+    // Centre the pattern: shift back by half of whatever fraction of a tile the plane
+    // does not divide evenly into.
+    tex.offset.set(
+      (1 - tex.repeat.x) / 2,
+      (1 - tex.repeat.y) / 2
+    );
+    tex.generateMipmaps = true;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  /**
    * Create material for a frame plane based on its content.
    *
    * When `lit` is true the plane uses a MeshStandardMaterial so studio lights and
@@ -2887,7 +3338,8 @@ export class ExtractorSceneManager {
     planeH = 1,
     lit = false,
     surfaceEnv?: THREE.Texture | null,
-    surfaceRoughness?: number
+    surfaceRoughness?: number,
+    tileLayout?: FrameTileLayout | null
   ): THREE.MeshBasicMaterial | THREE.MeshStandardMaterial {
     const opts: THREE.MeshBasicMaterialParameters = {
       transparent: true,
@@ -2915,29 +3367,81 @@ export class ExtractorSceneManager {
     }
 
     const planeAR = planeW / Math.max(planeH, 0.001);
-    const desiredMaxSide = srcMaxSide > 0
-      ? Math.max(BASE_MAX_TEX, srcMaxSide)
-      : BASE_MAX_TEX;
+    /**
+     * Canvas resolution for the frame.
+     *
+     * Two demands, and the answer is the larger of them:
+     *
+     *  - Keep the source's own pixels. A tiled frame draws the (shrunk) image
+     *    `cols` x `rows` times, so it needs `srcMaxSide * imageScale * spanTiles` to hold
+     *    every tile at full detail.
+     *  - Never drop below the backdrop's quality floor. The first demand alone *falls*
+     *    as the tile is shrunk (a small tile needs few pixels per copy), which would make
+     *    the wall softer precisely at the small scales that look right. `SURFACE_MIN_TEX`
+     *    stops that: the backdrop is the largest thing in frame and is what the camera
+     *    fills its shot with, so it always gets a full-quality texture.
+     */
+    const desiredMaxSide = (() => {
+      if (srcMaxSide <= 0) return BASE_MAX_TEX;
+      const nativeNeed = tileLayout
+        ? Math.ceil(
+            srcMaxSide *
+              clampFrameImageScale(frame.imageScale ?? DEFAULT_FRAME_IMAGE_SCALE) *
+              Math.max(tileLayout.cols, tileLayout.rows)
+          )
+        : srcMaxSide;
+      // Only floor a frame that actually carries an image — a plain colour/gradient
+      // rectangle gains nothing from a 4K canvas.
+      const floor = frame.imageUrl ? SURFACE_MIN_TEX : BASE_MAX_TEX;
+      return Math.max(BASE_MAX_TEX, floor, nativeNeed);
+    })();
     const MAX_TEX = Math.min(desiredMaxSide, HARD_MAX_TEX);
 
     const canvasW = planeAR >= 1 ? MAX_TEX : Math.max(1, Math.round(MAX_TEX * planeAR));
     const canvasH = planeAR < 1 ? MAX_TEX : Math.max(1, Math.round(MAX_TEX / planeAR));
 
-    // Draw image with object-fit:contain into the (non-square) canvas
-    const drawImageContain = (
+    /**
+     * Draw the image at its native scale, tiled per the frame's layout.
+     *
+     * The canvas represents `planeW` x `planeH` wall units, so one tile takes up
+     * `tile.width / planeW` of it — that ratio is what preserves the native pixel
+     * mapping. Tiles are laid out from the centre so a single tile ("contain") lands
+     * centred and a repeated grid ("cover") is symmetric, then clipped to the canvas so
+     * the overflow at the edges is hidden.
+     *
+     * With no layout (no usable image) it falls back to fitting the image inside the
+     * canvas, which is what a legacy `type: "image"` frame expects.
+     */
+    const drawImageTiled = (
       ctx: CanvasRenderingContext2D,
       img: HTMLImageElement,
       cW: number,
       cH: number,
       alpha: number
     ) => {
-      const scale = Math.min(cW / img.naturalWidth, cH / img.naturalHeight);
-      const drawW = img.naturalWidth * scale;
-      const drawH = img.naturalHeight * scale;
-      const dx = (cW - drawW) / 2;
-      const dy = (cH - drawH) / 2;
       ctx.globalAlpha = alpha;
-      ctx.drawImage(img, dx, dy, drawW, drawH);
+      if (!tileLayout) {
+        const scale = Math.min(cW / img.naturalWidth, cH / img.naturalHeight);
+        const drawW = img.naturalWidth * scale;
+        const drawH = img.naturalHeight * scale;
+        ctx.drawImage(img, (cW - drawW) / 2, (cH - drawH) / 2, drawW, drawH);
+        ctx.globalAlpha = 1;
+        return;
+      }
+
+      const tileWpx = (tileLayout.tile.width / planeW) * cW;
+      const tileHpx = (tileLayout.tile.height / planeH) * cH;
+      const { cols, rows } = tileLayout;
+      // Centre the grid on the canvas; it overhangs and is clipped.
+      const originX = cW / 2 - (cols * tileWpx) / 2;
+      const originY = cH / 2 - (rows * tileHpx) / 2;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, cW, cH);
+      ctx.clip();
+      drawSeamlessTileGrid(ctx, img, originX, originY, tileWpx, tileHpx, cols, rows);
+      ctx.restore();
       ctx.globalAlpha = 1;
     };
 
@@ -2972,12 +3476,15 @@ export class ExtractorSceneManager {
         } else if (frame.type === "image" && frame.imageUrl && loadedImages) {
           const img = loadedImages.get(frame.imageUrl);
           if (img) {
-            drawImageContain(ctx, img, canvasW, canvasH, 1);
+            drawImageTiled(ctx, img, canvasW, canvasH, 1);
           }
         }
       } else {
         // New format: background layer + image layer
-        if (frame.backgroundEnabled !== false) {
+        // Mirrors renderWallCompositeCanvas: an opaque "cover" image covers the frame
+        // completely, so painting the background beneath it only risks a dark rim.
+        const imageHidesBackground = !!tileLayout && (frame.imageOpacity ?? 1) >= 1;
+        if (frame.backgroundEnabled !== false && !imageHidesBackground) {
           ctx.globalAlpha = frame.backgroundOpacity ?? 1;
           if (frame.backgroundType === "gradient" && frame.backgroundGradient) {
             const g = frame.backgroundGradient;
@@ -2999,7 +3506,7 @@ export class ExtractorSceneManager {
         if (frame.imageUrl && loadedImages) {
           const img = loadedImages.get(frame.imageUrl);
           if (img) {
-            drawImageContain(ctx, img, canvasW, canvasH, frame.imageOpacity ?? 1);
+            drawImageTiled(ctx, img, canvasW, canvasH, frame.imageOpacity ?? 1);
           }
         }
       }
@@ -3017,6 +3524,62 @@ export class ExtractorSceneManager {
       tex.needsUpdate = true;
       return tex;
     };
+
+    /**
+     * Fast path: one tile at the source's own resolution, repeated by the GPU.
+     *
+     * Baking the whole tiled grid into one canvas caps texture density at
+     * `FRAME_PIXELS_PER_UNIT` (~60 px per wall unit) no matter how large the source is,
+     * because the canvas only ever covers the plane once. A camera that fills its shot
+     * with a few wall units needs 250-500 px/unit, so the backdrop went soft exactly when
+     * the shot was tight — while the cue, whose own textures are not laid out this way,
+     * stayed sharp. That contrast is the giveaway.
+     *
+     * Uploading a single tile and setting `wrapS/wrapT = RepeatWrapping` with
+     * `repeat = surface / tile` gives the same picture with the tile at FULL source
+     * resolution: density becomes `sourcePx / tileUnits`, which is 5-10x higher at the
+     * scales that look right and improves further as the tile shrinks. The GPU's own
+     * wrapping also makes the tile joins exact, so no seam treatment is needed.
+     *
+     * Only taken when the frame is a plain opaque image — anything that needs the canvas
+     * compositor (a visible background layer, partial opacity, a legacy `type` frame)
+     * falls through to `renderToCanvas`.
+     */
+    // A tiled opaque image reaches every pixel of the plane, so the frame's background
+    // layer is invisible underneath it either way and does not need the compositor. What
+    // does need it is partial opacity or a legacy `type` frame.
+    const canUseRepeatWrap =
+      !!tileLayout &&
+      !!frame.imageUrl &&
+      !frame.type &&
+      (frame.imageOpacity ?? 1) >= 1 &&
+      !!loadedImages?.get(frame.imageUrl);
+
+    if (canUseRepeatWrap && tileLayout) {
+      const img = loadedImages!.get(frame.imageUrl!)!;
+      const tex = this.createTiledSourceTexture(img, tileLayout, planeW, planeH);
+      if (tex) {
+        if (lit) {
+          const litMat = new THREE.MeshStandardMaterial({
+            map: tex,
+            transparent: true,
+            opacity: frame.opacity,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            roughness: surfaceRoughness ?? 0.95,
+            metalness: 0,
+          });
+          if (surfaceEnv) {
+            litMat.envMap = surfaceEnv;
+            litMat.envMapIntensity = 0.6;
+          }
+          return litMat;
+        }
+        const basic = new THREE.MeshBasicMaterial({ ...opts, map: tex });
+        basic.toneMapped = false;
+        return basic;
+      }
+    }
 
     const map = renderToCanvas();
 
@@ -3063,50 +3626,60 @@ export class ExtractorSceneManager {
     for (let i = 0; i < enabledFrames.length; i++) {
       const frame = enabledFrames[i];
 
+      const frameImg = frame.imageUrl ? loadedImages?.get(frame.imageUrl) : undefined;
+
       if (isTable) {
-        const tableWidth = 34;
+        const tableWidth = WALL_WIDTH;
         const tableDepth = 12;
-        const pw = frame.width * tableWidth;
-        const pd = frame.height * tableDepth;
+        // An image frame is laid out at the image's native scale; only colour/gradient
+        // frames still take their size from frame.width / frame.height.
+        const layout = this.computeFrameTileLayout(frame, frameImg, tableWidth, tableDepth);
+        const pw = layout ? layout.planeWidth : frame.width * tableWidth;
+        const pd = layout ? layout.planeHeight : frame.height * tableDepth;
         const material = this.createFramePlaneMaterial(
-          frame, loadedImages, pw, pd, lit, surfaceEnv, surface.roughness ?? 0.35
+          frame, loadedImages, pw, pd, lit, surfaceEnv, surface.roughness ?? 0.35, layout
         );
         const geo = new THREE.PlaneGeometry(pw, pd);
         const mesh = new THREE.Mesh(geo, material);
         // A lit frame stands in for the table surface, so it must catch shadows too
         mesh.receiveShadow = lit;
 
+        const covers = !!layout;
         const tablePos = parentMesh.position;
         mesh.rotation.x = -Math.PI / 2;
         mesh.position.set(
-          tablePos.x + (frame.x - 0.5) * tableWidth,
+          tablePos.x + (covers ? 0 : (frame.x - 0.5) * tableWidth),
           tablePos.y + 0.01 * (i + 1),
-          tablePos.z + (frame.y - 0.5) * tableDepth
+          tablePos.z + (covers ? 0 : (frame.y - 0.5) * tableDepth)
         );
-        mesh.rotation.z = (frame.rotation * Math.PI) / 180;
+        mesh.rotation.z = covers ? 0 : (frame.rotation * Math.PI) / 180;
         mesh.userData = { type: 'tableFrame', frameId: frame.id, frameIndex: i };
         this.scene.add(mesh);
         planes.push(mesh);
       } else {
-        const wallWidth = 34;
-        const wallHeight = 24;
-        const pw = frame.width * wallWidth;
-        const ph = frame.height * wallHeight;
+        const wallWidth = WALL_WIDTH;
+        const wallHeight = WALL_HEIGHT;
+        const layout = this.computeFrameTileLayout(frame, frameImg, wallWidth, wallHeight);
+        const pw = layout ? layout.planeWidth : frame.width * wallWidth;
+        const ph = layout ? layout.planeHeight : frame.height * wallHeight;
         const material = this.createFramePlaneMaterial(
-          frame, loadedImages, pw, ph, lit, surfaceEnv, surface.roughness ?? 0.95
+          frame, loadedImages, pw, ph, lit, surfaceEnv, surface.roughness ?? 0.95, layout
         );
         const geo = new THREE.PlaneGeometry(pw, ph);
         const mesh = new THREE.Mesh(geo, material);
         // A lit frame stands in for the wall surface, so it must catch shadows too
         mesh.receiveShadow = lit;
 
+        // A covering frame IS the surface, so it sits centred on it — its x/y would only
+        // slide the full-wall plane off the wall's edge. Everything else honours x/y.
+        const covers = !!layout;
         const wallPos = parentMesh.position;
         mesh.position.set(
-          wallPos.x + (frame.x - 0.5) * wallWidth,
-          wallPos.y + (0.5 - frame.y) * wallHeight,
+          wallPos.x + (covers ? 0 : (frame.x - 0.5) * wallWidth),
+          wallPos.y + (covers ? 0 : (0.5 - frame.y) * wallHeight),
           wallPos.z + 0.01 * (i + 1)
         );
-        mesh.rotation.z = (frame.rotation * Math.PI) / 180;
+        mesh.rotation.z = covers ? 0 : (frame.rotation * Math.PI) / 180;
         mesh.userData = { type: 'wallFrame', frameId: frame.id, frameIndex: i };
         this.scene.add(mesh);
         planes.push(mesh);
@@ -3133,23 +3706,35 @@ export class ExtractorSceneManager {
   updateFramePlaneTransforms(config: VideoStudioConfig): void {
     const wallPos = this.backdrop?.position;
     if (wallPos) {
-      const wallWidth = 34;
-      const wallHeight = 24;
+      const wallWidth = WALL_WIDTH;
+      const wallHeight = WALL_HEIGHT;
       const wallFrames = config.wallSurface.frames.filter(f => f.enabled);
 
       for (const mesh of this.wallFramePlanes) {
         const frame = wallFrames.find(f => f.id === mesh.userData.frameId);
         if (!frame) continue;
+        // A plane built to span the whole surface is a covering frame — keep it centred
+        // and unrotated, exactly as buildFramePlanes placed it.
+        const covers =
+          !!frame.imageUrl &&
+          (mesh.geometry as THREE.PlaneGeometry).parameters.width >= wallWidth;
         mesh.position.set(
-          wallPos.x + (frame.x - 0.5) * wallWidth,
-          wallPos.y + (0.5 - frame.y) * wallHeight,
+          wallPos.x + (covers ? 0 : (frame.x - 0.5) * wallWidth),
+          wallPos.y + (covers ? 0 : (0.5 - frame.y) * wallHeight),
           wallPos.z + 0.01 * (mesh.userData.frameIndex + 1)
         );
-        mesh.rotation.z = (frame.rotation * Math.PI) / 180;
-        const pw = frame.width * wallWidth;
-        const ph = frame.height * wallHeight;
-        mesh.scale.set(pw / (mesh.geometry as THREE.PlaneGeometry).parameters.width,
-                       ph / (mesh.geometry as THREE.PlaneGeometry).parameters.height, 1);
+        mesh.rotation.z = covers ? 0 : (frame.rotation * Math.PI) / 180;
+        // An image frame's plane is built at the image's native size; rescaling it from
+        // frame.width / frame.height would squash the photo and break the pixel mapping
+        // the native layout exists to guarantee. Only colour/gradient frames scale.
+        if (frame.imageUrl) {
+          mesh.scale.set(1, 1, 1);
+        } else {
+          const pw = frame.width * wallWidth;
+          const ph = frame.height * wallHeight;
+          mesh.scale.set(pw / (mesh.geometry as THREE.PlaneGeometry).parameters.width,
+                         ph / (mesh.geometry as THREE.PlaneGeometry).parameters.height, 1);
+        }
         (mesh.material as FramePlaneMaterial).opacity = frame.opacity;
       }
     }
@@ -3163,16 +3748,23 @@ export class ExtractorSceneManager {
       for (const mesh of this.tableFramePlanes) {
         const frame = tableFrames.find(f => f.id === mesh.userData.frameId);
         if (!frame) continue;
+        const covers =
+          !!frame.imageUrl &&
+          (mesh.geometry as THREE.PlaneGeometry).parameters.width >= tableWidth;
         mesh.position.set(
-          tablePos.x + (frame.x - 0.5) * tableWidth,
+          tablePos.x + (covers ? 0 : (frame.x - 0.5) * tableWidth),
           tablePos.y + 0.01 * (mesh.userData.frameIndex + 1),
-          tablePos.z + (frame.y - 0.5) * tableDepth
+          tablePos.z + (covers ? 0 : (frame.y - 0.5) * tableDepth)
         );
-        mesh.rotation.set(-Math.PI / 2, 0, (frame.rotation * Math.PI) / 180);
-        const pw = frame.width * tableWidth;
-        const pd = frame.height * tableDepth;
-        mesh.scale.set(pw / (mesh.geometry as THREE.PlaneGeometry).parameters.width,
-                       pd / (mesh.geometry as THREE.PlaneGeometry).parameters.height, 1);
+        mesh.rotation.set(-Math.PI / 2, 0, covers ? 0 : (frame.rotation * Math.PI) / 180);
+        if (frame.imageUrl) {
+          mesh.scale.set(1, 1, 1);
+        } else {
+          const pw = frame.width * tableWidth;
+          const pd = frame.height * tableDepth;
+          mesh.scale.set(pw / (mesh.geometry as THREE.PlaneGeometry).parameters.width,
+                         pd / (mesh.geometry as THREE.PlaneGeometry).parameters.height, 1);
+        }
         (mesh.material as FramePlaneMaterial).opacity = frame.opacity;
       }
     }

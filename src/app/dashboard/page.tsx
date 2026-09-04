@@ -50,6 +50,11 @@ export default async function DashboardPage() {
   // GPU rendering costs rented-card time, so it stops at admin — 'mode' may
   // deploy but not spend GPU minutes.
   const canRender = isSuperAdmin || profile.role === "admin";
+  // Deleting other people's 2D references / 3D video templates is an admin-tier
+  // action: it removes shared team assets, so 'mode' does not get it. The API
+  // routes re-check this (getSessionRole -> canEditAnyProduct); this prop only
+  // decides whether the button is offered.
+  const canDeleteTeamAssets = isSuperAdmin || profile.role === "admin";
 
   return (
     <DashboardClient
@@ -58,6 +63,7 @@ export default async function DashboardPage() {
       isSuperAdmin={isSuperAdmin}
       canDeploy={canDeploy}
       canRender={canRender}
+      canDeleteTeamAssets={canDeleteTeamAssets}
     />
   );
 }

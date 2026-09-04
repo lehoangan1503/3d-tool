@@ -14,45 +14,39 @@
  * dropped socket would silently stop updating, a failed poll retries.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
   FileArchive,
-  Film,
-  ImageIcon,
   Loader2,
   RefreshCw,
   Sparkles,
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { cn } from "@/lib/utils";
-import { RenderJobCard } from "@/components/render-worker/render-job-card";
+import { RenderProductCard } from "@/components/render-worker/render-product-card";
 import { RenderProductPicker } from "@/components/render-worker/render-product-picker";
 import {
-  downloadJobsAsZip,
+  RenderTargetPicker,
+  type ImageSelection,
+  type RenderTargetItem,
+} from "@/components/render-worker/render-target-picker";
+import {
+  downloadProductGroupsAsZip,
   type DownloadProgress,
 } from "@/lib/render/download-outputs";
+import {
+  downloadableSections,
+  groupJobsByProduct,
+  type TargetNameLookup,
+} from "@/lib/render/group-jobs";
 import { RenderExpiryNotice } from "@/components/render-worker/render-expiry-notice";
 import type { RenderJob } from "@/types/render-job";
 
 /** How often to poll while anything is still running. */
 const POLL_MS = 2000;
 
-interface PickerItem {
-  id: string;
-  name: string;
-}
-
-type RenderKind = "image" | "video";
 
 interface JobsResponse {
   jobs?: RenderJob[];
@@ -65,14 +59,19 @@ interface QueueResponse {
 }
 
 export function RendersClient() {
-  const [kind, setKind] = useState<RenderKind>("image");
-  const [groups, setGroups] = useState<PickerItem[]>([]);
-  const [templates, setTemplates] = useState<PickerItem[]>([]);
+  const [groups, setGroups] = useState<RenderTargetItem[]>([]);
+  const [templates, setTemplates] = useState<RenderTargetItem[]>([]);
 
   // Products live in RenderProductPicker, which pages them; only the selection
-  // is lifted here so it survives search and kind changes.
+  // is lifted here so it survives search and paging.
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
-  const [targetId, setTargetId] = useState<string | null>(null);
+
+  // Several groups and templates at once: one click can queue both kinds, so
+  // the previous single `kind` + `targetId` pair is gone.
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
+  const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([]);
+  // Per-group image subset. A group absent from the map renders in full.
+  const [imageSelection, setImageSelection] = useState<ImageSelection>({});
 
   const [jobs, setJobs] = useState<RenderJob[]>([]);
   const [queueing, setQueueing] = useState(false);
@@ -97,7 +96,10 @@ export function RendersClient() {
         // All three list endpoints answer with { items, total } — verified
         // against the routes, not guessed. The array fallback covers a plain
         // list response so this does not silently empty if one ever changes.
-        const readList = async (res: Response): Promise<PickerItem[]> => {
+        // referenceIds is carried through for image groups: the badge shows the
+        // count and the detail dialog needs the ids to fetch names/thumbnails.
+        // Templates have none, so the field stays undefined for them.
+        const readList = async (res: Response): Promise<RenderTargetItem[]> => {
           if (!res.ok) return [];
           const data: unknown = await res.json();
           const rows = Array.isArray(data)
@@ -105,10 +107,18 @@ export function RendersClient() {
             : ((data as { items?: unknown }).items ?? []);
           return (Array.isArray(rows) ? rows : [])
             .map((row) => {
-              const r = row as { id?: string; name?: string };
-              return r.id ? { id: r.id, name: r.name ?? "(không tên)" } : null;
+              const r = row as { id?: string; name?: string; referenceIds?: string[] };
+              return r.id
+                ? {
+                    id: r.id,
+                    name: r.name ?? "(không tên)",
+                    ...(Array.isArray(r.referenceIds)
+                      ? { referenceIds: r.referenceIds }
+                      : {}),
+                  }
+                : null;
             })
-            .filter((r): r is PickerItem => r !== null);
+            .filter((r): r is RenderTargetItem => r !== null);
         };
 
         const [g, t] = await Promise.all([readList(groupRes), readList(templateRes)]);
@@ -158,62 +168,118 @@ export function RendersClient() {
     return () => clearInterval(id);
   }, [hasLiveJob, refreshJobs]);
 
-  const targets = kind === "image" ? groups : templates;
-
-  /** Switching kind clears the target: a group id is meaningless for video.
-   *  Done here rather than in an effect so there is no second render pass. */
-  function selectKind(next: RenderKind) {
-    if (next === kind) return;
-    setKind(next);
-    setTargetId(null);
-  }
-
+  /**
+   * Queues every (target x product) combination.
+   *
+   * One request per target, each carrying the whole product list — the routes
+   * already fan a request out into one job per product, so N targets means N
+   * requests rather than N x M. They run concurrently: each is a cheap insert
+   * whose latency is dominated by the round-trip, so N in sequence meant N
+   * times the wait for no benefit.
+   */
   async function handleQueue() {
     setError(null);
     setMessage(null);
 
-    const ids = [...selectedProducts];
-    if (ids.length === 0) {
+    const productIds = [...selectedProducts];
+    if (productIds.length === 0) {
       setError("Chọn ít nhất 1 sản phẩm");
       return;
     }
-    if (!targetId) {
-      setError(kind === "image" ? "Chọn 1 nhóm ảnh" : "Chọn 1 template video");
+    if (selectedGroupIds.length === 0 && selectedTemplateIds.length === 0) {
+      setError("Chọn ít nhất 1 nhóm ảnh hoặc 1 template video");
       return;
     }
 
+    // The routes take the first product in the URL and the rest in the body.
+    const [first, ...rest] = productIds;
+
+    interface QueueRequest {
+      path: string;
+      body: Record<string, unknown>;
+      label: string;
+    }
+
+    const requests: QueueRequest[] = [
+      ...selectedGroupIds.map((groupId): QueueRequest => {
+        const picked = imageSelection[groupId];
+        return {
+          path: `/api/products/${first}/renders`,
+          body: {
+            groupId,
+            productIds: rest,
+            format: "png",
+            // Omitted when the whole group is wanted, so a group that gains an
+            // image between picking and rendering still includes it.
+            ...(picked ? { referenceIds: picked } : {}),
+          },
+          label: groups.find((g) => g.id === groupId)?.name ?? "nhóm ảnh",
+        };
+      }),
+      ...selectedTemplateIds.map((templateId): QueueRequest => ({
+        path: `/api/products/${first}/videos`,
+        body: { templateId, productIds: rest, width: 1920, height: 1080, fps: 60 },
+        label: templates.find((t) => t.id === templateId)?.name ?? "video",
+      })),
+    ];
+
     setQueueing(true);
     try {
-      // The route takes the first product in the URL and the rest in the body;
-      // it creates one job per product so they run on separate pods.
-      const [first, ...rest] = ids;
-      const path =
-        kind === "image"
-          ? `/api/products/${first}/renders`
-          : `/api/products/${first}/videos`;
+      let queued = 0;
+      const failures: string[] = [];
+      const warnings: string[] = [];
 
-      const body =
-        kind === "image"
-          ? { groupId: targetId, productIds: rest, format: "png" }
-          : { templateId: targetId, productIds: rest, width: 1920, height: 1080, fps: 60 };
+      // In PARALLEL, not one after another. These are independent inserts
+      // against different targets, and running them in sequence made the wait
+      // the SUM of every request instead of the slowest one — with four
+      // targets that was the difference between ~1s and ~30s before the first
+      // card appeared. Order is still deterministic because results come back
+      // indexed, so the failure list reads in the order the targets were
+      // picked.
+      const results = await Promise.all(
+        requests.map(async (req) => {
+          try {
+            const res = await fetch(req.path, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(req.body),
+            });
+            const data = (await res.json()) as QueueResponse;
+            return { req, ok: res.ok, status: res.status, data };
+          } catch (err) {
+            return {
+              req,
+              ok: false,
+              status: 0,
+              data: {
+                error: err instanceof Error ? err.message : "lỗi mạng",
+              } as QueueResponse,
+            };
+          }
+        })
+      );
 
-      const res = await fetch(path, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-
-      const data = (await res.json()) as QueueResponse;
-
-      if (!res.ok) {
-        setError(data.error ?? `Queue thất bại (${res.status})`);
-        return;
+      for (const { req, ok, status, data } of results) {
+        if (!ok) {
+          failures.push(`${req.label}: ${data.error ?? status}`);
+          continue;
+        }
+        queued += data.jobs?.length ?? 0;
+        if (data.warning) warnings.push(`${req.label}: ${data.warning}`);
       }
 
-      const count = data.jobs?.length ?? 0;
-      setMessage(
-        `Đã đưa ${count} job vào hàng đợi` + (data.warning ? ` — ${data.warning}` : "")
-      );
+      // Both can be set: some targets queued, others did not. Reporting only
+      // the error would hide jobs that are already on their way to a pod.
+      if (queued > 0) {
+        setMessage(
+          `Đã đưa ${queued} job vào hàng đợi (${requests.length - failures.length}/${requests.length} mục)` +
+            (warnings.length > 0 ? ` — ${warnings.join("; ")}` : "")
+        );
+      }
+      if (failures.length > 0) {
+        setError(`${failures.length}/${requests.length} mục thất bại — ${failures.join("; ")}`);
+      }
+
       await refreshJobs();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Lỗi không xác định");
@@ -222,16 +288,54 @@ export function RendersClient() {
     }
   }
 
-  // Downloadable jobs: finished, still holding files. Gating the button on
+  // ── What pressing Render will actually create ──
+  // One job per (target x product): the pods run per job, so this is the number
+  // that decides GPU spend and how long the batch takes.
+  const targetCount = selectedGroupIds.length + selectedTemplateIds.length;
+  const plannedJobs = targetCount * selectedProducts.size;
+
+  // File totals, for the line under the button. Images depend on how many
+  // layouts each group contributes (a filtered group contributes fewer).
+  const plannedImages = selectedGroupIds.reduce((sum, id) => {
+    const picked = imageSelection[id];
+    const group = groups.find((g) => g.id === id);
+    return sum + (picked ? picked.length : (group?.referenceIds?.length ?? 0));
+  }, 0) * selectedProducts.size;
+  // A video template records exactly one clip per product.
+  const plannedVideos = selectedTemplateIds.length * selectedProducts.size;
+
+  /**
+   * One card per product, jobs as sections inside it.
+   *
+   * A batch of 2 products x (2 image groups + 1 video) used to be six cards
+   * named after only two products — indistinguishable in the header and
+   * impossible to scan. The names come from the pickers already loaded above,
+   * so no extra request is needed: the job row carries group_id / template_id,
+   * and the payload that holds the name is deliberately not sent to the client.
+   */
+  const targetNames: TargetNameLookup = useMemo(
+    () => ({
+      groups: Object.fromEntries(groups.map((g) => [g.id, g.name])),
+      templates: Object.fromEntries(templates.map((t) => [t.id, t.name])),
+    }),
+    [groups, templates]
+  );
+
+  const productGroups = useMemo(
+    () => groupJobsByProduct(jobs, targetNames),
+    [jobs, targetNames]
+  );
+
+  // Downloadable products: those still holding files. Gating the button on
   // "nothing is running" is deliberate — a zip built mid-batch would silently
   // omit whatever finishes a second later, which is worse than a disabled
   // button, since the user would think they had everything.
-  const downloadableJobs = jobs.filter(
-    (j) => j.status === "succeeded" && j.purgedAt === null && j.outputs.length > 0
+  const downloadableGroups = productGroups.filter(
+    (g) => downloadableSections(g).length > 0
   );
   const allSettled = jobs.length > 0 && !hasLiveJob;
-  const canDownloadAll = allSettled && downloadableJobs.length > 0;
-  const totalFiles = downloadableJobs.reduce((sum, j) => sum + j.outputs.length, 0);
+  const canDownloadAll = allSettled && downloadableGroups.length > 0;
+  const totalFiles = downloadableGroups.reduce((sum, g) => sum + g.fileCount, 0);
   const finishedCount = jobs.filter(
     (j) => j.status === "succeeded" || j.status === "failed" || j.status === "canceled"
   ).length;
@@ -240,7 +344,9 @@ export function RendersClient() {
     setError(null);
     setZipping({ done: 0, total: totalFiles });
     try {
-      await downloadJobsAsZip(downloadableJobs, setZipping);
+      // One folder per product, one sub-folder per group/template inside it —
+      // two groups never share a directory, which is the whole point.
+      await downloadProductGroupsAsZip(downloadableGroups, setZipping);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Tải tất cả thất bại");
     } finally {
@@ -265,6 +371,37 @@ export function RendersClient() {
       // Drop it locally first so the card disappears on click rather than on
       // the next poll; refreshJobs then reconciles with the server.
       setJobs((prev) => prev.filter((j) => j.id !== jobId));
+      await refreshJobs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Xoá thất bại");
+    }
+  }
+
+  /**
+   * Deletes every finished job on ONE product card.
+   *
+   * The card's X now stands for a whole product, so it fans out over the
+   * sections rather than deleting a single job. Failures are counted, not
+   * thrown: a partial delete still tidied most of the card, and the next poll
+   * shows exactly what survived.
+   */
+  async function handleRemoveGroup(jobIds: string[]) {
+    if (jobIds.length === 0) return;
+    setError(null);
+    try {
+      const results = await Promise.all(
+        jobIds.map((id) =>
+          fetch(`/api/render-jobs/${id}/remove`, { method: "POST" })
+            .then((res) => res.ok)
+            .catch(() => false)
+        )
+      );
+      const failed = results.filter((ok) => !ok).length;
+      if (failed > 0) setError(`${failed}/${jobIds.length} mục không xoá được`);
+      // Drop them locally first so the card disappears on click rather than on
+      // the next poll; refreshJobs then reconciles with the server.
+      const removed = new Set(jobIds);
+      setJobs((prev) => prev.filter((j) => !removed.has(j.id)));
       await refreshJobs();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Xoá thất bại");
@@ -341,9 +478,9 @@ export function RendersClient() {
                   ? "Chưa có job nào"
                   : !allSettled
                     ? "Đợi tất cả job render xong"
-                    : downloadableJobs.length === 0
+                    : downloadableGroups.length === 0
                       ? "Không có file nào để tải"
-                      : `Tải ${totalFiles} file từ ${downloadableJobs.length} sản phẩm`
+                      : `Tải ${totalFiles} file từ ${downloadableGroups.length} sản phẩm — mỗi sản phẩm một thư mục, mỗi nhóm một thư mục con`
               }
               className="gap-1.5"
             >
@@ -399,46 +536,17 @@ export function RendersClient() {
           {/* ── Picker ─────────────────────────────────────────── */}
           <div className="space-y-4">
             <div className="rounded-lg border bg-card p-3">
-              <div className="mb-3 flex gap-2">
-                <KindTab
-                  active={kind === "image"}
-                  onClick={() => selectKind("image")}
-                  icon={ImageIcon}
-                  label="Ảnh mockup"
-                />
-                <KindTab
-                  active={kind === "video"}
-                  onClick={() => selectKind("video")}
-                  icon={Film}
-                  label="Video"
-                />
-              </div>
-
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                {kind === "image" ? "Nhóm ảnh" : "Template video"}
-              </label>
-              <Select
-                value={targetId ?? undefined}
-                onValueChange={(value) => setTargetId(value)}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue
-                    placeholder={`— chọn ${kind === "image" ? "nhóm ảnh" : "template"} —`}
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  {targets.map((t) => (
-                    <SelectItem key={t.id} value={t.id}>
-                      {t.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {kind === "video" && (
-                <p className="mt-1.5 text-xs text-muted-foreground">
-                  Video 1920×1080 60fps — mỗi clip vài chục MB và mất vài phút GPU.
-                </p>
-              )}
+              <RenderTargetPicker
+                groups={groups}
+                templates={templates}
+                selectedGroupIds={selectedGroupIds}
+                selectedTemplateIds={selectedTemplateIds}
+                imageSelection={imageSelection}
+                onChangeGroups={setSelectedGroupIds}
+                onChangeTemplates={setSelectedTemplateIds}
+                onChangeImageSelection={setImageSelection}
+                disabled={queueing}
+              />
             </div>
 
             <RenderProductPicker
@@ -449,7 +557,7 @@ export function RendersClient() {
             <Button
               className="w-full"
               onClick={() => void handleQueue()}
-              disabled={queueing || selectedProducts.size === 0 || !targetId}
+              disabled={queueing || selectedProducts.size === 0 || targetCount === 0}
             >
               {queueing ? (
                 <>
@@ -458,10 +566,25 @@ export function RendersClient() {
               ) : (
                 <>
                   <Sparkles className="h-4 w-4" />
-                  Render {selectedProducts.size > 0 ? `${selectedProducts.size} sản phẩm` : ""}
+                  Render{plannedJobs > 0 ? ` ${plannedJobs} job` : ""}
                 </>
               )}
             </Button>
+
+            {/* The arithmetic behind the button, because "5 products x 3 groups
+                + 2 templates" is not obvious from the badges alone. */}
+            {plannedJobs > 0 && (
+              <p className="text-center text-xs text-muted-foreground">
+                {selectedProducts.size} sản phẩm × {targetCount} mục
+                {selectedGroupIds.length > 0 && ` (${selectedGroupIds.length} nhóm ảnh`}
+                {selectedGroupIds.length > 0 && selectedTemplateIds.length > 0 && ", "}
+                {selectedGroupIds.length === 0 && selectedTemplateIds.length > 0 && " ("}
+                {selectedTemplateIds.length > 0 && `${selectedTemplateIds.length} video`}
+                {targetCount > 0 && ")"}
+                {plannedImages > 0 && ` — ${plannedImages} ảnh`}
+                {plannedVideos > 0 && `, ${plannedVideos} clip`}
+              </p>
+            )}
 
             {error && (
               <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
@@ -486,18 +609,23 @@ export function RendersClient() {
                 </p>
               </div>
             ) : (
-              jobs.map((job) => (
-                <RenderJobCard
-                  key={job.id}
-                  job={job}
+              productGroups.map((group) => (
+                <RenderProductCard
+                  key={group.key}
+                  group={group}
                   onCancel={handleCancel}
                   onRetry={handleRetry}
                   onRemove={handleRemove}
-                  // A single job stays open; in a batch, SUCCEEDED ones fold away
-                  // so the running one is not buried under old thumbnails.
-                  // A failed job stays open on purpose — its error message is
-                  // the reason the user is looking at the page.
-                  defaultCollapsed={jobs.length > 1 && job.status === "succeeded"}
+                  onRemoveGroup={handleRemoveGroup}
+                  // A single product stays open; in a batch, fully-succeeded
+                  // cards fold away so the running one is not buried under old
+                  // thumbnails. A card with a failure stays open on purpose —
+                  // its error message is why the user is looking at the page.
+                  defaultCollapsed={
+                    productGroups.length > 1 &&
+                    !group.live &&
+                    group.counts.failed === 0
+                  }
                 />
               ))
             )}
@@ -505,32 +633,5 @@ export function RendersClient() {
         </div>
       </main>
     </div>
-  );
-}
-
-function KindTab({
-  active,
-  onClick,
-  icon: Icon,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: typeof ImageIcon;
-  label: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "flex flex-1 items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-sm transition",
-        active
-          ? "border-primary bg-primary/10 text-foreground"
-          : "text-muted-foreground hover:bg-muted"
-      )}
-    >
-      <Icon className="h-4 w-4" />
-      {label}
-    </button>
   );
 }

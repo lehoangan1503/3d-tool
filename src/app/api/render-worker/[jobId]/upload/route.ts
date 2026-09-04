@@ -14,7 +14,6 @@ interface JobRow {
   product_id: string | null;
   kind: string;
   status: string;
-  outputs: RenderJobOutput[] | null;
 }
 
 /** Bucket for render output. Separate from product-assets so renders can have
@@ -87,7 +86,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     // The job tells us who owns the output, so it lands in that user's folder.
     const { data: job, error: jobError } = await auth.ctx.admin
       .from("render_jobs")
-      .select<JobRow>("id, user_id, product_id, kind, status, outputs")
+      .select<JobRow>("id, user_id, product_id, kind, status")
       .eq("id", jobId)
       .maybeSingle();
 
@@ -154,12 +153,16 @@ export async function POST(request: Request, { params }: RouteParams) {
 
     // Append so the UI can show each file the moment it lands. Re-uploads of
     // the same name replace the earlier entry (a retried reference).
-    const existing = (job.outputs ?? []).filter((o) => o.storagePath !== storagePath);
-
-    const { error: appendError } = await auth.ctx.admin
-      .from("render_jobs")
-      .update({ outputs: [...existing, output] })
-      .eq("id", jobId);
+    //
+    // Via RPC, not a read-modify-write here: an image job uploads once per
+    // reference, and two appends that interleave would drop whichever wrote
+    // first. The function takes a row lock so the read and the write are one
+    // step. (A video job uploads a single file and could never race itself,
+    // which is why this only ever corrupted image jobs.)
+    const { error: appendError } = await auth.ctx.admin.rpc("append_render_output", {
+      p_job_id: jobId,
+      p_output: output,
+    });
 
     if (appendError) {
       console.error("[render-worker] output append failed:", appendError);

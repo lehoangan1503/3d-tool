@@ -38,7 +38,7 @@ import {
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager, HDRI_OPTIONS_FALLBACK } from "@/lib/three/extractor-scene-manager";
 import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CameraShapeParams, CameraWaypoint, CueHdriConfig, VideoRatio, CornerFillConfig, LogoBackdropConfig, SceneBackgroundConfig } from "@/types/video-studio";
-import { DEFAULT_CORNER_FILL, DEFAULT_LOGO_BACKDROP, DEFAULT_SCENE_BACKGROUND, loadGlobalLogoBackdrop, saveGlobalLogoBackdrop } from "@/types/video-studio";
+import { DEFAULT_CORNER_FILL, DEFAULT_LOGO_BACKDROP, DEFAULT_SCENE_BACKGROUND, WALL_WIDTH, WALL_HEIGHT, loadGlobalLogoBackdrop, saveGlobalLogoBackdrop } from "@/types/video-studio";
 import type { StudioEnvironmentAsset, StudioEnvironmentConfig } from "@/types/studio-environment";
 import { normalizeEnvironmentConfig } from "@/types/studio-environment";
 import { EnvironmentPanel } from "./environment-panel";
@@ -881,8 +881,8 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               });
             } else if (info.type === "wallFrame" && info.frameId) {
               setConfig((prev) => {
-                const WALL_W = 34,
-                  WALL_H = 24,
+                const WALL_W = WALL_WIDTH,
+                  WALL_H = WALL_HEIGHT,
                   WALL_Y = 10; // must match backdrop position
                 const frames = prev.wallSurface.frames.map((f) => {
                   if (f.id !== info.frameId) return f;
@@ -1213,6 +1213,9 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         f.id,
         f.enabled ? 1 : 0,
         f.imageUrl ?? "",
+        // The shrink factor is baked into the frame's canvas AND decides the plane's
+        // tile grid, so changing it needs the same full rebuild an image swap does.
+        f.imageScale ?? "",
         f.backgroundEnabled ? 1 : 0,
         f.backgroundType ?? "",
         f.backgroundColor ?? "",
@@ -1232,6 +1235,9 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         f.id,
         f.enabled ? 1 : 0,
         f.imageUrl ?? "",
+        // The shrink factor is baked into the frame's canvas AND decides the plane's
+        // tile grid, so changing it needs the same full rebuild an image swap does.
+        f.imageScale ?? "",
         f.backgroundEnabled ? 1 : 0,
         f.backgroundType ?? "",
         f.backgroundColor ?? "",

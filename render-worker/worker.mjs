@@ -59,6 +59,20 @@ const JOB_TIMEOUT_MS = Number(process.env.RENDER_JOB_TIMEOUT_MS ?? 20 * 60 * 100
 const MAX_JOBS_PER_RUN = Number(process.env.RENDER_MAX_JOBS_PER_RUN ?? 5);
 
 /**
+ * Restricts what this pod DRAINS to one kind ("image" | "video"); unset means
+ * any kind. The job the pod is woken for is always honoured regardless.
+ *
+ * Without this, MAX_JOBS_PER_RUN and the run budget were tuned for one kind and
+ * then applied to whatever happened to be oldest in the queue — a video-tuned
+ * pod (limit 2) would drain image jobs it could have taken 8 of, and an
+ * image-tuned pod (limit 8) would start videos it had no budget to finish.
+ */
+const JOB_KIND =
+  process.env.RENDER_JOB_KIND === "image" || process.env.RENDER_JOB_KIND === "video"
+    ? process.env.RENDER_JOB_KIND
+    : null;
+
+/**
  * Wall-clock budget for the whole pod, mirroring the provider's execution
  * timeout. The worker stops taking NEW jobs once the remaining budget cannot
  * fit another one, so it exits cleanly instead of being killed mid-render —
@@ -307,7 +321,8 @@ async function logGpuDiagnostics(browser) {
  * back after its lease expired.
  */
 async function queueHasWork() {
-  const res = await fetch(`${APP_BASE_URL}/api/render-worker/queue-depth`, {
+  const query = JOB_KIND ? `?kind=${encodeURIComponent(JOB_KIND)}` : "";
+  const res = await fetch(`${APP_BASE_URL}/api/render-worker/queue-depth${query}`, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${WORKER_SECRET}`,
@@ -340,7 +355,8 @@ async function runJob(browser, jobId) {
     `?jobId=${encodeURIComponent(jobId ?? "")}` +
     `&token=${encodeURIComponent(WORKER_SECRET)}` +
     `&provider=${encodeURIComponent(PROVIDER)}` +
-    `&worker=${encodeURIComponent(WORKER_ID)}`;
+    `&worker=${encodeURIComponent(WORKER_ID)}` +
+    (JOB_KIND ? `&kind=${encodeURIComponent(JOB_KIND)}` : "");
 
   try {
     log(`opening job ${jobId ?? "(queue)"}`);

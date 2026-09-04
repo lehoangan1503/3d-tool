@@ -20,6 +20,21 @@ interface ClaimBody {
   /** The provider's own run id, echoed back for cost tracing. */
   workerJobId?: string;
   provider?: string;
+  /**
+   * How wide the "video owns the GPU" rule reaches (see migration 033).
+   *
+   * "worker" (default) — isolation is per pod, which is what a serverless
+   * endpoint wants: each pod is its own container on its own card, so two
+   * videos on two pods do not disturb each other.
+   * "global" — every pod shares one physical GPU (a single rented box), so a
+   * video must be alone across the whole fleet.
+   */
+  exclusiveScope?: "worker" | "global";
+  /**
+   * Set false to skip the wait-for-a-quiet-GPU rule on a targeted claim, for a
+   * one-shot pod that has nothing to share with (WORKER_MODE=job, local runs).
+   */
+  deferIfBusy?: boolean;
 }
 
 /**
@@ -55,6 +70,8 @@ export async function POST(request: Request) {
 
     const provider = body.provider ?? "runpod";
     const workerJobId = body.workerJobId ?? auth.ctx.workerId;
+    const exclusiveScope = body.exclusiveScope === "global" ? "global" : "worker";
+    const deferIfBusy = body.deferIfBusy !== false;
 
     // A malformed id is treated as "no specific job" rather than an error: the
     // pod is already warm and the queue may well have work for it, so drainage
@@ -79,12 +96,15 @@ export async function POST(request: Request) {
           p_worker_provider: provider,
           p_worker_job_id: workerJobId,
           p_lease_seconds: leaseSeconds,
+          p_exclusive_scope: exclusiveScope,
+          p_defer_if_busy: deferIfBusy,
         })
       : await auth.ctx.admin.rpc<RenderJobRow | RenderJobRow[] | null>("claim_render_job", {
           p_worker_provider: provider,
           p_worker_job_id: workerJobId,
           p_lease_seconds: leaseSeconds,
           p_kind: kind,
+          p_exclusive_scope: exclusiveScope,
         });
 
     if (error) {
@@ -95,9 +115,34 @@ export async function POST(request: Request) {
     // The RPC returns NULL (or an all-null composite) when nothing was claimable.
     let row = Array.isArray(data) ? (data[0] ?? null) : data;
 
-    // Targeted claim missed — the job was already taken, canceled, or done.
-    // Drain the queue instead of wasting a warm GPU on an immediate exit.
+    // Targeted claim missed. Two very different reasons, and they must not be
+    // conflated:
+    //
+    //  a) the job is GONE (already taken, canceled, finished) — draining the
+    //     queue is right, the card is warm and an immediate exit wastes it;
+    //  b) the job is DEFERRED by migration 033 — the GPU is busy and this job
+    //     is waiting for it to go quiet. Falling through to the drain claim
+    //     here would hand the pod an image job and leave the video waiting
+    //     exactly as long again, which is the opposite of the intent.
+    //
+    // So the fallback runs only when the row is really gone.
     if (!row?.id && targetJobId) {
+      const { data: stillQueued } = await auth.ctx.admin
+        .from("render_jobs")
+        .select<{ id: string }>("id")
+        .eq("id", targetJobId)
+        .eq("status", "queued")
+        .maybeSingle();
+
+      if (stillQueued?.id) {
+        // Case (b). 202 tells the pod "your job exists, the GPU is not free
+        // yet" — distinct from the 204 that means "nothing to do, exit".
+        return NextResponse.json(
+          { deferred: true, jobId: targetJobId, reason: "gpu-busy" },
+          { status: 202 }
+        );
+      }
+
       const { data: fallback, error: fallbackError } = await auth.ctx.admin.rpc<
         RenderJobRow | RenderJobRow[] | null
       >("claim_render_job", {
@@ -105,6 +150,7 @@ export async function POST(request: Request) {
         p_worker_job_id: workerJobId,
         p_lease_seconds: leaseSeconds,
         p_kind: kind,
+        p_exclusive_scope: exclusiveScope,
       });
       if (fallbackError) {
         console.error("[render-worker] fallback claim failed:", fallbackError);

@@ -1,18 +1,16 @@
 import { NextResponse } from "next/server";
-import { errorResponse, requireUser } from "@/lib/render/enqueue";
+import {
+  dispatchInBackground,
+  errorResponse,
+  requireUser,
+} from "@/lib/render/enqueue";
 import { RenderPayloadError } from "@/lib/render/build-payload";
 import {
   attachProductNames,
   RENDER_JOB_COLUMNS,
   type RenderJobRow,
 } from "@/lib/render/job-mapper";
-import {
-  dispatchRenderJob,
-  isGpuConfigured,
-  resolveAppBaseUrl,
-} from "@/lib/render/gpu-dispatch";
-import { asRenderDbClient } from "@/lib/render/supabase-surface";
-import { createAdminServiceClient } from "@/lib/supabase/server";
+import { isGpuConfigured, resolveAppBaseUrl } from "@/lib/render/gpu-dispatch";
 import type { RenderJobPayload } from "@/types/render-job";
 
 interface RouteParams {
@@ -137,36 +135,13 @@ export async function POST(request: Request, { params }: RouteParams) {
       });
     }
 
-    const dispatch = await dispatchRenderJob({
-      jobId: job.id,
-      kind,
-      appBaseUrl: resolveAppBaseUrl(request),
-    });
+    // Poke the provider AFTER responding, same as the enqueue path: the row is
+    // already 'queued', and the poke is a round-trip to RunPod that took the
+    // whole response with it (up to DISPATCH_TIMEOUT_MS) for something a
+    // polling worker would have picked up anyway. See dispatchInBackground.
+    void dispatchInBackground([job], kind, resolveAppBaseUrl(request));
 
-    if (dispatch.dispatched) {
-      // Worker bookkeeping belongs to the server, same as the enqueue path.
-      const admin = asRenderDbClient(createAdminServiceClient());
-      await admin
-        .from("render_jobs")
-        .update({
-          worker_provider: dispatch.provider,
-          worker_job_id: dispatch.workerJobId,
-        })
-        .eq("id", job.id);
-    }
-
-    return NextResponse.json({
-      job: {
-        ...job,
-        workerProvider: dispatch.dispatched ? dispatch.provider : job.workerProvider,
-        workerJobId: dispatch.workerJobId ?? job.workerJobId,
-      },
-      // A failed poke is not an error: the job stays queued for the next
-      // polling worker.
-      warning: dispatch.dispatched
-        ? undefined
-        : `Không gọi được GPU (${dispatch.error}). Job vẫn nằm trong hàng đợi.`,
-    });
+    return NextResponse.json({ job });
   } catch (error) {
     return errorResponse(error, "POST /api/render-jobs/[jobId]/retry");
   }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Search, Loader2, Layers, User, Download, Pencil } from "lucide-react";
+import { Search, Loader2, Layers, User, Download, Pencil, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { PickProductDialog } from "@/components/products/pick-product-dialog";
@@ -13,6 +13,12 @@ import type { Product } from "@/types/product";
 interface ReferencesGridProps {
   /** Rendered next to the heading — the dashboard's view tabs. */
   tabs?: React.ReactNode;
+  /**
+   * Superadmin or tool admin — shows the per-card delete button. The API
+   * (`DELETE /api/extractor-references/[id]`) enforces this independently, so a
+   * false value here only hides the affordance.
+   */
+  canDelete?: boolean;
 }
 
 /**
@@ -22,7 +28,7 @@ interface ReferencesGridProps {
  * product to render it on, then deep-links into that product's editor with
  * `?tool=extractor&ref=<id>` so the extractor opens on that layout.
  */
-export function ReferencesGrid({ tabs }: ReferencesGridProps) {
+export function ReferencesGrid({ tabs, canDelete }: ReferencesGridProps) {
   const {
     references,
     total,
@@ -32,8 +38,12 @@ export function ReferencesGrid({ tabs }: ReferencesGridProps) {
     search,
     setSearch,
     loadMore,
+    reload,
     sentinelRef,
   } = useReferenceList({ enabled: true });
+
+  /** id of the reference currently being deleted — disables just that card. */
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // A reference layout records no product — `extractor_references` has only
   // user_id + name, and its frames hold camera/HDRI data — so there is nothing
@@ -61,6 +71,34 @@ export function ReferencesGrid({ tabs }: ReferencesGridProps) {
       cancelled = true;
     };
   }, []);
+
+  async function handleDelete(reference: ExtractorReference) {
+    if (
+      !confirm(
+        `Xoá bố cục "${reference.name}"? Hành động này không thể hoàn tác.`
+      )
+    ) {
+      return;
+    }
+    setDeletingId(reference.id);
+    try {
+      const res = await fetch(`/api/extractor-references/${reference.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const { error }: { error?: string } = await res.json().catch(() => ({}));
+        throw new Error(error ?? "Xoá bố cục thất bại.");
+      }
+      // reload() drops the hook's session cache; without it the deleted row
+      // comes straight back from cache on the next render.
+      reload();
+    } catch (err) {
+      console.error("ReferencesGrid: delete failed:", err);
+      alert(err instanceof Error ? err.message : "Xoá bố cục thất bại.");
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   // The list hook caches pages for the whole session, so returning here after
   // editing a layout in the editor would show stale data. Drop the cache once
@@ -212,9 +250,27 @@ export function ReferencesGrid({ tabs }: ReferencesGridProps) {
                     <User className="h-3 w-3 shrink-0" />
                     <span className="truncate">{r.createdByName ?? "—"}</span>
                   </span>
-                  <Button size="sm" variant="outline" onClick={() => handleOpen(r)}>
-                    {r.canEdit ? "Chỉnh sửa" : "Xem"}
-                  </Button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button size="sm" variant="outline" onClick={() => handleOpen(r)}>
+                      {r.canEdit ? "Chỉnh sửa" : "Xem"}
+                    </Button>
+                    {canDelete && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                        title="Xoá bố cục"
+                        disabled={deletingId === r.id}
+                        onClick={() => handleDelete(r)}
+                      >
+                        {deletingId === r.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

@@ -127,7 +127,17 @@ export async function loadRenderProducts(
 /** Resolves an image group into the ordered references it points at. */
 export async function loadGroupReferences(
   supabase: RenderDbClient,
-  groupId: string
+  groupId: string,
+  /**
+   * Render only these references out of the group, in the group's own order.
+   * Undefined renders the whole group (the default).
+   *
+   * The subset is INTERSECTED with the group rather than trusted: it arrives
+   * from the client, and the group is what decides both membership and slot
+   * order. An id not in the group is ignored, so a stale dialog cannot smuggle
+   * an unrelated layout into a render.
+   */
+  onlyReferenceIds?: string[]
 ): Promise<{ groupName: string; references: ExtractorReference[] }> {
   const { data: group, error: groupError } = await supabase
     .from("extractor_reference_groups")
@@ -144,9 +154,19 @@ export async function loadGroupReferences(
     throw new RenderPayloadError("Image group not found", 404);
   }
 
-  const referenceIds = (group.reference_ids ?? []).filter(Boolean);
-  if (referenceIds.length === 0) {
+  const groupIds = (group.reference_ids ?? []).filter(Boolean);
+  if (groupIds.length === 0) {
     throw new RenderPayloadError("Image group is empty", 400);
+  }
+
+  const wanted = onlyReferenceIds?.length ? new Set(onlyReferenceIds) : null;
+  const referenceIds = wanted ? groupIds.filter((id) => wanted.has(id)) : groupIds;
+
+  if (referenceIds.length === 0) {
+    throw new RenderPayloadError(
+      "None of the selected images belong to this group",
+      400
+    );
   }
 
   const { data: refRows, error: refError } = await supabase

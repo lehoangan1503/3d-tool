@@ -113,40 +113,77 @@ export async function insertAndDispatch(
     };
   }
 
-  // Poke one worker per job so the provider scales out. Dispatch never throws;
-  // an un-poked job simply waits for the next polling worker.
-  const appBaseUrl = resolveAppBaseUrl(request);
-  const dispatches = await Promise.all(
-    jobs.map((job) => dispatchRenderJob({ jobId: job.id, kind, appBaseUrl }))
-  );
+  // Poke one worker per job so the provider scales out — but do NOT make the
+  // caller wait for it.
+  //
+  // The INSERT above is what queues a job; the dispatch is only a hint that
+  // makes the provider spin a container now instead of on its next poll. It is
+  // an HTTP round-trip to RunPod, which takes seconds and is allowed up to 15
+  // (DISPATCH_TIMEOUT_MS). Awaiting it here meant the response — and so the
+  // spinner on the Render button, and the row appearing in the list — was held
+  // for the slowest provider call. With the /renders page sending one request
+  // per target in sequence, 4 targets stacked into ~30s of "nothing happened"
+  // for jobs that were in fact already queued in the first 200ms.
+  //
+  // So the response returns as soon as the rows exist, and the poking happens
+  // after it. A dispatch that fails changes nothing about correctness: the job
+  // stays `queued` and the next polling worker claims it.
+  void dispatchInBackground(jobs, kind, resolveAppBaseUrl(request));
 
-  // Record the provider's run id with the service client: the RLS UPDATE policy
-  // lets a user touch their own row, but worker bookkeeping belongs to the
-  // server, and this also keeps the write out of the user's rate limits.
-  const admin = asRenderDbClient(createAdminServiceClient());
-  await Promise.all(
-    dispatches.map((d, i) =>
-      d.dispatched
-        ? admin
-            .from("render_jobs")
-            .update({ worker_provider: d.provider, worker_job_id: d.workerJobId })
-            .eq("id", jobs[i].id)
-        : Promise.resolve(null)
-    )
-  );
+  return { jobs };
+}
 
-  const failed = dispatches.filter((d) => !d.dispatched);
-  return {
-    jobs: jobs.map((job, i) => ({
-      ...job,
-      workerProvider: dispatches[i].dispatched ? dispatches[i].provider : job.workerProvider,
-      workerJobId: dispatches[i].workerJobId ?? job.workerJobId,
-    })),
-    warning:
-      failed.length > 0
-        ? `${failed.length}/${jobs.length} job(s) could not reach the GPU service (${failed[0].error}). They stay queued.`
-        : undefined,
-  };
+/**
+ * Fire-and-forget the provider pokes and record their run ids.
+ *
+ * Deliberately not awaited by the request. Errors are logged, never thrown: an
+ * unhandled rejection here would be a crash for work that is already safely in
+ * Postgres.
+ *
+ * Note on serverless hosts: an un-awaited task can be cut short when the
+ * function freezes after responding. That is survivable by design — a job that
+ * never got poked is still `queued` and gets claimed by the next worker poll —
+ * which is exactly why this is safe to background and the INSERT is not.
+ */
+export async function dispatchInBackground(
+  jobs: RenderJob[],
+  kind: "image" | "video",
+  appBaseUrl: string
+): Promise<void> {
+  try {
+    const dispatches = await Promise.all(
+      jobs.map((job) => dispatchRenderJob({ jobId: job.id, kind, appBaseUrl }))
+    );
+
+    // Record the provider's run id with the service client: the RLS UPDATE
+    // policy lets a user touch their own row, but worker bookkeeping belongs to
+    // the server, and this also keeps the write out of the user's rate limits.
+    const admin = asRenderDbClient(createAdminServiceClient());
+    await Promise.all(
+      dispatches.map((d, i) =>
+        d.dispatched
+          ? admin
+              .from("render_jobs")
+              .update({ worker_provider: d.provider, worker_job_id: d.workerJobId })
+              .eq("id", jobs[i].id)
+          : Promise.resolve(null)
+      )
+    );
+
+    const failed = dispatches.filter((d) => !d.dispatched);
+    if (failed.length > 0) {
+      // Visible in the server log rather than the response: by the time this
+      // resolves the caller has long since been answered. The jobs are queued,
+      // so this is a "the GPU was slow to be woken" note, not an error the
+      // user must act on.
+      console.warn(
+        `[render-enqueue] ${failed.length}/${jobs.length} job(s) could not reach ` +
+          `the GPU service (${failed[0].error}). They stay queued for the next worker poll.`
+      );
+    }
+  } catch (error) {
+    console.error("[render-enqueue] background dispatch failed:", error);
+  }
 }
 
 /** Maps a thrown RenderPayloadError to its intended HTTP status. */

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
@@ -20,6 +20,18 @@ import {
   Maximize2,
 } from "lucide-react";
 import type { BackgroundFrame } from "@/types/video-studio";
+import {
+  DEFAULT_FRAME_IMAGE_SCALE,
+  MIN_FRAME_IMAGE_SCALE,
+  MAX_FRAME_IMAGE_SCALE,
+  clampFrameImageScale,
+  frameImageTileSize,
+  frameTileGrid,
+  WALL_WIDTH,
+  WALL_HEIGHT,
+  MIN_FRAME_SIZE,
+  MAX_FRAME_SIZE,
+} from "@/types/video-studio";
 import { ImagePickerDialog } from "../image-picker-dialog";
 import { GradientPickerDialog } from "../gradient-picker-dialog";
 import type { ImageGradient } from "@/types/extractor";
@@ -66,11 +78,35 @@ export function SurfaceFrameControls({
     [frame, onChange]
   );
 
-  // Cover the whole surface: width/height are normalised so 1 = full wall or
-  // table, centred at 0.5/0.5.
+  /**
+   * Stretch a colour/gradient frame over the whole surface.
+   *
+   * Image frames do not need this: they always repeat to fill, so there is no rectangle
+   * to stretch — which is why the button is hidden for them.
+   */
   const fillSurface = useCallback(() => {
     patch({ x: 0.5, y: 0.5, width: 1, height: 1, rotation: 0 });
   }, [patch]);
+
+  const imageScale = clampFrameImageScale(
+    frame.imageScale ?? DEFAULT_FRAME_IMAGE_SCALE
+  );
+
+  /**
+   * What the current shrink factor actually produces, so the numbers are visible before
+   * committing. Mirrors the scene manager's own layout maths (`computeFrameTileLayout`).
+   */
+  const tileInfo = useMemo(() => {
+    if (!imageDims) return null;
+    const tile = frameImageTileSize(imageDims.w, imageDims.h, imageScale);
+    if (!(tile.width > 0) || !(tile.height > 0)) return null;
+    const { cols, rows } = frameTileGrid(tile.width, tile.height, WALL_WIDTH, WALL_HEIGHT);
+    return {
+      cols,
+      rows,
+      tilePx: `${Math.round(imageDims.w * imageScale)} x ${Math.round(imageDims.h * imageScale)}px`,
+    };
+  }, [imageDims, imageScale]);
 
   const bgEnabled = frame.backgroundEnabled ?? true;
   const bgType = frame.backgroundType ?? "color";
@@ -91,22 +127,11 @@ export function SurfaceFrameControls({
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
         onSelect={(url) => {
-          // Load image to get natural dimensions, then auto-set frame AR
-          const img = new Image();
-          img.onload = () => {
-            if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-              const ar = img.naturalHeight / img.naturalWidth;
-              // Keep width, adjust height to match image aspect ratio
-              const wallAr = 24 / 34; // wall height/width ratio
-              const newHeight = (frame.width * 34 * ar) / 24;
-              patch({ imageUrl: url, backgroundEnabled: false, height: Math.min(2, Math.max(0.05, newHeight)) });
-            } else {
-              patch({ imageUrl: url, backgroundEnabled: false });
-            }
-          };
-          img.onerror = () => patch({ imageUrl: url, backgroundEnabled: false });
-          const resolved = resolveStorageUrl(url);
-          img.src = resolved ?? url;
+          // No sizing happens here any more. An image frame is laid out from the image's
+          // own pixel dimensions (see `imageScale`), so the frame's
+          // width/height do not apply to it — which is what stopped a saved backdrop
+          // from snapping back to the photo's proportions on every reload.
+          patch({ imageUrl: url, backgroundEnabled: false });
         }}
         currentUrl={frame.imageUrl}
       />
@@ -208,6 +233,41 @@ export function SurfaceFrameControls({
               </div>
             )}
           </div>
+
+          {/* Shrink factor — the only scale control. Smaller tile, more repeats. */}
+          {frame.imageUrl && (
+            <div className="space-y-2">
+              <div className="space-y-1.5">
+                <div className="flex justify-between text-xs">
+                  <Label className="font-medium text-muted-foreground">
+                    Tỉ lệ thu nhỏ
+                  </Label>
+                  <span className="text-muted-foreground">
+                    {imageScale.toFixed(2)}:1
+                  </span>
+                </div>
+                <Slider
+                  value={[imageScale]}
+                  min={MIN_FRAME_IMAGE_SCALE}
+                  max={MAX_FRAME_IMAGE_SCALE}
+                  step={0.01}
+                  onValueChange={([v]) => patch({ imageScale: v })}
+                />
+              </div>
+
+              {/* What this produces, in source pixels and tile count */}
+              {tileInfo && (
+                <p className="rounded bg-muted/40 px-2 py-1.5 text-[10px] leading-snug text-muted-foreground">
+                  Mỗi tấm <span className="text-foreground">{tileInfo.tilePx}</span>, lặp{" "}
+                  <span className="text-foreground">
+                    {tileInfo.cols} x {tileInfo.rows}
+                  </span>{" "}
+                  để phủ kín tường và vùng cong. Kéo nhỏ hơn nếu vân ảnh trông quá to
+                  trong góc nhìn máy quay.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Image opacity */}
           {frame.imageUrl && (
@@ -350,7 +410,14 @@ export function SurfaceFrameControls({
 
           {/* ── Transform ── */}
           <div className="space-y-2">
-            <Label className="text-xs font-medium text-muted-foreground">Vị trí & Kích thước</Label>
+            <Label className="text-xs font-medium text-muted-foreground">
+              {frame.imageUrl ? "Vị trí" : "Vị trí & Kích thước"}
+            </Label>
+            {frame.imageUrl && (
+              <p className="text-[10px] leading-snug text-muted-foreground">
+                Ảnh luôn lặp lại để lấp kín bề mặt nên X / Y / Xoay không có tác dụng.
+              </p>
+            )}
 
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
@@ -367,31 +434,41 @@ export function SurfaceFrameControls({
                 </div>
                 <Slider value={[frame.y]} min={0} max={1} step={0.01} onValueChange={([v]) => patch({ y: v })} />
               </div>
-              <div className="space-y-1">
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">Rộng</span>
-                  <span className="text-muted-foreground">{Math.round(frame.width * 2048)}px</span>
-                </div>
-                <Slider value={[frame.width]} min={0.05} max={2} step={0.005} onValueChange={([v]) => patch({ width: v })} />
-              </div>
-              <div className="space-y-1">
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">Cao</span>
-                  <span className="text-muted-foreground">{Math.round(frame.height * 2048)}px</span>
-                </div>
-                <Slider value={[frame.height]} min={0.05} max={2} step={0.005} onValueChange={([v]) => patch({ height: v })} />
-              </div>
+              {/* Width/height do not apply to an image frame: it is sized from the
+                  image's own pixels via "Tỉ lệ điểm ảnh" above. Showing dead sliders
+                  is what made the size look like it "reset" after every reload. */}
+              {!frame.imageUrl && (
+                <>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">Rộng</span>
+                      <span className="text-muted-foreground">{Math.round(frame.width * 2048)}px</span>
+                    </div>
+                    <Slider value={[frame.width]} min={MIN_FRAME_SIZE} max={MAX_FRAME_SIZE} step={0.005} onValueChange={([v]) => patch({ width: v })} />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">Cao</span>
+                      <span className="text-muted-foreground">{Math.round(frame.height * 2048)}px</span>
+                    </div>
+                    <Slider value={[frame.height]} min={MIN_FRAME_SIZE} max={MAX_FRAME_SIZE} step={0.005} onValueChange={([v]) => patch({ height: v })} />
+                  </div>
+                </>
+              )}
             </div>
 
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 w-full text-[11px]"
-              onClick={fillSurface}
-              title="Phủ kín toàn bộ tường / mặt bàn"
-            >
-              <Maximize2 className="h-3 w-3 mr-1" /> Tự động phủ kín
-            </Button>
+            {/* For an image frame this just switches the layout to "Phủ kín". */}
+            {!frame.imageUrl && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 w-full text-[11px]"
+                onClick={fillSurface}
+                title="Phủ kín toàn bộ tường / mặt bàn"
+              >
+                <Maximize2 className="h-3 w-3 mr-1" /> Tự động phủ kín
+              </Button>
+            )}
 
             <div className="space-y-1">
               <div className="flex justify-between text-xs">

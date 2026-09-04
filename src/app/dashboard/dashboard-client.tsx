@@ -23,6 +23,11 @@ interface DashboardClientProps {
   canDeploy?: boolean;
   /** GPU rendering is admin-only — it spends rented-card time. */
   canRender?: boolean;
+  /**
+   * Superadmin or tool admin — may delete any user's 2D reference / 3D video
+   * template from the dashboard lists. 'mode' and normal users may not.
+   */
+  canDeleteTeamAssets?: boolean;
 }
 
 /** Which list the dashboard is showing. */
@@ -34,7 +39,7 @@ const VIEW_TABS: Array<{ value: DashboardView; label: string }> = [
   { value: "studio", label: "Video 3D" },
 ];
 
-export function DashboardClient({ profile: initialProfile, showFirstLoginDialog, isSuperAdmin, canDeploy, canRender }: DashboardClientProps) {
+export function DashboardClient({ profile: initialProfile, showFirstLoginDialog, isSuperAdmin, canDeploy, canRender, canDeleteTeamAssets }: DashboardClientProps) {
   const [profile, setProfile] = useState(initialProfile);
   const [firstLoginOpen, setFirstLoginOpen] = useState(showFirstLoginDialog);
   const [view, setView] = useState<DashboardView>("products");
@@ -112,8 +117,8 @@ export function DashboardClient({ profile: initialProfile, showFirstLoginDialog,
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {view === "products" && <ProductsGrid currentUserId={profile.user_id} tabs={viewTabs} />}
-        {view === "references" && <ReferencesGrid tabs={viewTabs} />}
-        {view === "studio" && <StudioTemplatesGrid tabs={viewTabs} />}
+        {view === "references" && <ReferencesGrid tabs={viewTabs} canDelete={canDeleteTeamAssets} />}
+        {view === "studio" && <StudioTemplatesGrid tabs={viewTabs} canDelete={canDeleteTeamAssets} />}
       </main>
 
       <FirstLoginDialog open={firstLoginOpen} onComplete={handleFirstLoginComplete} />

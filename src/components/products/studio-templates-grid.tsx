@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
-import { Search, Loader2, Film, User, Download } from "lucide-react";
+import { Search, Loader2, Film, User, Download, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import type { VideoStudioTemplate } from "@/types/video-studio";
@@ -22,6 +22,12 @@ function isV2Template(t: VideoStudioTemplate): boolean {
 interface StudioTemplatesGridProps {
   /** Rendered next to the heading — the dashboard's view tabs. */
   tabs?: React.ReactNode;
+  /**
+   * Superadmin or tool admin — shows the per-card delete button. The API
+   * (`DELETE /api/video-studio-templates/[id]`) enforces this independently, so
+   * a false value here only hides the affordance.
+   */
+  canDelete?: boolean;
 }
 
 /**
@@ -31,7 +37,7 @@ interface StudioTemplatesGridProps {
  * product's editor with `?tool=studio|studio2&template=<id>`, which opens the
  * matching studio variant with the template loaded.
  */
-export function StudioTemplatesGrid({ tabs }: StudioTemplatesGridProps) {
+export function StudioTemplatesGrid({ tabs, canDelete }: StudioTemplatesGridProps) {
   const [templates, setTemplates] = useState<VideoStudioTemplate[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -39,8 +45,39 @@ export function StudioTemplatesGrid({ tabs }: StudioTemplatesGridProps) {
   const [total, setTotal] = useState(0);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [isLoadingAll, setIsLoadingAll] = useState(false);
+  /** id of the template currently being deleted — disables just that card. */
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const offsetRef = useRef(0);
   const observerRef = useRef<IntersectionObserver | null>(null);
+
+  async function handleDelete(template: VideoStudioTemplate) {
+    if (
+      !confirm(`Xoá mẫu "${template.name}"? Hành động này không thể hoàn tác.`)
+    ) {
+      return;
+    }
+    setDeletingId(template.id);
+    try {
+      const res = await fetch(`/api/video-studio-templates/${template.id}`, {
+        method: "DELETE",
+      });
+      // This route answers 204 No Content on success, so there is no body to read.
+      if (!res.ok) {
+        const { error }: { error?: string } = await res.json().catch(() => ({}));
+        throw new Error(error ?? "Xoá mẫu thất bại.");
+      }
+      // Drop the row locally instead of refetching: this list pages itself, and a
+      // refetch from offset 0 would collapse an expanded "Load All".
+      setTemplates((prev) => prev.filter((x) => x.id !== template.id));
+      setTotal((prev) => Math.max(0, prev - 1));
+      offsetRef.current = Math.max(0, offsetRef.current - 1);
+    } catch (err) {
+      console.error("StudioTemplatesGrid: delete failed:", err);
+      alert(err instanceof Error ? err.message : "Xoá mẫu thất bại.");
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);
@@ -215,17 +252,35 @@ export function StudioTemplatesGrid({ tabs }: StudioTemplatesGridProps) {
                   <User className="h-3 w-3 shrink-0" />
                   <span className="truncate">{t.createdByName ?? "—"}</span>
                 </span>
-                {t.productId ? (
-                  <Button size="sm" variant="outline" asChild>
-                    <Link href={editorHref(t)} target="_blank" rel="noopener noreferrer">
-                      {t.canEdit ? "Chỉnh sửa" : "Xem"}
-                    </Link>
-                  </Button>
-                ) : (
-                  <Button size="sm" variant="outline" disabled>
-                    Không mở được
-                  </Button>
-                )}
+                <div className="flex items-center gap-1 shrink-0">
+                  {t.productId ? (
+                    <Button size="sm" variant="outline" asChild>
+                      <Link href={editorHref(t)} target="_blank" rel="noopener noreferrer">
+                        {t.canEdit ? "Chỉnh sửa" : "Xem"}
+                      </Link>
+                    </Button>
+                  ) : (
+                    <Button size="sm" variant="outline" disabled>
+                      Không mở được
+                    </Button>
+                  )}
+                  {canDelete && (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                      title="Xoá mẫu"
+                      disabled={deletingId === t.id}
+                      onClick={() => handleDelete(t)}
+                    >
+                      {deletingId === t.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
           ))}

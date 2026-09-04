@@ -48,6 +48,19 @@ function log(message: string): void {
   }
 }
 
+/**
+ * How long a video waits for the GPU to go quiet before giving up.
+ *
+ * Giving up is not a failure of the render — it throws, the job's lease expires,
+ * and another pod retries it (attempts < 3). The ceiling exists so a stuck
+ * 'running' row can never park a pod on the billing clock indefinitely.
+ */
+const DEFER_TIMEOUT_MS = 10 * 60_000;
+
+/** Deferral poll interval. Long enough to be cheap, short enough that a video
+ *  starts promptly once the last image finishes. */
+const DEFER_POLL_MS = 3000;
+
 /** A canceled or vanished job makes the worker stop early and save GPU time. */
 class JobCanceledError extends Error {
   constructor() {
@@ -109,6 +122,9 @@ export default function RenderWorkerClient() {
   // Recorded on the job row so GPU spend can be traced back to a pod.
   const provider = searchParams.get("provider");
   const workerId = searchParams.get("worker");
+  // Restricts a *drain* claim to one kind; ignored when jobId is present.
+  // Absent means "any kind", which is what a local/one-shot worker wants.
+  const kind = searchParams.get("kind");
 
   const [status, setStatus] = useState("starting");
   // React StrictMode double-mounts in dev; a job must never render twice.
@@ -194,6 +210,7 @@ export default function RenderWorkerClient() {
 
       const model = await loadProductModel(product);
       let uploaded = 0;
+      const failures: string[] = [];
 
       for (let i = 0; i < references.length; i++) {
         const ref: ExtractorReference = references[i];
@@ -217,11 +234,31 @@ export default function RenderWorkerClient() {
         } catch (error) {
           if (error instanceof JobCanceledError) throw error;
           // One bad layout must not lose the other five mockups.
-          log(`ref "${ref.name}" failed: ${error instanceof Error ? error.message : error}`);
+          const message = error instanceof Error ? error.message : String(error);
+          failures.push(`${ref.name}: ${message}`);
+          log(`ref "${ref.name}" failed: ${message}`);
         }
       }
 
-      await reportProgress(activeJobId, references.length, references.length, "Hoàn tất");
+      // Reporting "Hoàn tất" unconditionally was how a job that rendered
+      // nothing still finished as `succeeded` with an empty outputs array and
+      // no error message — indistinguishable, in the UI, from a job whose
+      // results had simply not arrived yet. A total failure is a failed job.
+      if (uploaded === 0 && references.length > 0) {
+        throw new Error(
+          `Không render được ảnh nào (${references.length} ảnh đều lỗi). ` +
+            failures.slice(0, 3).join(" | ")
+        );
+      }
+
+      await reportProgress(
+        activeJobId,
+        references.length,
+        references.length,
+        failures.length > 0
+          ? `Hoàn tất — ${uploaded}/${references.length} ảnh (${failures.length} lỗi)`
+          : "Hoàn tất"
+      );
       return uploaded;
     },
     [reportProgress, uploadOutput]
@@ -300,11 +337,37 @@ export default function RenderWorkerClient() {
 
         // The pod claims THIS job specifically (it was dispatched for it), so
         // the worker API hands back the frozen payload.
-        const res = await fetch(`/api/render-worker/claim`, {
-          method: "POST",
-          headers: authHeaders({ "Content-Type": "application/json" }),
-          body: JSON.stringify({ jobId, provider, workerJobId: workerId }),
-        });
+        //
+        // A 202 means the job is ours but the GPU is not free yet — a video
+        // waits for a quiet card (migration 033). We poll rather than exit:
+        // exiting would end the pod, and the next dispatch would pay another
+        // cold start for a job that is already assigned here.
+        let res: Response | null = null;
+        const deferStartedAt = Date.now();
+
+        for (;;) {
+          res = await fetch(`/api/render-worker/claim`, {
+            method: "POST",
+            headers: authHeaders({ "Content-Type": "application/json" }),
+            // `kind` matters only for a drain claim (no jobId): the pod is tuned
+            // for one kind — RENDER_MAX_JOBS_PER_RUN and the run budget are set
+            // from video timings or image timings, not both — so a video pod
+            // draining image jobs applies the wrong ceiling to them. A targeted
+            // claim ignores it and takes the job it was woken for.
+            body: JSON.stringify({ jobId, provider, workerJobId: workerId, kind }),
+          });
+
+          if (res.status !== 202) break;
+
+          if (Date.now() - deferStartedAt > DEFER_TIMEOUT_MS) {
+            throw new Error(
+              `GPU still busy after ${Math.round(DEFER_TIMEOUT_MS / 1000)}s — giving up so the job returns to the queue`
+            );
+          }
+
+          setStatus("waiting for a free GPU");
+          await new Promise((resolve) => setTimeout(resolve, DEFER_POLL_MS));
+        }
 
         if (res.status === 204) {
           setStatus("idle: queue empty");
@@ -356,7 +419,7 @@ export default function RenderWorkerClient() {
         window.__renderWorkerResult = { status: "failed", outputCount, error: message };
       }
     })();
-  }, [jobId, token, provider, workerId, authHeaders, runImageJob, runVideoJob]);
+  }, [jobId, token, provider, workerId, kind, authHeaders, runImageJob, runVideoJob]);
 
   return (
     <div style={{ margin: 0, background: "#111", color: "#eee", fontFamily: "monospace" }}>

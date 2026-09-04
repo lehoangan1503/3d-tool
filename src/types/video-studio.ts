@@ -295,14 +295,131 @@ export const DEFAULT_EASING: EasingConfig = {
 
 export const MAX_BACKGROUND_FRAMES = 4;
 
+// ── Wall / table dimensions ──
+
+/**
+ * The V1 backdrop's real size in scene units.
+ *
+ * `BackgroundFrame.width` / `.height` are fractions of these, so anything converting a
+ * frame between wall units and normalised units needs them. They were copied as bare
+ * literals into the scene manager and the frame-controls panel, which is how the panel's
+ * aspect-fit maths and the renderer's could disagree.
+ *
+ * Keep in sync with the geometry in `extractor-scene-manager.setupStudioFromStudioConfig`.
+ */
+export const WALL_WIDTH = 34;
+export const WALL_HEIGHT = 24;
+
+/** Default size of a newly created frame, as fractions of the wall. */
+export const DEFAULT_FRAME_WIDTH = 0.4;
+export const DEFAULT_FRAME_HEIGHT = 0.35;
+
+/** Slider bounds for `BackgroundFrame.width` / `.height`. */
+export const MIN_FRAME_SIZE = 0.05;
+export const MAX_FRAME_SIZE = 2;
+
 /** @deprecated Only used for legacy frames that have a `type` field */
 export type BackgroundFrameType = "color" | "gradient" | "image";
+
+/**
+ * @deprecated Only "cover" (repeat-to-fill) remains. The single-centred-tile mode was
+ * removed: a backdrop is a wall material, and one tile floating in the middle of the wall
+ * never read as one. Kept so templates that stored the field still parse.
+ */
+export type FrameImageFit = "contain" | "cover";
+
+/**
+ * How many image pixels make up one wall unit.
+ *
+ * A fixed pixel-per-unit is what keeps the mapping predictable: the same image always
+ * lands as the same size patch of wall, and one image pixel always covers a known number
+ * of texture pixels, so nothing is resampled up (blurry) or squashed down (aliased).
+ *
+ * 2048 / 34 is the wall's own texture density — the compositor renders the 34-unit wall
+ * into a ~2048 px canvas, so at shrink factor 1 one image pixel is one canvas pixel.
+ */
+export const FRAME_PIXELS_PER_UNIT = 2048 / WALL_WIDTH;
+
+/**
+ * How much the image is shrunk before being laid onto the surface, as a fraction of its
+ * native size (1 = native, 0.1 = one tenth).
+ *
+ * This is the only quality/scale control. `FRAME_PIXELS_PER_UNIT` fixes how many image
+ * pixels make one wall unit, so shrinking the image makes each tile physically smaller on
+ * the wall and more tiles are repeated to fill it. That is exactly what makes the texture
+ * read at a believable scale: at native size a 6000 px photo becomes a ~100-unit slab, so
+ * the camera — which frames only a few units of wall — sees one enormously magnified
+ * patch of leather. Shrinking to ~0.15 puts the grain back at a plausible size and, because
+ * more pixels are packed into the same wall area, actually *increases* effective texture
+ * detail in shot.
+ */
+export const MIN_FRAME_IMAGE_SCALE = 0.1;
+export const MAX_FRAME_IMAGE_SCALE = 1;
+
+/**
+ * Default shrink factor.
+ *
+ * Native size is far too large for this set's scale, so the default has to be small
+ * enough to look like a material rather than a mural.
+ */
+export const DEFAULT_FRAME_IMAGE_SCALE = 0.2;
+
+/** Clamp a shrink factor into the slider's range. */
+export function clampFrameImageScale(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_FRAME_IMAGE_SCALE;
+  return Math.min(MAX_FRAME_IMAGE_SCALE, Math.max(MIN_FRAME_IMAGE_SCALE, value));
+}
+
+/**
+ * The size, in wall units, that an image of the given pixel dimensions occupies at the
+ * given shrink factor. Both the wall's frame plane and the cove's composite derive their
+ * layout from this one function, which is what keeps them in lockstep.
+ */
+export function frameImageTileSize(
+  imagePixelWidth: number,
+  imagePixelHeight: number,
+  scale: number = DEFAULT_FRAME_IMAGE_SCALE
+): { width: number; height: number } {
+  const s = clampFrameImageScale(scale);
+  return {
+    width: (imagePixelWidth * s) / FRAME_PIXELS_PER_UNIT,
+    height: (imagePixelHeight * s) / FRAME_PIXELS_PER_UNIT,
+  };
+}
+
+/**
+ * How many copies of a tile are needed to cover a surface, and where the grid starts.
+ *
+ * The count is rounded UP and then one extra row/column is added, so the grid always
+ * overhangs the surface on every side — that overhang is what guarantees no uncovered
+ * strip at the top, bottom or edges, and it is clipped away when drawn. The grid is
+ * centred on the surface.
+ */
+export function frameTileGrid(
+  tileWidth: number,
+  tileHeight: number,
+  surfaceWidth: number,
+  surfaceHeight: number
+): { cols: number; rows: number } {
+  const cols = Math.max(1, Math.ceil(surfaceWidth / Math.max(tileWidth, 1e-6)) + 1);
+  const rows = Math.max(1, Math.ceil(surfaceHeight / Math.max(tileHeight, 1e-6)) + 1);
+  return { cols, rows };
+}
 
 export interface BackgroundFrame {
   id: string;
   // ── Image layer ──
   imageUrl?: string | null;
   imageOpacity?: number;         // 0–1, default 1
+  /** @deprecated Layout is always repeat-to-fill now. Kept so older templates parse. */
+  imageFit?: FrameImageFit;
+  /**
+   * Shrink factor applied to the image's native size, 0.1–1 (absent = 0.2).
+   *
+   * Smaller means a physically smaller tile on the wall and more repeats to fill it,
+   * which is how the texture is kept at a believable scale for this set.
+   */
+  imageScale?: number;
   // ── Background layer ──
   backgroundEnabled?: boolean;   // default true
   backgroundType?: "color" | "gradient";
@@ -1003,8 +1120,8 @@ export function createBackgroundFrame(): BackgroundFrame {
     backgroundOpacity: 1,
     x: 0.5,
     y: 0.5,
-    width: 0.4,
-    height: 0.35,
+    width: DEFAULT_FRAME_WIDTH,
+    height: DEFAULT_FRAME_HEIGHT,
     rotation: 0,
     opacity: 1,
     enabled: true,

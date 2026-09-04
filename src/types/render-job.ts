@@ -131,6 +131,12 @@ export interface CreateImageRenderRequest {
   groupId: string;
   /** Batch: render this group for several products at once (defaults to the URL's product). */
   productIds?: string[];
+  /**
+   * Render only these references out of the group. Omit for the whole group.
+   * Intersected with the group server-side, so order and membership still come
+   * from the group itself.
+   */
+  referenceIds?: string[];
   format?: "png" | "jpeg";
   quality?: number;
 }

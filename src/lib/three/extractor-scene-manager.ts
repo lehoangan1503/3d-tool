@@ -4751,15 +4751,20 @@ export class ExtractorSceneManager {
       this.getCuePathLookTarget()
     );
 
-    console.log('[VideoStudio] deterministic recording', {
+    console.log('[VideoStudio] deterministic recording ' + JSON.stringify({
       frames: totalFrames,
       fps,
       duration: `${duration.toFixed(1)}s`,
       size: `${dims.width}x${dims.height}`,
-    });
+    }));
 
     const canvas = this.renderer.domElement;
     let slowestFrameMs = 0;
+    // Per-stage totals. A frame costs render + readback + handoff, and only
+    // measuring the sum leaves you guessing which one to attack.
+    let renderGpuMs = 0;
+    let readbackMs = 0;
+    let sinkMs = 0;
     const startedAt = performance.now();
 
     try {
@@ -4789,20 +4794,30 @@ export class ExtractorSceneManager {
         }
         this.logoBackdrop?.setElapsed(frame / fps);
         this.renderWithBackdrop(this.camera);
+        const afterRender = performance.now();
+        renderGpuMs += afterRender - frameT0;
 
         // Pull the finished frame off the canvas as lossless PNG. toBlob is async
         // and resolves after the GPU has finished the draw, which doubles as the
         // fence that keeps us from reading a half-drawn frame.
+        //
+        // NOTE: PNG compression here is single-threaded main-thread work inside
+        // Chrome, and at 2K it costs far more than drawing the frame did. The
+        // per-stage timings above are what make that visible rather than
+        // inferred.
         const blob = await new Promise<Blob>((resolveBlob, rejectBlob) => {
           canvas.toBlob(
             (b) => (b ? resolveBlob(b) : rejectBlob(new Error(`toBlob returned null at frame ${frame}`))),
             'image/png'
           );
         });
+        const afterReadback = performance.now();
+        readbackMs += afterReadback - afterRender;
 
         // THE backpressure point. Until the sink has the frame, no further
         // rendering happens — which is precisely why no frame can be lost.
         await sink.writeFrame(frame, blob);
+        sinkMs += performance.now() - afterReadback;
 
         const frameMs = performance.now() - frameT0;
         if (frameMs > slowestFrameMs) slowestFrameMs = frameMs;
@@ -4811,13 +4826,21 @@ export class ExtractorSceneManager {
       }
 
       const renderMs = performance.now() - startedAt;
-      console.log('[VideoStudio] frames complete', {
+      // JSON.stringify, not a bare object: Puppeteer forwards console arguments
+      // as strings, so an object logged directly reaches the pod log as
+      // "[object Object]" and every measurement in it is lost.
+      console.log('[VideoStudio] frames complete ' + JSON.stringify({
         frames: totalFrames,
         renderSec: Number((renderMs / 1000).toFixed(1)),
         avgFrameMs: Number((renderMs / totalFrames).toFixed(1)),
         slowestFrameMs: Number(slowestFrameMs.toFixed(1)),
-        note: 'no frames can be dropped on this path',
-      });
+        // Splits the per-frame cost into the two things that can dominate it:
+        // drawing the frame on the GPU, versus getting it off the canvas and
+        // across to Node. They call for completely different fixes.
+        avgRenderMs: Number((renderGpuMs / totalFrames).toFixed(1)),
+        avgReadbackMs: Number((readbackMs / totalFrames).toFixed(1)),
+        avgSinkMs: Number((sinkMs / totalFrames).toFixed(1)),
+      }));
 
       const muxed = await sink.finish(totalFrames, fps);
       if (!muxed) {

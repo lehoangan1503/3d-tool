@@ -191,6 +191,77 @@ export async function dispatchRenderJob(input: DispatchInput): Promise<DispatchR
 }
 
 /**
+ * Narrows a provider string read back from the database.
+ *
+ * worker_provider is a plain text column, so a row written by an older deploy
+ * (or a provider since removed) can hold something this build does not know.
+ * Returning null there means "cannot address that run", which the caller
+ * already handles, rather than casting and dispatching to a nonexistent branch.
+ */
+export function asWorkerProvider(value: string | null): RenderWorkerProvider | null {
+  return value === "runpod" || value === "beam" || value === "modal" || value === "local"
+    ? value
+    : null;
+}
+
+/**
+ * Tells the provider to stop a run that was already dispatched.
+ *
+ * WHY THIS IS NEEDED. Cancelling a job marks it 'canceled' in Postgres, and a
+ * RENDERING worker notices on its next progress heartbeat and aborts. But that
+ * only works once the worker is actually running our page: a run that is still
+ * waiting for GPU capacity ("throttled" on RunPod) has executed no code of ours
+ * and has no heartbeat to check anything on. Nothing in the database can reach
+ * it, so without this call it eventually starts, renders a job the operator
+ * already cancelled, and bills the full render for output nobody wants.
+ *
+ * That went from a rounding error to real money with deterministic video: a
+ * take is minutes of metered GPU rather than seconds, per pod.
+ *
+ * Never throws. The database is already correct by the time this runs, so a
+ * failed cancel is a billing annoyance to log, not an error to fail the request
+ * on — and the worker's own status check remains the backstop.
+ */
+export async function cancelRenderJob(
+  provider: RenderWorkerProvider,
+  workerJobId: string
+): Promise<{ canceled: boolean; error?: string }> {
+  try {
+    switch (provider) {
+      case "runpod": {
+        const apiKey = requiredEnv("RUNPOD_API_KEY");
+        const endpointId = requiredEnv("RUNPOD_ENDPOINT_ID");
+        const base = process.env.RUNPOD_API_BASE ?? "https://api.runpod.ai";
+        // POST /v2/{endpointId}/cancel/{runId} — the run id is what /run
+        // returned and what enqueue.ts stored as worker_job_id.
+        await postJson(
+          `${base}/v2/${endpointId}/cancel/${encodeURIComponent(workerJobId)}`,
+          { Authorization: `Bearer ${apiKey}` },
+          {}
+        );
+        return { canceled: true };
+      }
+      // Beam and Modal expose cancellation on their own APIs, which this app
+      // does not hold credentials for beyond the run endpoint. Their workers
+      // still abort via the status check, so this is a missing optimisation
+      // rather than a correctness gap — stated plainly instead of silently
+      // reporting success.
+      case "beam":
+      case "modal":
+        return { canceled: false, error: `cancel not implemented for ${provider}` };
+      // Nothing to cancel: the local worker is poked synchronously and has no
+      // run id to address.
+      case "local":
+        return { canceled: false };
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[render] cancel of ${provider} run ${workerJobId} failed:`, message);
+    return { canceled: false, error: message };
+  }
+}
+
+/**
  * Public base URL the GPU container should open. The container is outside the
  * VPS network, so localhost / internal IPs are never valid here.
  */

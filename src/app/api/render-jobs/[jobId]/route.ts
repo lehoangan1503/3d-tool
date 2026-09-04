@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { errorResponse, requireUser } from "@/lib/render/enqueue";
 import { RenderPayloadError } from "@/lib/render/build-payload";
 import { renderExpiryFrom } from "@/lib/render/purge";
+import { asWorkerProvider, cancelRenderJob } from "@/lib/render/gpu-dispatch";
 import {
   attachProductNames,
   RENDER_JOB_COLUMNS,
@@ -52,6 +53,14 @@ export async function GET(_request: Request, { params }: RouteParams) {
  * A job still queued is marked canceled so no worker claims it. One already
  * running is also marked canceled: the worker checks the status on each
  * progress heartbeat and aborts, which stops the GPU meter early.
+ *
+ * The status flag alone is not enough, though. It only reaches a worker that is
+ * RUNNING our page and sending heartbeats — a dispatched run still waiting for
+ * GPU capacity has executed none of our code, so nothing in the database can
+ * touch it. Left alone it eventually gets a card, renders a job the operator
+ * already cancelled, and bills the whole thing. So the provider is told to drop
+ * the run as well, which is the only signal that reaches a run that has not
+ * started yet.
  */
 export async function DELETE(_request: Request, { params }: RouteParams) {
   try {
@@ -84,6 +93,14 @@ export async function DELETE(_request: Request, { params }: RouteParams) {
         { error: "Job not found, or already finished" },
         { status: 409 }
       );
+    }
+
+    // Fire-and-forget, like dispatch: the row is already 'canceled', so the
+    // operator's cancel must not wait on a provider round-trip (or fail because
+    // of one). Anything that goes wrong is logged inside cancelRenderJob.
+    const provider = asWorkerProvider(data.worker_provider);
+    if (data.worker_job_id && provider) {
+      void cancelRenderJob(provider, data.worker_job_id);
     }
 
     const [job] = await attachProductNames(auth.ctx.supabase, [data]);

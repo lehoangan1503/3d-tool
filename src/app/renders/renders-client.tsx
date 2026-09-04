@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  AlertTriangle,
   ArrowLeft,
   FileArchive,
   Loader2,
@@ -25,6 +26,14 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { RenderProductCard } from "@/components/render-worker/render-product-card";
 import { RenderProductPicker } from "@/components/render-worker/render-product-picker";
 import {
@@ -79,6 +88,11 @@ export function RendersClient() {
   const [error, setError] = useState<string | null>(null);
   const [zipping, setZipping] = useState<DownloadProgress | null>(null);
   const [clearing, setClearing] = useState(false);
+  // "Xoá đã xong" wipes every finished job AND its Storage files in one click.
+  // A single stray click was unrecoverable, and unlike the per-card X there is
+  // no arming step that could carry the warning — so this one gets a dialog
+  // that names what is about to go.
+  const [confirmClear, setConfirmClear] = useState(false);
 
   // Load the group/template pickers once.
   useEffect(() => {
@@ -336,8 +350,26 @@ export function RendersClient() {
   const allSettled = jobs.length > 0 && !hasLiveJob;
   const canDownloadAll = allSettled && downloadableGroups.length > 0;
   const totalFiles = downloadableGroups.reduce((sum, g) => sum + g.fileCount, 0);
-  const finishedCount = jobs.filter(
+  const finishedJobs = jobs.filter(
     (j) => j.status === "succeeded" || j.status === "failed" || j.status === "canceled"
+  );
+  const finishedCount = finishedJobs.length;
+
+  // What the confirm dialog has to state plainly. The file count is the part
+  // that cannot be undone — the rows could be re-queued from their frozen
+  // payload, but the rendered files are gone the moment this runs.
+  const clearFileCount = finishedJobs.reduce(
+    (sum, j) => sum + (j.purgedAt ? 0 : j.outputs.length),
+    0
+  );
+  const clearProductCount = new Set(
+    finishedJobs.map((j) => j.productId ?? j.id)
+  ).size;
+  // Deleting while something still renders is allowed (the live job is left
+  // alone), but it is worth saying so — otherwise "xoá tất cả" reads as if it
+  // would kill the render in progress too.
+  const liveCount = jobs.filter(
+    (j) => j.status === "queued" || j.status === "running"
   ).length;
 
   async function handleDownloadAll() {
@@ -429,10 +461,15 @@ export function RendersClient() {
       const failed = results.filter((r) => !r.ok);
       if (failed.length > 0) {
         setError(`${failed.length}/${targets.length} job không xoá được`);
+      } else {
+        setMessage(`Đã xoá ${targets.length} mục đã xong`);
       }
       await refreshJobs();
     } finally {
       setClearing(false);
+      // Closed only after the work settles, so the dialog's spinner is what the
+      // user watches instead of the list appearing to do nothing.
+      setConfirmClear(false);
     }
   }
 
@@ -504,7 +541,7 @@ export function RendersClient() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => void handleClearFinished()}
+              onClick={() => setConfirmClear(true)}
               disabled={finishedCount === 0 || clearing}
               title={
                 finishedCount === 0
@@ -632,6 +669,77 @@ export function RendersClient() {
           </div>
         </div>
       </main>
+
+      {/* Bulk delete needs a real confirmation, not an arming click: it takes
+          every finished job on the page and its files at once, and the files
+          are not recoverable. So the dialog names the exact numbers rather
+          than asking "are you sure?" about an unspecified amount. */}
+      <Dialog open={confirmClear} onOpenChange={(open) => !clearing && setConfirmClear(open)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Xoá {finishedCount} mục đã xong?
+            </DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-2 text-left">
+                <p>
+                  Xoá toàn bộ kết quả render đã hoàn thành của{" "}
+                  <span className="font-medium text-foreground">
+                    {clearProductCount} sản phẩm
+                  </span>
+                  {clearFileCount > 0 && (
+                    <>
+                      {" "}kèm{" "}
+                      <span className="font-medium text-destructive">
+                        {clearFileCount} file
+                      </span>{" "}
+                      trên server
+                    </>
+                  )}
+                  .
+                </p>
+                <p className="text-destructive">
+                  File đã xoá không lấy lại được — nếu chưa tải về thì phải render lại.
+                </p>
+                {liveCount > 0 && (
+                  <p>
+                    {liveCount} job đang chạy sẽ{" "}
+                    <span className="font-medium text-foreground">không bị ảnh hưởng</span>.
+                  </p>
+                )}
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmClear(false)}
+              disabled={clearing}
+            >
+              Huỷ
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void handleClearFinished()}
+              disabled={clearing}
+              className="gap-1.5"
+            >
+              {clearing ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Đang xoá...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4" />
+                  Xoá {finishedCount} mục
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

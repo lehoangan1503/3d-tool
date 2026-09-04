@@ -1,7 +1,7 @@
 import { SceneManager } from "@/lib/three/scene-manager";
 import { RUBBER_CONFIG, TOP_CAP_CONFIG } from "@/lib/three/leather-config";
-import type { LeatherColor, ProductType } from "@/types/product";
-import { isLeatherLikeType } from "@/types/product";
+import type { CueLogoId, LeatherColor, ProductType } from "@/types/product";
+import { isCueLogoId, isLeatherLikeType } from "@/types/product";
 
 type ToneMappingMode = "agx" | "neutral";
 
@@ -45,6 +45,18 @@ type ExportedMeta = {
       sheenColor?: string;
     };
     textureScale?: number;
+    /**
+     * Which laser-engraved logo the product uses ("uni", "predator", ...).
+     *
+     * The field was missing here entirely, so the storefront could not receive
+     * it even when the theme sent it — and applySurface silently defaults an
+     * absent logoId to "uni" (scene-manager.ts), which is why every deployed
+     * cue drew the Uni mark regardless of what was picked in the editor.
+     *
+     * The explicit URL overrides in `assets` still win: a theme that pins its
+     * own logo image keeps doing so.
+     */
+    logoId?: string;
   };
 };
 
@@ -65,6 +77,16 @@ function pickLogoUrls(meta: ExportedMeta): { bumper?: string; topCap?: string } 
   const bumper = meta.assets?.bumperLogoUrl || meta.assets?.logoUrl;
   const topCap = meta.assets?.topCapLogoUrl || meta.assets?.logoUrl;
   return { bumper, topCap };
+}
+
+/**
+ * The product's engraved-logo id, validated against the catalog.
+ *
+ * Anything the theme sends that is not a known id is treated as absent, so a
+ * typo in a metafield shows the default mark instead of breaking the viewer.
+ */
+function resolveLogoId(meta: ExportedMeta): CueLogoId {
+  return isCueLogoId(meta.config?.logoId) ? meta.config.logoId : "uni";
 }
 
 async function mountSingleViewer(): Promise<void> {
@@ -102,13 +124,17 @@ async function mountSingleViewer(): Promise<void> {
   // Load 3D model
   await manager.loadModel(modelUrl);
 
-  // Apply surface
+  // Apply surface. logoId decides which engraved mark is baked into the top-cap
+  // and bumper materials; an unknown or absent value falls back to "uni" the
+  // same way settingsJsonToConfig does, so a malformed metafield degrades
+  // rather than throwing on a live storefront.
   await manager.applySurface({
     surfaceUrl: meta.surface_url ?? null,
     productType: meta.type,
     leatherColor: meta.color ?? null,
     leatherTexture: (meta.texture_type as any) ?? null,
     textureScale: meta.config?.textureScale ?? 1,
+    logoId: resolveLogoId(meta),
   });
 
   // Apply exported config (best-effort)

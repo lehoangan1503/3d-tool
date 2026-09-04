@@ -192,6 +192,13 @@ async function renderVideo(
   model: THREE.Group,
   template: VideoTemplate,
   signal?: AbortSignal,
+  /**
+   * The product's engraved logo id. A template's logo backdrop plate set to
+   * "auto" resolves against the SCENE's productLogoId, not the template, and
+   * cueLogoPath(null) silently falls back to "uni" — so without this every
+   * auto-deployed video showed the Uni mark.
+   */
+  productLogoId?: string | null,
 ): Promise<Blob> {
   const esm = new ExtractorSceneManager(1920, 1080);
   const canvas = esm.getCanvas();
@@ -206,6 +213,9 @@ async function renderVideo(
   try {
     if (signal?.aborted) throw new Error("Đã hủy");
     esm.setModel(model);
+    // Must precede startStudioRecording, which is what applies the config and
+    // resolves an "auto" plate.
+    esm.setProductLogoId(productLogoId ?? null);
     const config = ensureFullConfig(template.config);
     return await esm.startStudioRecording(config);
   } finally {
@@ -269,7 +279,13 @@ export async function runProductDeploy(
       const ref = references[i];
       // Same args as the deploy dialog: surface only applied to dynamic image
       // frames (cue uses each frame's snapshot surface).
-      const blob = await renderReferenceToBlob(model, ref, undefined, product.surface_url);
+      const blob = await renderReferenceToBlob(
+        model,
+        ref,
+        undefined,
+        product.surface_url,
+        productConfig?.logoId ?? null,
+      );
       imageBlobs.push({ name: ref.name, blob });
     }
     onProgress?.({ step: "render", done: references.length, total: references.length });
@@ -278,7 +294,7 @@ export async function runProductDeploy(
     if (videoTemplate && model) {
       if (signal?.aborted) throw new Error("Đã hủy");
       onProgress?.({ step: "video" });
-      videoBlob = await renderVideo(model, videoTemplate, signal);
+      videoBlob = await renderVideo(model, videoTemplate, signal, productConfig?.logoId ?? null);
     }
   } finally {
     sm.dispose();

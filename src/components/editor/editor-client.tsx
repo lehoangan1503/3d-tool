@@ -1679,6 +1679,7 @@ export function EditorClient({
         productName={product.name}
         productType={product.type}
         productSurfaceUrl={product.surface_url}
+        productLogoId={config.logoId}
         initialReferenceId={deepLinkTool === "extractor" ? deepLinkRefId : null}
         open={showImageExtractor}
         onClose={() => setShowImageExtractor(false)}
@@ -1698,6 +1699,7 @@ export function EditorClient({
         <ShopifyDeployDialog
           product={product}
           sceneManager={sceneManager}
+          productLogoId={config.logoId}
           deployment={deployment}
           canDelete={canDelete}
           onDeploymentChange={setDeployment}

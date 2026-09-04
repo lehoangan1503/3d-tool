@@ -33,8 +33,16 @@ function renderRefForProduct(
   model: ReturnType<SceneManager["getModelForClone"]>,
   reference: ExtractorReference,
   overrideSurfaceUrl?: string,
+  /** Engraved logo id, so a snapshot's "auto" backdrop plate matches the cue. */
+  productLogoId?: string | null,
 ): Promise<Blob> {
-  return renderReferenceToBlob(model, reference, overrideSurfaceUrl, overrideSurfaceUrl ?? null);
+  return renderReferenceToBlob(
+    model,
+    reference,
+    overrideSurfaceUrl,
+    overrideSurfaceUrl ?? null,
+    productLogoId,
+  );
 }
 
 async function fetchProductConfig(productId: string): Promise<ProductConfig | null> {
@@ -152,7 +160,12 @@ export function BulkImageTab({ products }: Props) {
 
         for (const ref of references) {
           if (cancelledRef.current) break;
-          const blob = await renderRefForProduct(model, ref, product.surface_url ?? undefined);
+          const blob = await renderRefForProduct(
+            model,
+            ref,
+            product.surface_url ?? undefined,
+            productConfig?.logoId ?? null,
+          );
           const safeName = (product.name ?? product.id).replace(/[^a-zA-Z0-9-_]/g, "_");
           const safeRef = (ref.name ?? ref.id).replace(/[^a-zA-Z0-9-_]/g, "_");
           blobs.push({ name: `${safeName}_${safeRef}.png`, blob });

@@ -71,6 +71,20 @@ export async function loadProductIntoEsm(
     const model = sm.getModelForClone();
     if (!model) throw new Error(`No model loaded for product "${product.name}"`);
     esm.setModel(model);
+
+    // Tell the studio which logo is engraved on this cue.
+    //
+    // Separate from the applySurface logoId above: THAT bakes the mark into the
+    // cue's own materials, while this drives a logo BACKDROP plate set to
+    // "auto" (resolveLogoBackdropUrl -> cueLogoPath). cueLogoPath falls back to
+    // CUE_LOGO_OPTIONS[0] — "uni" — for a null id, silently, so every caller
+    // that forgot this drew a Uni plate next to a correctly-engraved cue.
+    //
+    // Set here rather than in each caller because this function is the one
+    // place that already knows both the ESM and the product's config; the video
+    // studio dialog got it right only because editor-client happens to pass
+    // config.logoId down as a prop.
+    esm.setProductLogoId(config?.logoId ?? null);
   } finally {
     sm.dispose();
     if (container.parentNode) container.parentNode.removeChild(container);

@@ -266,6 +266,29 @@ interface CachedHdri {
 }
 
 /**
+ * Per-recording tally of frames the wall-clock loop could not keep up with.
+ *
+ * Collected only to answer one question before any rewrite: is the stutter in
+ * the output file caused by frames never being rendered (a loop problem) or by
+ * the encoder (a bitrate/codec problem)? The two look identical on playback but
+ * have completely different fixes.
+ */
+interface FrameDropDiagnostics {
+  /** Frames actually rendered during the animation phase. */
+  rendered: number;
+  /** Frames the loop skipped because a render overran its budget. */
+  dropped: number;
+  /** Largest single run of consecutive skipped frames — the worst visible jump. */
+  longestGap: number;
+  /** Slowest single renderFrame() call, in ms. */
+  slowestFrameMs: number;
+  /** How many renders exceeded the per-frame budget (1000 / fps). */
+  overBudget: number;
+  /** Animation progress (%) at which the slowest frame occurred. */
+  worstAtProgress: number;
+}
+
+/**
  * Specialized Three.js scene manager for high-quality image and video extraction.
  * Creates an offscreen WebGL renderer with preserveDrawingBuffer for canvas capture.
  */
@@ -4415,6 +4438,23 @@ export class ExtractorSceneManager {
     let animStartTime = -1;      // rAF timestamp when Phase 2 animation first begins
     let encoderWarmupDone = false; // true once first ondataavailable (warmup timeslice) fires
 
+    // ── Dropped-frame diagnostics ─────────────────────────────────────────────
+    // The loop advances frameCount to whatever wall-clock says the current frame
+    // index is (targetFrame). When a render overruns its FRAME_INTERVAL_MS budget
+    // the index JUMPS, and every index in between is never rendered — the camera
+    // moves in one big step instead of several small ones, which is what reads as
+    // stutter in the file. captureStream gives no backpressure, so nothing else
+    // reports this. Counting the jumps here tells us whether stutter is dropped
+    // frames (fix = deterministic loop) or an encoder artefact (fix = elsewhere).
+    const diag: FrameDropDiagnostics = {
+      rendered: 0,
+      dropped: 0,
+      longestGap: 0,
+      slowestFrameMs: 0,
+      overBudget: 0,
+      worstAtProgress: 0,
+    };
+
     const start = config.cameraStart;
     const end = effectiveEnd;
     const cue = config.cueConfig;
@@ -4469,6 +4509,16 @@ export class ExtractorSceneManager {
         this.animationFrameId = requestAnimationFrame(animate);
         return;
       }
+      // A jump of more than one index means (targetFrame - frameCount - 1) frames
+      // were skipped outright. Only counted once the animation is underway, since
+      // warmup renders the same static frame and skipping there is harmless.
+      if (encoderWarmupDone && frameCount >= 0) {
+        const skipped = targetFrame - frameCount - 1;
+        if (skipped > 0) {
+          diag.dropped += skipped;
+          if (skipped > diag.longestGap) diag.longestGap = skipped;
+        }
+      }
       frameCount = targetFrame;
 
       // ── Phase 1: Encoder warmup ─────────────────────────────────────────────
@@ -4510,6 +4560,26 @@ export class ExtractorSceneManager {
         renderFrame(easingFn(1));
         onProgress?.(100);
         this.animationFrameId = null;
+        const expected = Math.round(animDurationMs / FRAME_INTERVAL_MS);
+        const lossPct = expected > 0 ? (diag.dropped / expected) * 100 : 0;
+        console.log('[VideoStudio] frame report', {
+          fps: RECORD_FPS,
+          budgetMs: Number(FRAME_INTERVAL_MS.toFixed(1)),
+          expected,
+          rendered: diag.rendered,
+          dropped: diag.dropped,
+          lossPct: `${lossPct.toFixed(1)}%`,
+          longestGap: diag.longestGap,
+          slowestFrameMs: Number(diag.slowestFrameMs.toFixed(1)),
+          worstAtProgress: `${diag.worstAtProgress}%`,
+          framesOverBudget: diag.overBudget,
+          verdict:
+            lossPct >= 5
+              ? 'DROPPED FRAMES are the stutter — a deterministic loop fixes this'
+              : diag.dropped > 0
+                ? 'minor drops — visible only as occasional hitches'
+                : 'no drops — stutter (if any) is an encoder/bitrate artefact, not the loop',
+        });
         this.mediaRecorder?.stop();
         return;
       }
@@ -4527,7 +4597,19 @@ export class ExtractorSceneManager {
         );
       }
 
+      // Measure the render itself. renderFrame issues the draw calls; the GPU may
+      // still be working when it returns, so this is a LOWER bound on frame cost —
+      // enough to tell "comfortably inside budget" from "nowhere near it".
+      const frameT0 = performance.now();
       renderFrame(easingFn(progress));
+      const frameMs = performance.now() - frameT0;
+      diag.rendered += 1;
+      if (frameMs > diag.slowestFrameMs) {
+        diag.slowestFrameMs = frameMs;
+        diag.worstAtProgress = Math.round(progress * 100);
+      }
+      if (frameMs > FRAME_INTERVAL_MS) diag.overBudget += 1;
+
       this.animationFrameId = requestAnimationFrame(animate);
     };
 

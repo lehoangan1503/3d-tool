@@ -219,7 +219,17 @@ export default function RenderWorkerClient() {
         try {
           // The very same function the browser deploy dialog calls, so a
           // server render is pixel-identical to the operator's preview.
-          const pngBlob = await renderReferenceToBlob(model, ref, undefined, product.surfaceUrl);
+          const pngBlob = await renderReferenceToBlob(
+            model,
+            ref,
+            undefined,
+            product.surfaceUrl,
+            // A frame's studio snapshot can carry an "auto" logo backdrop, which
+            // resolves against the scene rather than the snapshot — so the
+            // engraved logo id has to be handed in here too, not only to
+            // applySurface.
+            product.config?.logoId ?? null,
+          );
 
           const blob = format === "jpeg" ? await toJpeg(pngBlob, quality) : pngBlob;
 
@@ -285,6 +295,19 @@ export default function RenderWorkerClient() {
 
       try {
         esm.setModel(model);
+
+        // Tell the studio which logo is engraved on this cue, BEFORE the config
+        // is applied by startStudioRecording.
+        //
+        // A logo plate set to "auto" resolves through
+        // resolveLogoBackdropUrl(config, productLogoId) -> cueLogoPath(...),
+        // and cueLogoPath falls back to CUE_LOGO_OPTIONS[0] — "uni" — for a
+        // null id, silently. So without this line every GPU-rendered video drew
+        // the Uni mark no matter which logo the product actually uses. The
+        // browser dialog never hit it because editor-client passes
+        // productLogoId={config.logoId} as a prop; the worker has no editor to
+        // take it from, only the frozen payload.
+        esm.setProductLogoId(product.config?.logoId ?? null);
 
         let lastBeat = 0;
         const blob = await esm.startStudioRecording(ensureFullConfig(config), (pct: number) => {

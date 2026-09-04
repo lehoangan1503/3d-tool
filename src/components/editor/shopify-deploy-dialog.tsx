@@ -126,6 +126,18 @@ interface DeployResult {
 interface Props {
   product: Product;
   sceneManager: SceneManager | null;
+  /**
+   * The product's engraved logo id (`ProductConfig.logoId`), from the editor's
+   * live config.
+   *
+   * The cue model itself already carries the right mark (it is cloned from the
+   * editor's SceneManager), but a studio snapshot's logo BACKDROP plate set to
+   * "auto" resolves against the ExtractorSceneManager's own productLogoId —
+   * and cueLogoPath(null) silently falls back to "uni". Without this the
+   * deployed images and video showed a Uni plate beside a correctly engraved
+   * cue. Same reason VideoStudio takes a productLogoId prop.
+   */
+  productLogoId?: string | null;
   deployment?: ShopifyDeploymentSummary | null;
   canDelete?: boolean;
   // Lets the parent (editor) update its badge / button / header links live,
@@ -422,7 +434,7 @@ function SkillModal({ skill, onClose, onSaved, onDeleted }: { skill: ShopifySkil
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
-export function ShopifyDeployDialog({ product, sceneManager, deployment: initialDeployment = null, canDelete = false, onDeploymentChange, onClose }: Props) {
+export function ShopifyDeployDialog({ product, sceneManager, productLogoId, deployment: initialDeployment = null, canDelete = false, onDeploymentChange, onClose }: Props) {
   const { storeId, stores, codeFormat } = useStore();
   const activeStoreName = stores.find((s) => s.id === storeId)?.name ?? null;
   const codeFormatDef = getProductCodeFormat(codeFormat);
@@ -761,7 +773,13 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
     for (let i = 0; i < groupRefs.length; i++) {
       const ref = groupRefs[i];
       try {
-        const blob = await renderReferenceToBlob(model, ref, undefined, product.surface_url);
+        const blob = await renderReferenceToBlob(
+          model,
+          ref,
+          undefined,
+          product.surface_url,
+          productLogoId ?? null,
+        );
         const url = URL.createObjectURL(blob);
         renderedImageUrlsRef.current.push(url);
         results.push({ refId: ref.id, refName: ref.name, url, blob });
@@ -777,7 +795,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       }
     }
     setRenderingImages(false);
-  }, [sceneManager, groupRefs, renderedImages, product.surface_url, orderForGallery]);
+  }, [sceneManager, groupRefs, renderedImages, product.surface_url, productLogoId, orderForGallery]);
 
   // ── Render video ──
   const handleRenderVideo = useCallback(async () => {
@@ -830,6 +848,9 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
 
     try {
       esm.setModel(model);
+      // Must precede startStudioRecording, which applies the config and
+      // resolves an "auto" logo plate against this value.
+      esm.setProductLogoId(productLogoId ?? null);
 
       let lastProgressMs = 0;
       const blob = await esm.startStudioRecording(config, (progressPct) => {
@@ -867,7 +888,7 @@ export function ShopifyDeployDialog({ product, sceneManager, deployment: initial
       if (canvasContainerRef.current) canvasContainerRef.current.innerHTML = "";
       setRenderingVideo(false);
     }
-  }, [sceneManager, selectedTemplateId, templates]);
+  }, [sceneManager, selectedTemplateId, templates, productLogoId]);
 
   // Selected skill texts (in pick order) → sent as a SYSTEM prompt for strict
   // adherence. The AI Hint stays separate as the theme direction.

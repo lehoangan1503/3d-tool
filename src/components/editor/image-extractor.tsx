@@ -71,6 +71,17 @@ export async function renderCueFrameViaStudio(
   reuseEsm?: ExtractorSceneManager,
   wallsTransparent?: boolean,
   overrideSurfaceUrl?: string,
+  /**
+   * The product's engraved logo id (`ProductConfig.logoId`).
+   *
+   * Needed because a snapshot's logo backdrop plate can be set to "auto",
+   * which resolves against the SCENE's productLogoId — not against anything in
+   * the snapshot. Unset, cueLogoPath(null) silently returns the first catalog
+   * entry ("uni"), so an "auto" plate drew the Uni mark beside a correctly
+   * engraved cue. Optional so existing callers keep compiling; they simply
+   * keep the old (wrong) behaviour until they pass it.
+   */
+  productLogoId?: string | null,
 ): Promise<string> {
   const size = Math.max(2048, width, height);
   const studioEsm = reuseEsm ?? new ExtractorSceneManager(size, size);
@@ -79,6 +90,10 @@ export async function renderCueFrameViaStudio(
   try {
     if (reuseEsm) studioEsm.resize(size, size);
     if (model) studioEsm.setModel(model);
+
+    // Before setupStudioFromStudioConfig, which is what resolves an "auto"
+    // plate against this value.
+    studioEsm.setProductLogoId(productLogoId ?? null);
 
     // Setup the full studio scene (walls, lights, shadow floor, camera)
     await studioEsm.setupStudioFromStudioConfig(migratedSnapshot);
@@ -152,6 +167,8 @@ export async function renderReferenceToBlob(
   reference: ExtractorReference,
   overrideSurfaceUrl?: string,
   productSurfaceUrl?: string | null,
+  /** The product's engraved logo id, for snapshots whose backdrop plate is "auto". */
+  productLogoId?: string | null,
 ): Promise<Blob> {
   const canvasWidth  = reference.canvasWidth  ?? DEFAULT_CANVAS_WIDTH;
   const canvasHeight = reference.canvasHeight ?? DEFAULT_CANVAS_HEIGHT;
@@ -180,6 +197,7 @@ export async function renderReferenceToBlob(
             studioEsm,
             shadow.wallsTransparent,
             overrideSurfaceUrl,
+            productLogoId,
           );
         } else {
           if (!legacyEsm) {
@@ -359,13 +377,22 @@ interface ImageExtractorProps {
   productType: ProductType;
   /** Current product's flat surface design URL — used by dynamic-surface frames. */
   productSurfaceUrl?: string | null;
+  /**
+   * The product's engraved logo id (`ProductConfig.logoId`).
+   *
+   * A frame's studio snapshot can enable a logo BACKDROP plate set to "auto",
+   * which resolves against the scene's productLogoId rather than anything in
+   * the snapshot — and cueLogoPath(null) silently falls back to "uni". Without
+   * this, an auto plate drew the Uni mark next to a correctly engraved cue.
+   */
+  productLogoId?: string | null;
   /** Reference to select automatically on open (deep link from the dashboard). */
   initialReferenceId?: string | null;
   onClose: () => void;
   open: boolean;
 }
 
-export function ImageExtractor({ sceneManager, productName, productType, productSurfaceUrl, initialReferenceId, onClose, open }: ImageExtractorProps) {
+export function ImageExtractor({ sceneManager, productName, productType, productSurfaceUrl, productLogoId, initialReferenceId, onClose, open }: ImageExtractorProps) {
   // Frames state with full undo/redo support
   const {
     value: frames,
@@ -535,6 +562,8 @@ export function ImageExtractor({ sceneManager, productName, productType, product
               Math.round(frame.transform.height),
               studioEsm,
               shadow.wallsTransparent,
+              undefined,
+              productLogoId ?? null,
             );
             continue;
           }
@@ -643,6 +672,8 @@ export function ImageExtractor({ sceneManager, productName, productType, product
                   Math.round(frame.transform.height),
                   studioEsm,
                   shadow.wallsTransparent,
+                  undefined,
+                  productLogoId ?? null,
                 );
                 continue;
               }
@@ -1021,6 +1052,8 @@ export function ImageExtractor({ sceneManager, productName, productType, product
               Math.round(frame.transform.height),
               studioEsm,
               shadow.wallsTransparent,
+              undefined,
+              productLogoId ?? null,
             );
           } else {
             // Legacy export path — no studio snapshot
@@ -1186,6 +1219,8 @@ export function ImageExtractor({ sceneManager, productName, productType, product
                 Math.round(frame.transform.height),
                 studioEsm,
                 shadow.wallsTransparent,
+                undefined,
+                productLogoId ?? null,
               );
             } else {
               // Legacy export path

@@ -246,6 +246,7 @@ function SortableVideoTile({
   position,
   expanded,
   onRemove,
+  onOpen,
 }: {
   id: string;
   label: string;
@@ -253,6 +254,7 @@ function SortableVideoTile({
   position: number | null;
   expanded: boolean;
   onRemove: () => void;
+  onOpen: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   const style = { transform: CSS.Transform.toString(transform), transition };
@@ -264,9 +266,19 @@ function SortableVideoTile({
     >
       {position !== null && <OrderBadge position={position} color="purple" />}
       <video src={url} muted playsInline className="w-full h-full object-cover pointer-events-none" />
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <Video className="h-5 w-5 text-white/70 drop-shadow" />
-      </div>
+      {/* The whole tile opens the player. It sits under the drag/remove buttons
+          (which carry their own z-index) so those keep working, and above the
+          <video>, which is pointer-events-none precisely so this can receive the
+          click instead. */}
+      <button
+        type="button"
+        onClick={onOpen}
+        title="Xem video"
+        aria-label={`Xem ${label}`}
+        className="absolute inset-0 flex items-center justify-center cursor-pointer"
+      >
+        <Video className="h-5 w-5 text-white/70 drop-shadow transition-transform group-hover:scale-125" />
+      </button>
       <div className="absolute bottom-0 left-0 right-0 bg-black/70 px-1 py-0.5">
         <p className="text-[10px] text-purple-200/90 truncate">{label}</p>
       </div>
@@ -521,6 +533,8 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
   // Ordered list of videos to deploy (rendered from templates + user uploads).
   // Restored from the saved snapshot so reopening previews them; videoUrls[] is
   // the current field, with a fallback to the legacy single videoUrl.
+  /** The video the player dialog is showing, or null when it is closed. */
+  const [videoPreview, setVideoPreview] = useState<{ url: string; label: string } | null>(null);
   const [renderedVideos, setRenderedVideos] = useState<RenderedVideo[]>(() => {
     const urls = prefill?.videoUrls?.length ? prefill.videoUrls : prefill?.videoUrl ? [prefill.videoUrl] : [];
     return urls.filter(Boolean).map((url, i) => ({
@@ -1918,6 +1932,7 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
                           position={2 + idx}
                           expanded={false}
                           onRemove={() => removeVideo(rv.id)}
+                          onOpen={() => setVideoPreview({ url: rv.url, label: rv.label })}
                         />
                       ))}
                     </div>
@@ -2620,6 +2635,28 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
       )}
 
       {/* Ask whether to save the draft before closing an unsaved product. */}
+      {/* Video player. Mounted only while open so the <video> is created fresh
+          each time — a reused element keeps the previous clip's currentTime and
+          would open mid-way through. */}
+      <Dialog open={videoPreview !== null} onOpenChange={(open) => !open && setVideoPreview(null)}>
+        <DialogContent className="sm:max-w-3xl border-white/10 bg-zinc-900 p-3 text-white">
+          <DialogHeader>
+            <DialogTitle className="text-sm font-normal text-white/80">{videoPreview?.label}</DialogTitle>
+            <DialogDescription className="sr-only">Xem trước video sẽ đăng lên Shopify</DialogDescription>
+          </DialogHeader>
+          {videoPreview && (
+            <video
+              src={videoPreview.url}
+              controls
+              autoPlay
+              loop
+              playsInline
+              className="max-h-[75vh] w-full rounded-md bg-black object-contain"
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={confirmCloseOpen} onOpenChange={(open) => !saving && setConfirmCloseOpen(open)}>
         <DialogContent className="sm:max-w-md border-white/10 bg-zinc-900 text-white">
           <DialogHeader>

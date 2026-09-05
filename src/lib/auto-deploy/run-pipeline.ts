@@ -12,6 +12,7 @@ import { parseProductTitle } from "@/lib/shopify/parse-title";
 import { buildPreviewPose } from "@/lib/shopify/preview-pose";
 import { ensureFullConfig, type VideoStudioConfig } from "@/types/video-studio";
 import type { AutoDeployConfig } from "./types";
+import { createStudioFrameSink, BROWSER_SUPERSAMPLE } from "@/lib/video/webcodecs-frame-sink";
 
 export type RunStep = "render" | "video" | "upload" | "content" | "deploy";
 
@@ -217,7 +218,7 @@ async function renderVideo(
     // resolves an "auto" plate.
     esm.setProductLogoId(productLogoId ?? null);
     const config = ensureFullConfig(template.config);
-    return await esm.startStudioRecording(config);
+    return await esm.startStudioRecording(config, undefined, await createStudioFrameSink(config), BROWSER_SUPERSAMPLE);
   } finally {
     esm.dispose();
     if (holder.parentNode) holder.parentNode.removeChild(holder);
@@ -320,8 +321,8 @@ export async function runProductDeploy(
   let videoUrl: string | null = null;
   if (videoBlob) {
     if (signal?.aborted) throw new Error("Đã hủy");
-    const videoPath = `shopify-mockups/${product.id}/${ts}-video.webm`;
-    videoUrl = await uploadBlobToStorage(videoBlob, videoPath, "video/webm");
+    const videoPath = `shopify-mockups/${product.id}/${ts}-video.mp4`;
+    videoUrl = await uploadBlobToStorage(videoBlob, videoPath, "video/mp4");
   }
 
   // ── Step 3: generate AI content ──

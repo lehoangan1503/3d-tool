@@ -64,14 +64,20 @@ declare global {
 /**
  * Builds the frame sink that writes through to the pod's disk.
  *
- * Returns null when the Node bridges are absent — a plain browser, or a worker
- * image predating deterministic recording — so the caller keeps the real-time
- * path instead of failing.
+ * Throws when the Node bridges are absent. There is no longer a real-time path
+ * to fall back to, so a pod running RENDER_DETERMINISTIC_VIDEO=0 or a worker
+ * image predating deterministic recording must fail the job loudly rather than
+ * silently producing a stuttering file.
  */
-function createWorkerFrameSink(): DeterministicFrameSink | null {
+function createWorkerFrameSink(): DeterministicFrameSink {
   const writeFrame = window.__writeFrame;
   const muxFrames = window.__muxFrames;
-  if (!writeFrame || !muxFrames) return null;
+  if (!writeFrame || !muxFrames) {
+    throw new Error(
+      "Worker exposed no frame sink: this pod cannot record video. " +
+      "Check RENDER_DETERMINISTIC_VIDEO and the worker image version."
+    );
+  }
 
   return {
     async writeFrame(index: number, frame: Blob): Promise<void> {
@@ -92,7 +98,7 @@ function createWorkerFrameSink(): DeterministicFrameSink | null {
       await writeFrame(index, base64);
     },
 
-    async finish(frameCount: number, fps: number): Promise<Blob | null> {
+    async finish(frameCount: number, fps: number): Promise<Blob> {
       const result = await muxFrames(frameCount, fps);
       if (!result.ok) throw new Error(`ffmpeg failed: ${result.error}`);
       // Base64 back to bytes. Done once per job, so the simple decode is fine.
@@ -373,15 +379,10 @@ export default function RenderWorkerClient() {
         // take it from, only the frozen payload.
         esm.setProductLogoId(product.config?.logoId ?? null);
 
-        // Deterministic when the worker exposed its frame bridges, real-time
-        // otherwise. Logged either way: the two paths produce visibly different
-        // files, so which one ran must be evident from the pod log alone.
+        // Throws if the pod did not install its bridges, which fails the job
+        // before a single frame is rendered rather than after all of them.
         const sink = createWorkerFrameSink();
-        log(
-          sink
-            ? "recording mode: deterministic (frame-by-frame -> ffmpeg, no dropped frames)"
-            : "recording mode: real-time (MediaRecorder) — worker exposed no frame sink"
-        );
+        log("recording mode: deterministic (frame-by-frame -> ffmpeg, no dropped frames)");
 
         let lastBeat = 0;
         const blob = await esm.startStudioRecording(ensureFullConfig(config), (pct: number) => {
@@ -397,7 +398,7 @@ export default function RenderWorkerClient() {
             void reportProgress(activeJobId, Math.round(pct), 100, `Render video ${Math.round(pct)}%`)
               .catch(() => { canceledRef.current = true; esm.stopRecording(); });
           }
-        }, sink ?? undefined);
+        }, sink);
 
         if (canceledRef.current) throw new JobCanceledError();
 

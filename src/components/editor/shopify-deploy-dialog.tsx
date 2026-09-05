@@ -62,6 +62,7 @@ import { PriceTablesEditor } from "@/components/shopify/price-tables-editor";
 import { priceVariants } from "@/lib/shopify/pricing";
 import { ShaftConfigEditor } from "@/components/editor/shaft-config-editor";
 import { buildPreviewPose } from "@/lib/shopify/preview-pose";
+import { createStudioFrameSink, BROWSER_SUPERSAMPLE } from "@/lib/video/webcodecs-frame-sink";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -101,7 +102,7 @@ interface RenderedVideo {
   label: string;
   /** True when restored from form_data (url already hosted). */
   saved?: boolean;
-  /** MIME type of the blob (rendered = video/webm; uploads keep their own). */
+  /** MIME type of the blob (rendered = video/mp4; uploads keep their own). */
   mimeType?: string;
 }
 
@@ -853,6 +854,7 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
       esm.setProductLogoId(productLogoId ?? null);
 
       let lastProgressMs = 0;
+      const sink = await createStudioFrameSink(config);
       const blob = await esm.startStudioRecording(config, (progressPct) => {
         if (cancelVideoRef.current) {
           esm.stopRecording();
@@ -865,7 +867,7 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
           setVideoProgressPct(Math.round(progressPct));
           setVideoProgressLabel(`${fmt(elapsed)} / ${fmt(totalDuration)} (${Math.round(progressPct)}%)`);
         }
-      });
+      }, sink, BROWSER_SUPERSAMPLE);
 
       if (!cancelVideoRef.current) {
         const url = URL.createObjectURL(blob);
@@ -1043,7 +1045,7 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
           videoUrls.push(rv.url);
           continue;
         }
-        const mime = rv.mimeType || rv.blob.type || "video/webm";
+        const mime = rv.mimeType || rv.blob.type || "video/mp4";
         const ext = mime.includes("mp4") ? "mp4" : mime.includes("quicktime") || mime.includes("mov") ? "mov" : "webm";
         const videoPath = `shopify-mockups/${product.id}/${ts}-video-${i}.${ext}`;
         videoUrls.push(await uploadBlobToStorage(rv.blob, videoPath, mime));

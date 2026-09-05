@@ -33,6 +33,16 @@ const BASE = (process.env.RUNPOD_WEBHOOK_GET_JOB ?? "").replace(/\/job-take.*$/,
 /** Exit after this long with no job so the pod stops billing. */
 const IDLE_EXIT_MS = Number(process.env.RUNPOD_IDLE_EXIT_MS ?? 60_000);
 
+/**
+ * Pause between empty polls.
+ *
+ * Without this the idle branch below spins: `continue` goes straight back to
+ * takeJob() with no delay, so an idle pod issues thousands of requests a second
+ * to the provider's queue API while billing runs. The pod looks "running" the
+ * whole time and produces nothing.
+ */
+const POLL_INTERVAL_MS = Number(process.env.RUNPOD_POLL_INTERVAL_MS ?? 2000);
+
 function log(...args) {
   console.log("[runpod]", ...args);
 }
@@ -113,6 +123,9 @@ async function main() {
         log("idle — exiting so the pod scales to zero");
         return;
       }
+      // Sleep before polling again. See POLL_INTERVAL_MS: without it this
+      // branch is a hot loop against the queue API, on the billing clock.
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       continue;
     }
 

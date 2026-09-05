@@ -36,7 +36,7 @@ import {
   Clapperboard,
 } from "lucide-react";
 import type { SceneManager } from "@/lib/three/scene-manager";
-import { ExtractorSceneManager, HDRI_OPTIONS_FALLBACK } from "@/lib/three/extractor-scene-manager";
+import { ExtractorSceneManager, HDRI_OPTIONS_FALLBACK, RecordingCanceledError } from "@/lib/three/extractor-scene-manager";
 import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CameraShapeParams, CameraWaypoint, CueHdriConfig, VideoRatio, CornerFillConfig, LogoBackdropConfig, SceneBackgroundConfig } from "@/types/video-studio";
 import { DEFAULT_CORNER_FILL, DEFAULT_LOGO_BACKDROP, DEFAULT_SCENE_BACKGROUND, WALL_WIDTH, WALL_HEIGHT, loadGlobalLogoBackdrop, saveGlobalLogoBackdrop } from "@/types/video-studio";
 import type { StudioEnvironmentAsset, StudioEnvironmentConfig } from "@/types/studio-environment";
@@ -75,6 +75,7 @@ import { BackgroundPanel } from "./background-panel";
 import { LogoBackdropPanel } from "./logo-backdrop-panel";
 import { StudioTemplateSelector, type StudioTemplateSelectorHandle } from "./studio-template-selector";
 import { SceneViewControls, type SelectionInfo } from "./scene-view-controls";
+import { createStudioFrameSink, BROWSER_SUPERSAMPLE } from "@/lib/video/webcodecs-frame-sink";
 
 /** Inline editable number field for transform values */
 function TransformInput({ label, value, onChange, suffix = "" }: { label: string; value: number; onChange: (v: number) => void; suffix?: string }) {
@@ -1634,6 +1635,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         templateSelectorRef.current?.silentSave();
       }
 
+      const sink = await createStudioFrameSink(recordConfig);
       const blob = await extractorRef.current.startStudioRecording(recordConfig, (p) => {
         // Throttle React state updates: setProgress at most every 100ms so the
         // component doesn't re-render at 60fps while the GPU is under full load.
@@ -1643,14 +1645,18 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
           lastProgressUpdateRef.current = now;
           setProgress(p);
         }
-      });
+      }, sink, BROWSER_SUPERSAMPLE);
       const url = URL.createObjectURL(blob);
       blobUrlsRef.current.push(url);
       videoUrlRef.current = url;
       setVideoUrl(url);
       setMainTab("video");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Recording failed");
+      // Pressing "Dừng" rejects the take by design — that is not a failure to
+      // report, and an error dialog for a deliberate stop is just noise.
+      if (!(err instanceof RecordingCanceledError)) {
+        setError(err instanceof Error ? err.message : "Recording failed");
+      }
     } finally {
       setIsRecording(false);
       isRecordingRef.current = false;
@@ -1682,7 +1688,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       .replace(/^-|-$/g, "");
     const a = document.createElement("a");
     a.href = videoUrl;
-    a.download = `${safeName}-studio-${ratioLabel}-${qualityLabel}.webm`;
+    a.download = `${safeName}-studio-${ratioLabel}-${qualityLabel}.mp4`;
     a.click();
   };
 

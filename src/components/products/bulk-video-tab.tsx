@@ -11,6 +11,7 @@ import type { VideoStudioTemplate, VideoStudioConfig } from "@/types/video-studi
 import { ensureFullConfig, computeVideoDuration, isCameraFixed } from "@/types/video-studio";
 import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import { loadProductIntoEsm } from "@/lib/three/load-product-for-esm";
+import { createStudioFrameSink, BROWSER_SUPERSAMPLE } from "@/lib/video/webcodecs-frame-sink";
 
 /** Max videos storable in browser RAM without auto-download before OOM risk */
 const MAX_STORED_VIDEOS = 10;
@@ -172,6 +173,7 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
       // Throttle React state updates: at most every 100ms to avoid re-rendering
       // at 60-120fps while the GPU is under full recording load.
       let lastProgressMs = 0;
+      const sink = await createStudioFrameSink(config);
       const blob = await esm.startStudioRecording(config, (progressPct) => {
         if (cancelledRef.current) { esm.stopRecording(); return; }
         const now = performance.now();
@@ -184,7 +186,7 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
             progressLabel: `${fmt(elapsed)} / ${fmt(totalDuration)} (${Math.round(progressPct)}%)`,
           });
         }
-      });
+      }, sink, BROWSER_SUPERSAMPLE);
 
       // Create a persistent object URL — kept alive so the user can click the card
       // to view the recorded video in a new tab even after auto-download fires.
@@ -195,7 +197,7 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
       if (autoDownloadRef.current) {
         const safeName = (item.product.name ?? item.product.id).replace(/[^a-zA-Z0-9-_]/g, "_");
         const safeTpl = item.template.name.replace(/[^a-zA-Z0-9-_]/g, "_");
-        const fileName = `${safeName}_${safeTpl}.webm`;
+        const fileName = `${safeName}_${safeTpl}.mp4`;
 
         if (dirHandleRef.current) {
           // File System Access API — write directly to user-chosen folder.
@@ -336,7 +338,7 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
         folders.set(safeName, folder);
       }
       const safeTpl = item.template.name.replace(/[^a-zA-Z0-9-_]/g, "_");
-      folder.file(`${safeName}_${safeTpl}.webm`, item.blob);
+      folder.file(`${safeName}_${safeTpl}.mp4`, item.blob);
     }
     const zipBlob = await zip.generateAsync({ type: "blob" });
     const url = URL.createObjectURL(zipBlob);
@@ -354,7 +356,7 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
     a.href = url;
     const safeName = (item.product.name ?? item.product.id).replace(/[^a-zA-Z0-9-_]/g, "_");
     const safeTpl = item.template.name.replace(/[^a-zA-Z0-9-_]/g, "_");
-    a.download = `${safeName}_${safeTpl}.webm`;
+    a.download = `${safeName}_${safeTpl}.mp4`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -506,7 +508,7 @@ export function BulkVideoTab({ products, onRecordingChange }: Props) {
                     onClick={() => downloadItem(item)}
                     className="text-xs px-2 py-0.5 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 hover:text-white flex items-center gap-1"
                   >
-                    <Download className="w-3 h-3" /> .webm
+                    <Download className="w-3 h-3" /> .mp4
                   </button>
                 )}
                 <button

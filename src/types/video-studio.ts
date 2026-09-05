@@ -988,10 +988,29 @@ export interface DeterministicFrameSink {
    */
   writeFrame(index: number, frame: Blob): Promise<void>;
   /**
-   * Called once after the last frame. Returns the finished video when the sink
-   * muxes (the worker's ffmpeg path), or null when the caller assembles it.
+   * Takes the frame straight off the canvas, skipping PNG entirely.
+   *
+   * Only a sink that lives in the same process as the canvas can do this — the
+   * in-browser WebCodecs encoder can, the worker cannot, because its frames must
+   * cross into Node as JSON and binary does not survive that trip. When present
+   * the recorder always prefers it: PNG compression at 2K is single-threaded
+   * main-thread work that costs more than drawing the frame did.
    */
-  finish(frameCount: number, fps: number): Promise<Blob | null>;
+  writeCanvasFrame?(index: number, canvas: HTMLCanvasElement): Promise<void>;
+  /**
+   * Called once after the last frame, and returns the finished video. Both
+   * sinks mux their own output — ffmpeg on the pod, mp4-muxer in the browser.
+   */
+  finish(frameCount: number, fps: number): Promise<Blob>;
+  /**
+   * Called instead of finish() when a take is abandoned, so the sink can release
+   * what it is holding. A WebCodecs encoder owns GPU buffers that are not
+   * garbage collected, so a cancelled take leaks them until the tab is closed.
+   *
+   * Must not throw: it runs on the failure path, where a second error would
+   * mask the first.
+   */
+  abort?(): void;
 }
 
 /** How a studio recording turns rendered frames into a video file. */

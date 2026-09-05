@@ -31,15 +31,14 @@ const ALLOWED = new Set([
 /**
  * Strips MIME parameters before matching.
  *
- * MediaRecorder reports the codec it actually chose, so a studio video arrives
- * as `video/webm;codecs=vp9` (see getSupportedMimeType) — never the bare
- * `video/webm` this list holds. Comparing the raw header therefore rejected
- * every video upload with "Unsupported content type" while images sailed
- * through, since canvas.toBlob emits no parameters.
+ * A content type may carry a codec parameter — `video/mp4;codecs=avc1.640034`
+ * — which the bare types in the allowlist above do not. Comparing the raw
+ * header therefore rejected such uploads with "Unsupported content type" while
+ * images sailed through, since canvas.toBlob emits no parameters.
  *
- * The parameter is dropped rather than added to the allowlist: the codec is
- * chosen at runtime from what the pod's Chrome supports, so enumerating the
- * combinations would just be a list to forget to update.
+ * The parameter is dropped rather than enumerated in the allowlist: the exact
+ * codec string is chosen at runtime by whichever encoder produced the file, so
+ * listing the combinations would just be a list to forget to update.
  */
 function baseContentType(raw: string): string {
   return raw.split(";")[0].trim().toLowerCase();

@@ -424,13 +424,13 @@ export async function addProductVideo(
   productId: number,
   videoUrl: string,
   alt: string,
-  contentType = "video/webm"
+  contentType = "video/mp4"
 ): Promise<string | null> {
   // 1. Fetch the video bytes (from our own storage URL).
   const videoRes = await fetch(videoUrl);
   if (!videoRes.ok) throw new Error(`fetch video failed: ${videoRes.status}`);
   const blob = await videoRes.blob();
-  const filename = videoUrl.split("/").pop()?.split("?")[0] || "mockup-video.webm";
+  const filename = videoUrl.split("/").pop()?.split("?")[0] || "mockup-video.mp4";
 
   // 2. Create a staged upload target.
   const staged = await shopifyGraphQL<{

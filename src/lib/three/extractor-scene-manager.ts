@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import fixWebmDuration from 'fix-webm-duration';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { createCameraPathSampler, getCameraPathPoints, getCameraSpanPoints } from './camera-path';
@@ -239,27 +238,6 @@ export const HDRI_OPTIONS_FALLBACK = [
   { id: "ferndale_studio_07_2k.hdr", label: "Ferndale Studio 07 2k" },
 ];
 
-/**
- * Detect best supported video format for MediaRecorder.
- * WebM is the most reliable container for streaming MediaRecorder output across browsers.
- */
-export function getSupportedMimeType(): string {
-  const types = [
-    'video/webm;codecs=vp9',
-    'video/webm;codecs=vp8',
-    'video/webm',
-    'video/mp4',
-  ];
-
-  for (const type of types) {
-    if (MediaRecorder.isTypeSupported(type)) {
-      return type;
-    }
-  }
-
-  return 'video/webm'; // Fallback
-}
-
 /** Cached HDRI texture with URL key */
 interface CachedHdri {
   url: string;
@@ -267,27 +245,18 @@ interface CachedHdri {
 }
 
 /**
- * Per-recording tally of frames the wall-clock loop could not keep up with.
+ * Thrown when stopRecording() interrupts a take.
  *
- * Collected only to answer one question before any rewrite: is the stutter in
- * the output file caused by frames never being rendered (a loop problem) or by
- * the encoder (a bitrate/codec problem)? The two look identical on playback but
- * have completely different fixes.
+ * A distinct type so callers can tell "the user pressed stop" apart from a real
+ * failure — the UI should not raise an error dialog for a deliberate cancel.
  */
-interface FrameDropDiagnostics {
-  /** Frames actually rendered during the animation phase. */
-  rendered: number;
-  /** Frames the loop skipped because a render overran its budget. */
-  dropped: number;
-  /** Largest single run of consecutive skipped frames — the worst visible jump. */
-  longestGap: number;
-  /** Slowest single renderFrame() call, in ms. */
-  slowestFrameMs: number;
-  /** How many renders exceeded the per-frame budget (1000 / fps). */
-  overBudget: number;
-  /** Animation progress (%) at which the slowest frame occurred. */
-  worstAtProgress: number;
+export class RecordingCanceledError extends Error {
+  constructor() {
+    super('Recording canceled');
+    this.name = 'RecordingCanceledError';
+  }
 }
+
 
 /**
  * Specialized Three.js scene manager for high-quality image and video extraction.
@@ -499,8 +468,14 @@ export class ExtractorSceneManager {
 
   // Animation state
   private animationFrameId: number | null = null;
-  private mediaRecorder: MediaRecorder | null = null;
-  private recordedChunks: Blob[] = [];
+  /**
+   * Set by stopRecording(), cleared when a take begins.
+   *
+   * The deterministic loop is a plain async for-loop with no
+   * requestAnimationFrame to cancel, so a stop request can only be observed by
+   * the loop itself checking this between frames.
+   */
+  private _recordingCanceled = false;
   private _spinPaused = false;
   private _isHelperDragging = false;
   /** When true, updateStudioPreviewConfig skips setCameraFromKeyframe so camera orbit controls can take effect */
@@ -4025,21 +4000,34 @@ export class ExtractorSceneManager {
   }
 
   /** Record video using the new start/end camera animation system */
+  /**
+   * Records a take deterministically: every frame is rendered, handed to `sink`,
+   * and only then is the next one drawn. There is no wall clock anywhere in the
+   * pipeline, so no frame can be dropped however slow a render turns out to be.
+   *
+   * `sink` is required — it is what turns the frames into a file. The worker
+   * passes one backed by ffmpeg; the browser passes createWebCodecsFrameSink().
+   */
   async startStudioRecording(
     config: VideoStudioConfig,
-    onProgress?: (progress: number) => void,
+    onProgress: ((progress: number) => void) | undefined,
+    sink: DeterministicFrameSink,
     /**
-     * When provided, recording switches to the DETERMINISTIC path: frames are
-     * rendered one at a time and pushed into this sink, with no wall clock and
-     * no MediaRecorder anywhere in the pipeline.
+     * Renders at `supersample`x the output size and lets the sink shrink each
+     * frame back down.
      *
-     * Omitting it keeps the original real-time captureStream + MediaRecorder
-     * behaviour byte for byte, which is what every browser caller still uses.
-     * That is the rollback: pass no sink, get the old path.
+     * MSAA is capped by the driver — Chrome on Apple silicon offers only
+     * MAX_SAMPLES = 4 through ANGLE/Metal, where the pod's NVIDIA stack offers
+     * more — and that cap is visible as smeared leather grain and wood figure.
+     * Rendering large sidesteps the cap entirely: every output pixel is the
+     * average of `supersample`^2 rendered samples.
+     *
+     * Costs `supersample`^2 the fill rate, so 2 is 4x the pixels per frame.
      */
-    sink?: DeterministicFrameSink
+    supersample = 1
   ): Promise<Blob> {
     if (!this.model) throw new Error('No model loaded');
+    this._recordingCanceled = false;
 
     // Resolve output dimensions from quality + ratio (ratio overrides width)
     const dims = getRecordingDimensions(
@@ -4066,7 +4054,9 @@ export class ExtractorSceneManager {
       // quality benefit in the recorded file. resize() restores DPR after recording.
       this.renderer.setPixelRatio(1);
       // Pass false to prevent Three.js from overwriting canvas CSS (width/height px style)
-      this.renderer.setSize(dims.width, dims.height, false);
+      this.renderer.setSize(dims.width * supersample, dims.height * supersample, false);
+      // Aspect comes from the output, not the render size — supersampling scales
+      // both axes equally, so the framing must not move.
       this.camera.aspect = dims.width / dims.height;
       // Re-fit the logo plate to the recording frame. The editor canvas is a different
       // shape from the output, so without this the plate would be laid out for the
@@ -4135,527 +4125,33 @@ export class ExtractorSceneManager {
           this.renderer.shadowMap.autoUpdate = false;
         }
 
-        if (sink) {
-          this._runDeterministicRecording(config, dims, sink, onProgress)
-            .then(resolve)
-            .catch(reject);
-        } else {
-          this._startStudioRecordingLoop(config, dims, onProgress, resolve, reject);
-        }
+        this._runDeterministicRecording(config, dims, sink, onProgress)
+          .then(resolve)
+          .catch(reject);
       }).catch(reject);
     });
   }
 
-  private _startStudioRecordingLoop(
-    config: VideoStudioConfig,
-    dims: { readonly width: number; readonly height: number; readonly bitrate: number; readonly fps: number },
-    onProgress: ((p: number) => void) | undefined,
-    resolve: (blob: Blob) => void,
-    reject: (err: Error) => void
-  ) {
-    this.stopVideoPreview();
-
-    // Reset camera to the recorded start position. The warmup renders in startStudioRecording
-    // run with async yields, during which stale orbit event handlers could have moved the camera.
-    // This guarantees the canvas shows the correct start frame when mediaRecorder.start() fires.
-    // Derived from the path (not cameraStart) so a curve always opens on its span's first point.
-    this.setCameraFromKeyframe(this.resolveStartKeyframe(config));
-
-    // Diagnostic: log actual values used for this recording
-    const _diagEnd = applyDirection(config.cameraStart, config.cameraEnd, "xyz");
-    const _fixedDur = isCameraFixed(config.cameraStart, config.cameraEnd, config.cameraPath) ? config.fixedCameraDuration : undefined;
-    const _diagDur = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz", _fixedDur, config.cameraPath);
-    console.log('[VideoStudio] recording', {
-      start: { x: config.cameraStart.x?.toFixed(2), y: config.cameraStart.y?.toFixed(2), z: config.cameraStart.z?.toFixed(2) },
-      end: { x: _diagEnd.x?.toFixed(2), y: _diagEnd.y?.toFixed(2), z: _diagEnd.z?.toFixed(2) },
-      speed: config.cameraSpeed,
-      duration: `${_diagDur.toFixed(1)}s`,
-      fixed: _fixedDur !== undefined,
-      path: config.cameraPath?.mode === "spline" && config.cameraPath.waypoints.length > 0
-        ? { waypoints: config.cameraPath.waypoints.length, curve: config.cameraPath.curveType, closed: config.cameraPath.closed, look: config.cameraPath.lookMode }
-        : "straight",
-    });
-
-    // Hide all helpers/gizmos so they don't appear in the recorded video
-    this.setHelpersVisible(false);
-
-    // ── Scene graph freeze ────────────────────────────────────────────────────
-    // Disabling scene.matrixWorldAutoUpdate skips the full scene-graph traversal
-    // inside WebGLRenderer.render(). Studio objects are all static; only the
-    // camera needs updating each frame — THREE.js handles it automatically via
-    // the "camera.parent===null && camera.matrixWorldAutoUpdate===true" path.
-    // Spinning single cues are refreshed manually in renderFrame below.
-    this.scene.matrixWorldAutoUpdate = false;
-    const frozenObjects: THREE.Object3D[] = ([
-      this.backdrop,
-      this.shadowFloor,
-      this.wallShadowPlane,
-      this.tableSurface,
-      this.studioCornerFill,
-      this.frameShadowFloor,
-      this.frameWallBackdrop,
-      this.frameTableBackdrop,
-      ...this.backgroundLayerMeshes,
-      ...this.wallFramePlanes,
-      ...this.tableFramePlanes,
-      ...this.instancedMeshes,
-      ...this.hdriShadowLights.map(l => l.light as THREE.Object3D),
-      this.frameShadowLight as THREE.Object3D | null,
-    ] as (THREE.Object3D | null)[]).filter((o): o is THREE.Object3D => !!o);
-    for (const obj of frozenObjects) {
-      obj.matrixAutoUpdate = false;
-      obj.frustumCulled = false;
-    }
-
-    // NOTE: cue instances were already set up (with correct initial spin) during the
-    // warmup phase in startStudioRecording → setupStudioFromStudioConfig. Re-creating
-    // them here would dispose the warmed GPU buffers and allocate cold new ones,
-    // causing a buffer-upload stall on the very first recorded frames.
-
-    // Save pre-recording spin state so we can restore it after recording
-    const savedSpinY = config.cueConfig.spinY || 0;
-    const savedSpinX = config.cueConfig.spinX || 0;
-    const savedSpinZ = config.cueConfig.spinZ || 0;
-
-    this.camera.fov = 50;
-    this.camera.updateProjectionMatrix();
-
-    // Camera moves directly from start to end (full xyz interpolation)
-    const effectiveEnd = applyDirection(config.cameraStart, config.cameraEnd, "xyz");
-
-    // Compute duration from path + speed (or fixed duration when camera is static)
-    const duration = computeVideoDuration(config.cameraStart, config.cameraEnd, config.cameraSpeed, "xyz", isCameraFixed(config.cameraStart, config.cameraEnd, config.cameraPath) ? config.fixedCameraDuration : undefined, config.cameraPath);
-    const easingFn = createEasingFunction(config.easing);
-
-    // Compute wall-clock duration in ms before MediaRecorder setup so the onstop closure can use it
-    const durationMs = duration * 1000;
-
-    // ── Why encoder warmup is required ─────────────────────────────────────────
-    // The hardware video encoder (VideoToolbox on macOS, VP9 on Linux/Windows) starts
-    // a cold session every time mediaRecorder.start() is called. Startup takes 1–3 s:
-    //   • VPU resource allocation
-    //   • SPS/PPS parameter-set generation
-    //   • First I-frame encoding (large, expensive)
-    //   • Rate-control algorithm calibration
-    // If the animation starts at the same moment as the encoder, the VPU competes with
-    // the GPU for resources and produces dropped frames, encoding artefacts, and
-    // unstable bitrate — visible as "flashing and lagging" in the first 1–3 s.
-    //
-    // Fix: start the encoder with no timeslice and render PRE_ROLL_MS of the static
-    // start frame (tracked by wall-clock performance.now()) so it fully initialises
-    // before camera motion begins. In onstop, all chunks are combined, and the first
-    // cluster at t >= PRE_ROLL_MS is found via _findClusterOffsetAtTime; everything
-    // before it is discarded, timestamps are re-zeroed, and Duration is patched.
-    // Timeslice duration for encoder warmup.
-    // start(ENCODER_WARMUP_MS) causes MediaRecorder to flush a chunk every ENCODER_WARMUP_MS ms.
-    // The FIRST chunk (chunk 0) contains the EBML init segment + warmup clusters and is
-    // delivered via the first ondataavailable event. All subsequent chunks contain animation data.
-    //
-    // Using timeslice vs no-timeslice (start()):
-    //   start():         Encoder buffers ALL data in RAM until stop() — ~75 MB for 30s @ 20 Mbps.
-    //                    Causes GC pauses every few seconds → dropped rAF ticks → choppy video.
-    //   start(timeslice): Encoder flushes every ENCODER_WARMUP_MS → peak buffer ~5 MB.
-    //                    Regular flushes keep memory pressure low → smooth encoding throughout.
-    const ENCODER_WARMUP_MS = 2000;
-
-    // Whether the camera is fixed (start == end position). Hoisted here so both
-    // the onstop handler and the animate loop can share the same value.
-    const isFixed = isCameraFixed(config.cameraStart, config.cameraEnd, config.cameraPath);
-
-    // For fixed camera, the warmup (ENCODER_WARMUP_MS) is included in the final
-    // file, so we record only (durationMs - ENCODER_WARMUP_MS) of animation to
-    // keep the total at exactly durationMs.  For moving camera the warmup is
-    // trimmed in onstop, so the animation runs for the full durationMs.
-    const animDurationMs = isFixed
-      ? Math.max(1000, durationMs - ENCODER_WARMUP_MS)
-      : durationMs;
-
-    // Use the full configured fps — do NOT cap at 60.
-    // Chrome bug #639939 (timestamps 5× too large at >60 fps on high-refresh displays) was
-    // fixed in Chrome 67 (2018). Current Chrome (v100+) handles captureStream(120) correctly
-    // on 120 Hz ProMotion displays. On 60 Hz displays captureStream(120) produces duplicate
-    // frames but still works correctly.
-    const RECORD_FPS = dims.fps;
-
-    const stream = this.renderer.domElement.captureStream(RECORD_FPS);
-    this.mediaRecorder = new MediaRecorder(stream, {
-      mimeType: getSupportedMimeType(),
-      videoBitsPerSecond: dims.bitrate,
-    });
-    this.recordedChunks = [];
-
-    // First ondataavailable delivers the warmup chunk (EBML header + pre-roll clusters).
-    // All subsequent chunks are animation data chunks.
-    let warmupBlob: Blob | null = null;
-    let warmupFlushed = false;
-
-    this.mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size === 0) return;
-      if (!warmupFlushed) {
-        warmupFlushed = true;
-        warmupBlob = e.data; // warmup chunk: EBML header + pre-roll clusters
-      } else {
-        this.recordedChunks.push(e.data); // animation data chunks
-      }
-    };
-
-    type ShadowWithMap = THREE.LightShadow & { map: THREE.WebGLRenderTarget | null };
-    const restoreRecordingState = () => {
-      // Cancel any in-flight animation RAF before restoring state.
-      if (this.animationFrameId !== null) {
-        cancelAnimationFrame(this.animationFrameId);
-        this.animationFrameId = null;
-      }
-      this.setHelpersVisible(true);
-      // Restore all recording GPU optimisations so preview quality is unaffected.
-      this.renderer.shadowMap.autoUpdate = true;
-      this.renderer.shadowMap.type = this._recordingSavedShadowType ?? THREE.VSMShadowMap;
-      // Restore scene graph auto-update and per-object properties.
-      this.scene.matrixWorldAutoUpdate = true;
-      for (const obj of frozenObjects) {
-        obj.matrixAutoUpdate = true;
-        obj.frustumCulled = true;
-      }
-      const restoreShadowMap = (shadow: THREE.LightShadow) => {
-        shadow.mapSize.set(2048, 2048);
-        shadow.map?.dispose();
-        (shadow as ShadowWithMap).map = null;
-      };
-      for (const { light } of this.hdriShadowLights) restoreShadowMap(light.shadow);
-      if (this.frameShadowLight) restoreShadowMap(this.frameShadowLight.shadow);
-      // Restore pre-recording spin state to prevent rotation drift.
-      if (this.currentCueConfig) {
-        this.currentCueConfig = {
-          ...this.currentCueConfig,
-          spinY: savedSpinY,
-          spinX: savedSpinX,
-          spinZ: savedSpinZ,
-        };
-      }
-      if (this.clonedModel) {
-        this.clonedModel.rotation.set(savedSpinX, savedSpinY, savedSpinZ);
-      }
-      if (this.instancedMeshes.length > 0 && this.currentCueConfig) {
-        this.setupCueInstances(this.currentCueConfig);
-      }
-    };
-
-    this.mediaRecorder.onstop = async () => {
-      restoreRecordingState();
-
-      let outBlob: Blob;
-      let finalDurationMs = durationMs;
-
-      // ── Fixed camera: no trimming needed ──────────────────────────────────────
-      // Chrome's VP9 cluster (keyframe) interval is typically 3–5 s, much larger
-      // than ENCODER_WARMUP_MS (2 s). With the timeslice approach the 0 ms cluster
-      // straddles the warmup/animation boundary: its header lands in warmupBlob and
-      // its continuation bytes land at the start of animBuf. _findClusterOffsetAtTime
-      // skips those continuation bytes and lands on the next complete cluster, which
-      // can be 3–5 s into the recording — silently dropping that many seconds of video.
-      //
-      // For a FIXED camera the warmup frames are identical to animation frames (the
-      // camera never moves). The animation was shortened by ENCODER_WARMUP_MS so the
-      // combined file (warmup + animation) has exactly durationMs of content.
-      // We include all data without trimming and patch Duration = durationMs.
-      const allChunks = ([warmupBlob, ...this.recordedChunks]).filter((b): b is Blob => !!b);
-
-      if (isFixed && allChunks.length > 0) {
-        const allBufs = await Promise.all(allChunks.map(c => c.arrayBuffer()));
-        const totalSize = allBufs.reduce((s, b) => s + b.byteLength, 0);
-        const combined = new Uint8Array(totalSize);
-        let off = 0;
-        for (const buf of allBufs) { combined.set(new Uint8Array(buf), off); off += buf.byteLength; }
-        const combinedBuf = combined.buffer;
-
-        const rawHeaderBuf = this._extractWebmHeader(combinedBuf);
-        const headerBuf = this._patchEbmlDuration(rawHeaderBuf, finalDurationMs);
-        outBlob = new Blob([headerBuf, combinedBuf.slice(rawHeaderBuf.byteLength)], { type: getSupportedMimeType() });
-
-        console.log('[VideoStudio] fixed-camera passthrough', {
-          chunks: allChunks.length, totalSize, finalDurationMs,
-        });
-
-      } else if (warmupBlob && this.recordedChunks.length > 0) {
-        // ── Moving camera: trim warmup clusters, keep animation data ────────────
-        // Combine all animation chunks into one buffer.
-        const animChunkBufs = await Promise.all(this.recordedChunks.map(c => c.arrayBuffer()));
-        const totalAnimSize = animChunkBufs.reduce((s, b) => s + b.byteLength, 0);
-        const animCombined = new Uint8Array(totalAnimSize);
-        let writeOffset = 0;
-        for (const buf of animChunkBufs) {
-          animCombined.set(new Uint8Array(buf), writeOffset);
-          writeOffset += buf.byteLength;
-        }
-        const animBuf = animCombined.buffer;
-
-        // Extract EBML header (EBML + Segment + SeekHead + Info + Tracks) from the
-        // warmup chunk only — it's smaller and always has the full header before clusters.
-        const warmupBuf = await warmupBlob.arrayBuffer();
-        const rawHeaderBuf = this._extractWebmHeader(warmupBuf);
-
-        // With timeslice the very first bytes of animBuf may be cluster-continuation
-        // (blocks from a cluster whose header is in the warmup chunk). Skip forward to
-        // the first COMPLETE cluster using the same verified scan as _findClusterOffsetAtTime.
-        const firstClusterOff = this._findClusterOffsetAtTime(animBuf, 0);
-        const cleanAnimBuf = firstClusterOff > 0 ? animBuf.slice(firstClusterOff) : animBuf;
-
-        const firstTc = this._getFirstClusterTimecode(cleanAnimBuf);
-        const adjustBy = firstTc > 0 ? firstTc : ENCODER_WARMUP_MS;
-        const adjAnim = this._adjustWebmClusterTimecodes(cleanAnimBuf, adjustBy);
-
-        // Use actual last-cluster timecode for Duration — Chrome's keyframe interval may not
-        // align with ENCODER_WARMUP_MS, making adjusted content slightly shorter than durationMs.
-        // Setting Duration to the real content end prevents a freeze gap at the end.
-        const FRAME_MS = Math.round(1000 / RECORD_FPS);
-        const lastTcAfterAdj = this._getLastClusterTimecode(adjAnim);
-        if (lastTcAfterAdj > 0 && lastTcAfterAdj + FRAME_MS < durationMs * 0.95) {
-          finalDurationMs = lastTcAfterAdj + FRAME_MS;
-        }
-
-        console.log('[VideoStudio] timeslice trim', {
-          warmupSize: warmupBuf.byteLength,
-          animSize: animBuf.byteLength,
-          firstClusterOff,
-          chunks: this.recordedChunks.length,
-          firstTc, adjustBy,
-          lastTcAfterAdj,
-          finalDurationMs,
-          expectedDurationMs: durationMs,
-        });
-
-        const headerBuf = this._patchEbmlDuration(rawHeaderBuf, finalDurationMs);
-        outBlob = new Blob([headerBuf, adjAnim], { type: getSupportedMimeType() });
-      } else {
-        // Fallback: warmup timeslice didn't fire cleanly — combine everything as-is.
-        console.warn('[VideoStudio] warmup split missing, using raw fallback');
-        outBlob = new Blob(allChunks, { type: getSupportedMimeType() });
-      }
-
-      // Safety net: fixWebmDuration won't overwrite a non-zero Duration, so this only
-      // activates if _patchEbmlDuration failed to find the Duration element.
-      const fixedBlob = await fixWebmDuration(outBlob, finalDurationMs, { logger: false });
-      console.log('[VideoStudio] final blob size=%dKB mimeType=%s', Math.round(fixedBlob.size / 1024), getSupportedMimeType());
-      resolve(fixedBlob);
-    };
-    this.mediaRecorder.onerror = () => {
-      restoreRecordingState();
-      reject(new Error('Recording failed'));
-    };
-
-    // Reference period for spin speed normalisation (0.02 rad/frame at 60fps = 1.2 rad/s).
-    const SPIN_REF_MS = 1000 / 60;
-    // Each video frame spans exactly FRAME_INTERVAL_MS of wall time.
-    const FRAME_INTERVAL_MS = 1000 / RECORD_FPS;
-    // Constant spin delta per rendered frame — guaranteed consistent speed in the video.
-    const spinPerFrame = FRAME_INTERVAL_MS / SPIN_REF_MS;
-
-    let loopStart = -1;
-    let frameCount = -1;         // monotonically increasing throttled frame index
-    let animStartTime = -1;      // rAF timestamp when Phase 2 animation first begins
-    let encoderWarmupDone = false; // true once first ondataavailable (warmup timeslice) fires
-
-    // ── Dropped-frame diagnostics ─────────────────────────────────────────────
-    // The loop advances frameCount to whatever wall-clock says the current frame
-    // index is (targetFrame). When a render overruns its FRAME_INTERVAL_MS budget
-    // the index JUMPS, and every index in between is never rendered — the camera
-    // moves in one big step instead of several small ones, which is what reads as
-    // stutter in the file. captureStream gives no backpressure, so nothing else
-    // reports this. Counting the jumps here tells us whether stutter is dropped
-    // frames (fix = deterministic loop) or an encoder artefact (fix = elsewhere).
-    const diag: FrameDropDiagnostics = {
-      rendered: 0,
-      dropped: 0,
-      longestGap: 0,
-      slowestFrameMs: 0,
-      overBudget: 0,
-      worstAtProgress: 0,
-    };
-
-    const start = config.cameraStart;
-    const end = effectiveEnd;
-    const cue = config.cueConfig;
-    // Whether the cue spins — used in renderFrame to trigger manual world-matrix update.
-    const hasAnySpin = (cue.spinSpeed > 0) || ((cue.spinSpeedX || 0) > 0);
-
-    // Pre-allocate camera keyframe object — mutated in-place each frame to avoid GC.
-    const kf = {
-      x: start.x, y: start.y, z: start.z,
-      rotationX: start.rotationX ?? 0,
-      rotationY: start.rotationY ?? 0,
-      rotationZ: start.rotationZ ?? 0,
-    };
-
-    // Camera path sampler. With no custom path this is the legacy straight start→end lerp;
-    // with waypoints it is an arc-length-parameterised Catmull-Rom spline. Built once here
-    // (the arc-length LUT is precomputed) so sampling stays allocation-free per frame.
-    const pathSampler = createCameraPathSampler(
-      start,
-      end,
-      config.cameraPath,
-      this.getCuePathLookTarget()
-    );
-
-    const renderFrame = (t: number) => {
-      // Mutates the pre-allocated kf to avoid per-frame heap allocation.
-      pathSampler.sample(t, kf);
-      // Lightweight camera update for recording: skip gizmo sync, helper update,
-      // and updateProjectionMatrix (FOV is constant throughout recording).
-      this.camera.position.set(kf.x, kf.y, kf.z);
-      this.camera.rotation.set(kf.rotationX, kf.rotationY, kf.rotationZ);
-      // scene.matrixWorldAutoUpdate=false → THREE.js only auto-updates the camera
-      // (root object, matrixWorldAutoUpdate=true). For a spinning single cue we must
-      // manually propagate rotation → local matrix → world matrix before rendering.
-      if (hasAnySpin && this.clonedModel && this.instancedMeshes.length === 0) {
-        this.clonedModel.updateMatrixWorld(true);
-      }
-      // Flicker phase comes from the frame COUNT, not a wall clock, so re-recording the
-      // same config produces an identical file rather than a different flicker every take.
-      this.logoBackdrop?.setElapsed(frameCount / RECORD_FPS);
-      this.renderWithBackdrop(this.camera);
-    };
-
-    const animate = (timestamp: number) => {
-      // Throttle to exactly RECORD_FPS using integer frame counting.
-      // This eliminates the captureStream sampling race: renders and captureStream
-      // samples are in lock-step at the same rate, so every sampled frame is fresh
-      // and spin advances by exactly spinPerFrame per video frame (constant velocity).
-      if (loopStart < 0) loopStart = timestamp;
-      const targetFrame = Math.floor((timestamp - loopStart) / FRAME_INTERVAL_MS);
-      if (targetFrame <= frameCount) {
-        this.animationFrameId = requestAnimationFrame(animate);
-        return;
-      }
-      // A jump of more than one index means (targetFrame - frameCount - 1) frames
-      // were skipped outright. Only counted once the animation is underway, since
-      // warmup renders the same static frame and skipping there is harmless.
-      if (encoderWarmupDone && frameCount >= 0) {
-        const skipped = targetFrame - frameCount - 1;
-        if (skipped > 0) {
-          diag.dropped += skipped;
-          if (skipped > diag.longestGap) diag.longestGap = skipped;
-        }
-      }
-      frameCount = targetFrame;
-
-      // ── Phase 1: Encoder warmup ─────────────────────────────────────────────
-      // Render the static start frame while the encoder completes its cold-start
-      // sequence (VPU init, I-frame, rate-control calibration). Phase 1 ends when
-      // the timeslice fires (warmupFlushed = true), telling us the encoder is warm
-      // and the warmup EBML header has been cleanly committed to warmupBlob.
-      if (!encoderWarmupDone) {
-        // For fixed cameras the warmup is kept in the final file (not trimmed), so
-        // the cue must spin during warmup to avoid a frozen 2s opening.
-        if (isFixed && hasAnySpin) {
-          this.spinCueInstances(
-            cue.spinSpeed > 0 ? cue.spinSpeed * 0.02 * spinPerFrame : 0,
-            (cue.spinSpeedX || 0) > 0 ? (cue.spinSpeedX || 0) * 0.02 * spinPerFrame : 0
-          );
-        }
-        renderFrame(easingFn(0));
-        onProgress?.(0);
-        if (!warmupFlushed) {
-          // Timeslice hasn't fired yet — keep rendering warmup frames
-          this.animationFrameId = requestAnimationFrame(animate);
-          return;
-        }
-        // Timeslice fired → warmupBlob received → encoder is warm. Start animation.
-        encoderWarmupDone = true;
-        // Fall through: render first animation frame in this same rAF tick.
-      }
-
-      // ── Phase 2: Animation recording ───────────────────────────────────────
-      // Time-based stop: record until wall-clock elapsed time reaches animDurationMs.
-      // This ensures captureStream captures exactly animDurationMs of content
-      // regardless of rendering speed — on slow machines each rAF gap is longer but
-      // the stream still samples at wall-clock rate, so frame-count-based approaches
-      // would over-run (ANIM_FRAMES rAFs × slow_render_time >> animDurationMs).
-      if (animStartTime < 0) animStartTime = timestamp;
-      const elapsed = timestamp - animStartTime;
-
-      if (this.isDisposed || elapsed >= animDurationMs) {
-        renderFrame(easingFn(1));
-        onProgress?.(100);
-        this.animationFrameId = null;
-        const expected = Math.round(animDurationMs / FRAME_INTERVAL_MS);
-        const lossPct = expected > 0 ? (diag.dropped / expected) * 100 : 0;
-        console.log('[VideoStudio] frame report', {
-          fps: RECORD_FPS,
-          budgetMs: Number(FRAME_INTERVAL_MS.toFixed(1)),
-          expected,
-          rendered: diag.rendered,
-          dropped: diag.dropped,
-          lossPct: `${lossPct.toFixed(1)}%`,
-          longestGap: diag.longestGap,
-          slowestFrameMs: Number(diag.slowestFrameMs.toFixed(1)),
-          worstAtProgress: `${diag.worstAtProgress}%`,
-          framesOverBudget: diag.overBudget,
-          verdict:
-            lossPct >= 5
-              ? 'DROPPED FRAMES are the stutter — a deterministic loop fixes this'
-              : diag.dropped > 0
-                ? 'minor drops — visible only as occasional hitches'
-                : 'no drops — stutter (if any) is an encoder/bitrate artefact, not the loop',
-        });
-        this.mediaRecorder?.stop();
-        return;
-      }
-
-      const progress = elapsed / animDurationMs;
-      onProgress?.(Math.round(progress * 100));
-
-      // Advance cue spin by exactly one frame's worth (constant angular velocity).
-      const hasSpinY = cue.spinSpeed > 0;
-      const hasSpinX = (cue.spinSpeedX || 0) > 0;
-      if (hasSpinY || hasSpinX) {
-        this.spinCueInstances(
-          hasSpinY ? cue.spinSpeed * 0.02 * spinPerFrame : 0,
-          hasSpinX ? (cue.spinSpeedX || 0) * 0.02 * spinPerFrame : 0
-        );
-      }
-
-      // Measure the render itself. renderFrame issues the draw calls; the GPU may
-      // still be working when it returns, so this is a LOWER bound on frame cost —
-      // enough to tell "comfortably inside budget" from "nowhere near it".
-      const frameT0 = performance.now();
-      renderFrame(easingFn(progress));
-      const frameMs = performance.now() - frameT0;
-      diag.rendered += 1;
-      if (frameMs > diag.slowestFrameMs) {
-        diag.slowestFrameMs = frameMs;
-        diag.worstAtProgress = Math.round(progress * 100);
-      }
-      if (frameMs > FRAME_INTERVAL_MS) diag.overBudget += 1;
-
-      this.animationFrameId = requestAnimationFrame(animate);
-    };
-
-    // Timeslice = ENCODER_WARMUP_MS: first ondataavailable delivers EBML header +
-    // warmup clusters (saved as warmupBlob). All subsequent chunks are animation data.
-    // Regular flushes keep memory pressure low → fewer GC pauses → smooth encoding.
-    this.mediaRecorder.start(ENCODER_WARMUP_MS);
-    this.animationFrameId = requestAnimationFrame(animate);
-  }
-
 
   /**
-   * Deterministic, frame-by-frame recording.
+   * Deterministic, frame-by-frame recording — the only recording path.
    *
-   * The real-time path in _startStudioRecordingLoop advances the animation from
-   * the wall clock and lets captureStream sample the canvas whenever it likes.
-   * That has two failure modes this method exists to remove:
+   * It replaced a real-time loop that drove the animation from the wall clock
+   * and let captureStream sample the canvas whenever it liked. That had two
+   * failure modes, both removed here:
    *
-   *  1. A render that overruns 1000/fps ms loses every frame it stepped past —
-   *     captureStream offers no backpressure, so the camera jumps and the file
-   *     stutters even though the GPU was never the limit.
-   *  2. MediaRecorder's VP9 encoder runs in software inside the container. Asked
-   *     for 20 Mbps it delivers roughly 8, because it silently trades quality
-   *     for keeping up with real time.
+   *  1. A render that overran 1000/fps ms lost every frame it stepped past —
+   *     captureStream offers no backpressure, so the camera jumped and the file
+   *     stuttered even though the GPU was never the limit.
+   *  2. MediaRecorder encoded in software while the page was still rendering.
+   *     Asked for 20 Mbps it delivered roughly 8, silently trading quality to
+   *     keep up with real time.
    *
    * Here time is an INDEX, not a clock. Frame N is rendered, handed to the sink,
    * and only when the sink resolves does frame N+1 begin. A frame may take a
-   * second; the output is unaffected, because nothing is sampling. Encoding
-   * happens later, offline, from lossless PNGs — so the requested quality is the
+   * second; the output is unaffected, because nothing is sampling. Encoding is
+   * never racing the render — ffmpeg runs afterwards on the pod, and WebCodecs
+   * encodes under backpressure in the browser — so the requested quality is the
    * quality that lands.
    *
    * The trade is wall-clock time: every frame must actually be rendered, so this
@@ -4759,6 +4255,8 @@ export class ExtractorSceneManager {
     }));
 
     const canvas = this.renderer.domElement;
+    /** Cleared until finish() returns, so the finally block knows to abort. */
+    let completed = false;
     let slowestFrameMs = 0;
     // Per-stage totals. A frame costs render + readback + handoff, and only
     // measuring the sum leaves you guessing which one to attack.
@@ -4770,6 +4268,10 @@ export class ExtractorSceneManager {
     try {
       for (let frame = 0; frame < totalFrames; frame++) {
         if (this.isDisposed) throw new Error('Recording disposed');
+        // stopRecording() sets this. Checked per frame so "Dừng" takes effect
+        // within one frame rather than at the end of the take — the deterministic
+        // loop has no requestAnimationFrame for stopRecording to cancel.
+        if (this._recordingCanceled) throw new RecordingCanceledError();
 
         const frameT0 = performance.now();
 
@@ -4797,26 +4299,33 @@ export class ExtractorSceneManager {
         const afterRender = performance.now();
         renderGpuMs += afterRender - frameT0;
 
-        // Pull the finished frame off the canvas as lossless PNG. toBlob is async
-        // and resolves after the GPU has finished the draw, which doubles as the
-        // fence that keeps us from reading a half-drawn frame.
+        // Hand the frame over. A sink in this process (the browser's WebCodecs
+        // encoder) takes the canvas as-is; the worker's has to go through PNG
+        // because its frames cross into Node as JSON, where binary cannot go.
         //
-        // NOTE: PNG compression here is single-threaded main-thread work inside
-        // Chrome, and at 2K it costs far more than drawing the frame did. The
-        // per-stage timings above are what make that visible rather than
-        // inferred.
-        const blob = await new Promise<Blob>((resolveBlob, rejectBlob) => {
-          canvas.toBlob(
-            (b) => (b ? resolveBlob(b) : rejectBlob(new Error(`toBlob returned null at frame ${frame}`))),
-            'image/png'
-          );
-        });
-        const afterReadback = performance.now();
-        readbackMs += afterReadback - afterRender;
-
-        // THE backpressure point. Until the sink has the frame, no further
-        // rendering happens — which is precisely why no frame can be lost.
-        await sink.writeFrame(frame, blob);
+        // The PNG branch is the expensive one: compression at 2K is
+        // single-threaded main-thread work that costs more than drawing the
+        // frame did, which is what the per-stage timings below make visible.
+        //
+        // Either way this await is THE backpressure point — until the sink has
+        // frame N, frame N+1 is not rendered, which is precisely why no frame
+        // can be lost.
+        let afterReadback: number;
+        if (sink.writeCanvasFrame) {
+          afterReadback = performance.now();
+          readbackMs += afterReadback - afterRender;
+          await sink.writeCanvasFrame(frame, canvas);
+        } else {
+          const blob = await new Promise<Blob>((resolveBlob, rejectBlob) => {
+            canvas.toBlob(
+              (b) => (b ? resolveBlob(b) : rejectBlob(new Error(`toBlob returned null at frame ${frame}`))),
+              'image/png'
+            );
+          });
+          afterReadback = performance.now();
+          readbackMs += afterReadback - afterRender;
+          await sink.writeFrame(frame, blob);
+        }
         sinkMs += performance.now() - afterReadback;
 
         const frameMs = performance.now() - frameT0;
@@ -4846,8 +4355,14 @@ export class ExtractorSceneManager {
       if (!muxed) {
         throw new Error('Frame sink returned no video: nothing muxed the frames');
       }
+      completed = true;
       return muxed;
     } finally {
+      // A take that ended any other way — cancelled, disposed, or thrown out of
+      // — never reached finish(), so the sink is still holding its resources.
+      // For the WebCodecs sink those are GPU buffers that outlive garbage
+      // collection, and a few abandoned takes exhaust the pool.
+      if (!completed) sink.abort?.();
       // Restore everything the freeze above changed, so a later preview or a
       // second take is unaffected. Mirrors restoreRecordingState in the
       // real-time path.
@@ -4864,212 +4379,6 @@ export class ExtractorSceneManager {
       config.cueConfig.spinX = savedSpinX;
       config.cueConfig.spinZ = savedSpinZ;
     }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // WebM warmup-trim helpers
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Return the absolute timecode (ms) of the first Cluster element in the buffer,
-   * or -1 if no cluster is found. Used to self-calibrate the timestamp offset that
-   * must be subtracted from all animation clusters regardless of whether Chrome
-   * restarted the WebM timeline from 0 or continued from the pre-roll period.
-   */
-  private _getFirstClusterTimecode(buffer: ArrayBuffer): number {
-    const data = new Uint8Array(buffer);
-    for (let i = 0; i < data.length - 20; i++) {
-      if (data[i] === 0x1F && data[i + 1] === 0x43 && data[i + 2] === 0xB6 && data[i + 3] === 0x75) {
-        for (let j = i + 4; j < Math.min(i + 25, data.length - 5); j++) {
-          if (data[j] === 0xE7) {
-            const szByte = data[j + 1];
-            if (szByte >= 0x81 && szByte <= 0x84) {
-              const numBytes = szByte & 0x7F;
-              let tc = 0;
-              for (let b = 0; b < numBytes; b++) tc = (tc << 8) | data[j + 2 + b];
-              return tc;
-            }
-            return -1;
-          }
-        }
-        return -1;
-      }
-    }
-    return -1;
-  }
-
-  /**
-   * Return the timecode (ms) of the LAST Cluster element in the buffer, or -1.
-   * Used to compute the actual content end time after timecode adjustment so that
-   * the Duration header is set to match content exactly (preventing end-freeze gaps).
-   */
-  private _getLastClusterTimecode(buffer: ArrayBuffer): number {
-    const data = new Uint8Array(buffer);
-    let lastTc = -1;
-    for (let i = 0; i < data.length - 20; i++) {
-      if (data[i] === 0x1F && data[i + 1] === 0x43 && data[i + 2] === 0xB6 && data[i + 3] === 0x75) {
-        for (let j = i + 4; j < Math.min(i + 25, data.length - 5); j++) {
-          if (data[j] === 0xE7) {
-            const szByte = data[j + 1];
-            if (szByte >= 0x81 && szByte <= 0x84) {
-              const numBytes = szByte & 0x7F;
-              let tc = 0;
-              for (let b = 0; b < numBytes; b++) tc = (tc << 8) | data[j + 2 + b];
-              lastTc = tc;
-            }
-            break;
-          }
-        }
-        i += 3;
-      }
-    }
-    return lastTc;
-  }
-
-  /**
-   * Scan WebM clusters and return the byte offset of the FIRST cluster whose
-   * Timecode element value is >= targetMs. Returns -1 if not found.
-   * Used to trim the pre-roll phase from a continuous recording.
-   */
-  private _findClusterOffsetAtTime(buffer: ArrayBuffer, targetMs: number): number {
-    const data = new Uint8Array(buffer);
-    for (let i = 0; i < data.length - 20; i++) {
-      if (data[i] === 0x1F && data[i + 1] === 0x43 && data[i + 2] === 0xB6 && data[i + 3] === 0x75) {
-        for (let j = i + 4; j < Math.min(i + 25, data.length - 5); j++) {
-          if (data[j] === 0xE7) {
-            const szByte = data[j + 1];
-            if (szByte >= 0x81 && szByte <= 0x84) {
-              const numBytes = szByte & 0x7F;
-              let tc = 0;
-              for (let b = 0; b < numBytes; b++) tc = (tc << 8) | data[j + 2 + b];
-              if (tc >= targetMs) return i;
-            }
-            break;
-          }
-        }
-        i += 3;
-      }
-    }
-    return -1;
-  }
-
-  /**
-   * Return only the WebM container header bytes
-   * (EBML + Segment element open tag +
-   * SeekHead + Info + Tracks) from the raw bytes of a MediaRecorder chunk, stopping
-   * just before the first VERIFIED Cluster element.
-   *
-   * IMPORTANT: The naive scan for the 4-byte cluster ID (0x1F 0x43 0xB6 0x75) will
-   * produce false positives inside the VP9/VP8 codec private data stored in the Tracks
-   * element. A false match truncates the header before Tracks is written, leaving the
-   * decoder with no codec info → 20 MB file that cannot play.
-   *
-   * Fix: after finding the 4-byte cluster ID pattern, verify it is a real cluster by
-   * checking that the Timecode element (0xE7 + valid VINT size) appears within the
-   * first 25 bytes of the alleged cluster — exactly the same verification used by
-   * _findClusterOffsetAtTime. Codec private data will not contain this pattern at the
-   * right position, so false positives are eliminated.
-   */
-  private _extractWebmHeader(buffer: ArrayBuffer): ArrayBuffer {
-    const data = new Uint8Array(buffer);
-    for (let i = 0; i < data.length - 20; i++) {
-      if (data[i] === 0x1F && data[i + 1] === 0x43 && data[i + 2] === 0xB6 && data[i + 3] === 0x75) {
-        // Verify this is a real cluster: Timecode element (0xE7) must appear within
-        // 25 bytes with a valid VINT size byte (0x81–0x84 = 1–4 data bytes).
-        for (let j = i + 4; j < Math.min(i + 25, data.length - 3); j++) {
-          if (data[j] === 0xE7) {
-            const szByte = data[j + 1];
-            if (szByte >= 0x81 && szByte <= 0x84) {
-              return buffer.slice(0, i); // Real cluster confirmed — header ends here
-            }
-            break; // 0xE7 found but invalid size — likely false positive, keep scanning
-          }
-        }
-        // No valid Timecode found within 25 bytes → false positive (e.g. codec private
-        // data). Continue scanning for the real first cluster.
-      }
-    }
-    return buffer; // no cluster found — return full buffer as fallback
-  }
-
-  /**
-   * Write the correct Duration into a WebM EBML header buffer.
-   *
-   * Chrome's MediaRecorder sometimes writes a non-zero Duration into the EBML Info
-   * section of the warmup blob (encoding the warmup window length, not the animation
-   * duration). The fix-webm-duration library won't overwrite a Duration that is > 0,
-   * so we patch the bytes directly before blob reconstruction.
-   *
-   * EBML Duration element layout:
-   *   byte 0: 0x44   \
-   *   byte 1: 0x89   / 2-byte element ID
-   *   byte 2: 0x88   — size VINT: 8 bytes (double-precision float)
-   *   bytes 3–10: IEEE 754 big-endian double — the duration value in ms
-   *   (Some Chrome builds emit a 4-byte float: size byte 0x84, bytes 3–6.)
-   */
-  private _patchEbmlDuration(buffer: ArrayBuffer, durationMs: number): ArrayBuffer {
-    const data = new Uint8Array(buffer.slice(0)); // mutable copy
-    for (let i = 0; i < data.length - 3; i++) {
-      if (data[i] === 0x44 && data[i + 1] === 0x89) {
-        const szByte = data[i + 2];
-        if (szByte === 0x88) {
-          // 8-byte IEEE 754 double
-          const view = new DataView(data.buffer, i + 3, 8);
-          view.setFloat64(0, durationMs, false /* big-endian */);
-          return data.buffer;
-        } else if (szByte === 0x84) {
-          // 4-byte IEEE 754 float
-          const view = new DataView(data.buffer, i + 3, 4);
-          view.setFloat32(0, durationMs, false /* big-endian */);
-          return data.buffer;
-        }
-      }
-    }
-    return buffer; // Duration element not found — return original (fixWebmDuration will add it)
-  }
-
-  /**
-   * Re-zero WebM cluster timestamps by subtracting subtractMs from every Cluster
-   * Timecode element in the given raw bytes. This is needed after trimming the
-   * encoder-warmup chunk: the animation clusters were timestamped starting at
-   * PRE_ROLL_MS in the original recording timeline and must be shifted to
-   * start at 0 ms so that the final video plays from the beginning.
-   *
-   * Chrome's MediaRecorder always uses the EBML "unknown" size VINT (8 bytes:
-   * 0x01 FF FF FF FF FF FF FF) for Cluster elements in live recordings. The
-   * Cluster Timecode element (ID 0xE7) therefore appears within the first ~25
-   * bytes of every cluster, making it safe to scan for without parsing the full
-   * EBML structure.
-   */
-  private _adjustWebmClusterTimecodes(buffer: ArrayBuffer, subtractMs: number): ArrayBuffer {
-    const data = new Uint8Array(buffer.slice(0)); // mutable copy
-    for (let i = 0; i < data.length - 20; i++) {
-      // Cluster element ID: 0x1F 0x43 0xB6 0x75
-      if (data[i] === 0x1F && data[i + 1] === 0x43 && data[i + 2] === 0xB6 && data[i + 3] === 0x75) {
-        // Scan the next 25 bytes for the Timecode element (ID = 0xE7).
-        for (let j = i + 4; j < Math.min(i + 25, data.length - 5); j++) {
-          if (data[j] === 0xE7) {
-            // data[j+1] is the VINT-encoded size of the Timecode value.
-            // Chrome uses a 1-byte VINT here: 0x81 = 1 data byte, 0x82 = 2, etc.
-            const szByte = data[j + 1];
-            if (szByte >= 0x81 && szByte <= 0x84) {
-              const numBytes = szByte & 0x7F; // strip the leading 1-bit of the VINT
-              // Read big-endian timecode value
-              let tc = 0;
-              for (let b = 0; b < numBytes; b++) tc = (tc << 8) | data[j + 2 + b];
-              const newTc = Math.max(0, tc - subtractMs);
-              // Write back big-endian
-              for (let b = 0; b < numBytes; b++) {
-                data[j + 2 + (numBytes - 1 - b)] = (newTc >> (b * 8)) & 0xFF;
-              }
-            }
-            break; // Timecode is always the first element in a cluster — done
-          }
-        }
-        i += 3; // advance past the 4-byte cluster ID (loop body adds 1 more)
-      }
-    }
-    return data.buffer;
   }
 
   /**
@@ -5648,163 +4957,15 @@ export class ExtractorSceneManager {
     return dataUrl;
   }
 
-  async startVideoRecording(
-    config: VideoExtractorConfig,
-    onProgress?: (progress: number) => void
-  ): Promise<Blob> {
-    if (!this.model) {
-      throw new Error('No model loaded');
-    }
-
-    return new Promise((resolve, reject) => {
-      this.renderer.setSize(config.width, config.height);
-      this.camera.aspect = config.width / config.height;
-      this.camera.updateProjectionMatrix();
-
-      // setupStudioLighting is async but we call it synchronously here because
-      // we already called it (with await) during init — textures are loaded.
-      // Re-setup synchronously for recording resolution.
-      this.setupStudioLighting(config).then(() => {
-        this._startRecordingLoop(config, onProgress, resolve, reject);
-      });
-    });
-  }
-
-  private _startRecordingLoop(
-    config: VideoExtractorConfig,
-    onProgress: ((p: number) => void) | undefined,
-    resolve: (blob: Blob) => void,
-    reject: (err: Error) => void
-  ) {
-    // Stop any running video preview before starting recording
-    this.stopVideoPreview();
-
-    // Hide all helpers/gizmos so they don't appear in the recorded video
-    this.setHelpersVisible(false);
-
-    // ── Scale cue ──
-    const modelScale = config.modelScale ?? 7;
-    const prevScale = this.model!.scale.clone();
-    this.model!.scale.setScalar(modelScale);
-    this.model!.rotation.set(0, 0, 0);
-    this.model!.position.set(0, 0, 0);
-
-    // ── Tilt wrapper: lay cue perfectly horizontal, butt on LEFT ──
-    const wrapperGroup = new THREE.Group();
-    wrapperGroup.rotation.z = -Math.PI / 2;
-    this.scene.remove(this.model!);
-    wrapperGroup.add(this.model!);
-    this.scene.add(wrapperGroup);
-    this.videoWrapperGroup = wrapperGroup;
-
-    // ── Compute cue world-space bounds for camera positioning ──
-    wrapperGroup.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(wrapperGroup);
-    const cueLen = box.max.x - box.min.x;
-    const buttX  = box.min.x;
-    const endFraction = config.cameraEndFraction ?? 0.68;
-    const camEndX = buttX + cueLen * endFraction;
-    const camStartX = buttX + cueLen * 0.05; // start just inside butt end
-
-    // ── Camera setup ──
-    // Fixed height (parallel to table), 20° Dutch-angle roll so cue appears tilted.
-    // As camera pans right, the tilted cue appears to "go down" in frame.
-    const camY = 0.55;  // Fixed — parallel to table, no rising
-    const camZ = 1.7;
-    const rollDeg = config.cameraRoll ?? 20;
-    const rollRad = rollDeg * Math.PI / 180;
-    // Clockwise camera tilt (hold camera rotated right):
-    //   up rotates clockwise → up.x = +sin, up.y = cos
-    //   Cue (horizontal) appears to go lower-right → gives the "cue going down" feel
-    this.camera.up.set(Math.sin(rollRad), Math.cos(rollRad), 0);
-    this.camera.position.set(camStartX, camY, camZ);
-    this.camera.lookAt(camStartX, 0, 0);
-
-    const stream = this.renderer.domElement.captureStream(config.fps);
-    this.mediaRecorder = new MediaRecorder(stream, {
-      mimeType: getSupportedMimeType(),
-      videoBitsPerSecond: config.bitrate,
-    });
-
-    this.recordedChunks = [];
-    this.mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) this.recordedChunks.push(e.data);
-    };
-
-    const cleanup = () => {
-      this.setHelpersVisible(true);
-      this.camera.up.set(0, 1, 0); // Reset camera roll
-      if (wrapperGroup.parent) this.scene.remove(wrapperGroup);
-      wrapperGroup.remove(this.model!);
-      this.model!.scale.copy(prevScale);
-      this.model!.rotation.set(0, 0, 0);
-      this.model!.position.set(0, 0, 0);
-      this.scene.add(this.model!);
-      this.videoWrapperGroup = null;
-    };
-
-    this.mediaRecorder.onstop = () => {
-      cleanup();
-      const blob = new Blob(this.recordedChunks, { type: getSupportedMimeType() });
-      resolve(blob);
-    };
-
-    this.mediaRecorder.onerror = () => {
-      cleanup();
-      reject(new Error('Recording failed'));
-    };
-
-    // ── Wall-clock based timing ──
-    // Progress and stop condition are driven by elapsed real time so that every device
-    // produces a video of the same duration with the same camera/rotation speed,
-    // regardless of GPU rendering throughput.
-    const durationMs = config.duration * 1000;
-    const recordingStartTime = performance.now();
-
-    const animate = (timestamp: number) => {
-      void timestamp; // wall-clock timing is used; rAF timestamp only identifies the tick
-      const elapsedMs = performance.now() - recordingStartTime;
-
-      if (this.isDisposed || elapsedMs >= durationMs) {
-        this.animationFrameId = null;
-        this.mediaRecorder?.stop();
-        return;
-      }
-
-      // No manual throttle — render every rAF tick so captureStream(fps) always has a
-      // fresh canvas frame to sample. captureStream self-limits the encoded output to
-      // config.fps; the drift-corrected throttle previously caused a just-below-threshold
-      // skip on high-refresh displays that produced irregular frame gaps (stutters).
-
-      const progress = Math.min(1, elapsedMs / durationMs);
-      onProgress?.(Math.round(progress * 100));
-
-      // Cue spin based on elapsed wall-clock time for device-independent rotation speed
-      const elapsedSec = elapsedMs / 1000;
-      this.model!.rotation.y = elapsedSec * config.rotationSpeed;
-
-      // Camera pans right along cue — cameraDollySpeed controls fraction covered per video
-      const dollySpeed = config.cameraDollySpeed ?? 0.15;
-      const camX = camStartX + (camEndX - camStartX) * Math.min(1, progress * dollySpeed);
-      this.camera.position.set(camX, camY, camZ);
-      this.camera.lookAt(camX, 0, 0);
-
-      this.renderer.render(this.scene, this.camera);
-      this.animationFrameId = requestAnimationFrame(animate);
-    };
-
-    this.mediaRecorder.start();
-    this.animationFrameId = requestAnimationFrame(animate);
-  }
-
+  /**
+   * Requests that an in-flight recording stop.
+   *
+   * Returns immediately: the loop notices the flag before its next frame and
+   * rejects with RecordingCanceledError, so callers that already treat a
+   * cancelled take as "no output" keep working unchanged.
+   */
   stopRecording() {
-    if (this.animationFrameId) {
-      cancelAnimationFrame(this.animationFrameId);
-      this.animationFrameId = null;
-    }
-    if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-      this.mediaRecorder.stop();
-    }
+    this._recordingCanceled = true;
   }
 
   getCanvas(): HTMLCanvasElement {

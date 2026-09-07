@@ -23,6 +23,7 @@ import {
   type EnqueueContext,
   type JobSeed,
 } from "@/lib/render/enqueue";
+import { resolveAppBaseUrl } from "@/lib/render/gpu-dispatch";
 import type { ApiRenderJob, ApiRenderQueued, ApiRenderRequest } from "@/types/api-token";
 import type { RenderJob } from "@/types/render-job";
 
@@ -229,8 +230,22 @@ async function resolveTargets(
   return targets;
 }
 
-/** The external view of a queued job. */
-function toApiJob(request: Request, job: RenderJob, target: string): ApiRenderJob {
+/**
+ * The external view of a queued job.
+ *
+ * `baseUrl` is resolved once by the caller rather than derived from
+ * `request.url` here: behind the production reverse proxy, Next.js sees the
+ * address it is bound to (`0.0.0.0:3000`), not the host the client asked for,
+ * so a status_url built from request.url is unreachable for the caller.
+ * resolveAppBaseUrl already handles that — RENDER_APP_BASE_URL first, then the
+ * x-forwarded-* headers the proxy sets — and is what the GPU dispatch uses to
+ * tell a worker where to call back.
+ */
+function toApiJob(
+  baseUrl: string,
+  job: RenderJob,
+  target: string
+): ApiRenderJob {
   return {
     id: job.id,
     kind: job.kind,
@@ -242,7 +257,7 @@ function toApiJob(request: Request, job: RenderJob, target: string): ApiRenderJo
     // count here — a clip is always one file (see expectedFiles).
     expected_files: job.kind === "video" ? 1 : job.progressTotal,
     created_at: job.createdAt,
-    status_url: new URL(`/api/v1/renders/${job.id}`, request.url).toString(),
+    status_url: `${baseUrl}/api/v1/renders/${job.id}`,
   };
 }
 
@@ -262,6 +277,9 @@ export async function POST(request: Request) {
     // that person already has in the dashboard. The job and its files still
     // belong to the token's owner.
     const ctx = apiTokenContext(auth.ctx.userId, auth.ctx.canActOnAnyProduct);
+    // Same base URL the worker callbacks use, so status_url is a link the
+    // caller can actually follow from outside the server.
+    const baseUrl = resolveAppBaseUrl(request);
 
     const productIds = await resolveProductIdsByName(ctx, [
       body.product,
@@ -383,10 +401,11 @@ export async function POST(request: Request) {
         ctx,
         request,
         "image",
-        imageSeeds.map((entry) => entry.seed)
+        imageSeeds.map((entry) => entry.seed),
+        "api"
       );
       result.jobs.forEach((job, index) => {
-        jobs.push(toApiJob(request, job, imageSeeds[index].label));
+        jobs.push(toApiJob(baseUrl, job, imageSeeds[index].label));
       });
       if (result.warning) warnings.push(result.warning);
     }
@@ -396,10 +415,11 @@ export async function POST(request: Request) {
         ctx,
         request,
         "video",
-        videoSeeds.map((entry) => entry.seed)
+        videoSeeds.map((entry) => entry.seed),
+        "api"
       );
       result.jobs.forEach((job, index) => {
-        jobs.push(toApiJob(request, job, videoSeeds[index].label));
+        jobs.push(toApiJob(baseUrl, job, videoSeeds[index].label));
       });
       if (result.warning) warnings.push(result.warning);
     }

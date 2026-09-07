@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminServiceClient } from "@/lib/supabase/server";
 import { asRenderStorageClient } from "@/lib/render/supabase-surface";
 import { requireApiToken } from "@/lib/api-tokens/auth";
+import { resolveAppBaseUrl } from "@/lib/render/gpu-dispatch";
 import { resolveProductName } from "@/lib/api-tokens/product-name";
 import {
   DEFAULT_CONFIG_BY_TYPE,
@@ -115,12 +116,15 @@ function badRequest(message: string): NextResponse {
 /**
  * Absolute URL of the editor for a product.
  *
- * Derived from the request rather than an env var so it is correct on every
- * deployment without configuration — the caller is talking to this host, so
- * this host is the right one to name.
+ * NOT `new URL(..., request.url)`: behind the production reverse proxy,
+ * Next.js sees the address it is bound to (`0.0.0.0:3000`) rather than the
+ * host the caller asked for, so that produced a link nobody could open.
+ * resolveAppBaseUrl reads RENDER_APP_BASE_URL first and falls back to the
+ * proxy's x-forwarded-* headers, which is the same resolution the GPU worker
+ * callbacks rely on.
  */
 function editorUrl(request: Request, productId: string): string {
-  return new URL(`/dashboard/products/${productId}`, request.url).toString();
+  return `${resolveAppBaseUrl(request)}/dashboard/products/${productId}`;
 }
 
 /** Everything the request itself supplies, once validated. */

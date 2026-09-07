@@ -143,11 +143,22 @@ export interface EnqueueResult {
   warning?: string;
 }
 
+/**
+ * Where a batch came from — see migration 038.
+ *
+ * Taken from the CALLER rather than sniffed from the request, because the two
+ * enqueue paths already know: the dashboard's routes authenticate a session,
+ * /api/v1/renders authenticates a token. Guessing from headers would be a
+ * worse answer to a question nobody has to ask.
+ */
+export type RenderJobSource = "dashboard" | "api";
+
 export async function insertAndDispatch(
   ctx: EnqueueContext,
   request: Request,
   kind: "image" | "video",
-  seeds: JobSeed[]
+  seeds: JobSeed[],
+  source: RenderJobSource = "dashboard"
 ): Promise<EnqueueResult> {
   // Backstop for the hourly cron: queueing a render is the only thing that
   // makes Storage grow, so it is also the right moment to sweep. Throttled and
@@ -166,6 +177,7 @@ export async function insertAndDispatch(
         payload: seed.payload,
         progress_total: seed.progressTotal,
         status: "queued",
+        source,
       }))
     )
     .select<RenderJobRow>(RENDER_JOB_COLUMNS);

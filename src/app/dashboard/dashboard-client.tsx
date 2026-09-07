@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { ProductsGrid } from "@/components/products/products-grid";
 import { ReferencesGrid } from "@/components/products/references-grid";
 import { StudioTemplatesGrid } from "@/components/products/studio-templates-grid";
+import { ApiRenderJobsGrid } from "@/components/products/api-render-jobs-grid";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UserDropdown } from "@/components/user-dropdown";
 import { FirstLoginDialog } from "@/components/first-login-dialog";
@@ -31,12 +32,13 @@ interface DashboardClientProps {
 }
 
 /** Which list the dashboard is showing. */
-type DashboardView = "products" | "references" | "studio";
+type DashboardView = "products" | "references" | "studio" | "api-jobs";
 
 const VIEW_TABS: Array<{ value: DashboardView; label: string }> = [
   { value: "products", label: "Sản Phẩm" },
   { value: "references", label: "Tham Chiếu 2D" },
   { value: "studio", label: "Video 3D" },
+  { value: "api-jobs", label: "Render Job" },
 ];
 
 export function DashboardClient({ profile: initialProfile, showFirstLoginDialog, isSuperAdmin, canDeploy, canRender, canDeleteTeamAssets }: DashboardClientProps) {
@@ -44,11 +46,17 @@ export function DashboardClient({ profile: initialProfile, showFirstLoginDialog,
   const [firstLoginOpen, setFirstLoginOpen] = useState(showFirstLoginDialog);
   const [view, setView] = useState<DashboardView>("products");
 
-  // Shared by all three lists so the tabs sit right next to each heading.
+  // Rendering is what this tab is about, so someone without it has nothing to
+  // look at — the API jobs it lists are queued with the same permission.
+  const visibleTabs = canRender
+    ? VIEW_TABS
+    : VIEW_TABS.filter((t) => t.value !== "api-jobs");
+
+  // Shared by every list so the tabs sit right next to each heading.
   // mr-auto keeps them left-aligned inside the heading row's justify-between.
   const viewTabs = (
     <div className="flex items-center gap-2 mr-auto">
-      {VIEW_TABS.map((t) => (
+      {visibleTabs.map((t) => (
         <Button
           key={t.value}
           variant={view === t.value ? "default" : "outline"}
@@ -119,6 +127,7 @@ export function DashboardClient({ profile: initialProfile, showFirstLoginDialog,
         {view === "products" && <ProductsGrid currentUserId={profile.user_id} tabs={viewTabs} />}
         {view === "references" && <ReferencesGrid tabs={viewTabs} canDelete={canDeleteTeamAssets} />}
         {view === "studio" && <StudioTemplatesGrid tabs={viewTabs} canDelete={canDeleteTeamAssets} />}
+        {view === "api-jobs" && canRender && <ApiRenderJobsGrid tabs={viewTabs} />}
       </main>
 
       <FirstLoginDialog open={firstLoginOpen} onComplete={handleFirstLoginComplete} />

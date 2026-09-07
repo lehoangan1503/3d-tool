@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { errorResponse, requireUser } from "@/lib/render/enqueue";
+import {
+  errorResponse,
+  requireUser,
+  type RenderJobSource,
+} from "@/lib/render/enqueue";
 import { RenderPayloadError } from "@/lib/render/build-payload";
 import {
   attachProductNames,
@@ -23,7 +27,11 @@ const VALID_STATUSES: RenderJobStatus[] = [
  * selected products, so a batch of 5 products needs one request per tick
  * instead of five.
  *
- * Query: ?status=queued,running &kind=image|video &limit=50
+ * Query: ?status=queued,running &kind=image|video &source=api|dashboard &limit=50
+ *
+ * `source` splits the two queues that share this table: jobs a person started
+ * in the dashboard, and jobs an AI agent started through /api/v1/renders. Omit
+ * it to see both — the parameter narrows, it never widens.
  */
 export async function GET(request: Request) {
   try {
@@ -51,6 +59,11 @@ export async function GET(request: Request) {
         .map((s) => s.trim())
         .filter((s): s is RenderJobStatus => VALID_STATUSES.includes(s as RenderJobStatus));
       if (statuses.length > 0) query = query.in("status", statuses);
+    }
+
+    const sourceParam = searchParams.get("source");
+    if (sourceParam === "api" || sourceParam === "dashboard") {
+      query = query.eq("source", sourceParam satisfies RenderJobSource);
     }
 
     const productId = searchParams.get("product_id");

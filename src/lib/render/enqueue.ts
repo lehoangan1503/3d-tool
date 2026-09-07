@@ -46,6 +46,56 @@ export async function requireUser(): Promise<
 }
 
 /**
+ * The same context, built from a verified API token instead of a session.
+ *
+ * The client is the SERVICE client, because a bearer-token request carries no
+ * Supabase session for RLS to evaluate. That makes the caller's own scoping
+ * mandatory, not optional:
+ *
+ *   - `userId` comes from the token, and every job row is inserted with it, so
+ *     a render is always attributed to the token's owner.
+ *   - Product reads MUST be filtered by that userId by hand. The session path
+ *     gets that from RLS; here nothing does it for us. See
+ *     assertProductsOwnedBy below, which /api/v1/renders calls.
+ *
+ * References, groups and video templates are deliberately NOT scoped: they are
+ * global in this app (every operator picks from the same catalogue, see
+ * GET /api/extractor-references), so a token reaching them is the same access
+ * its owner has in the dashboard.
+ */
+export function apiTokenContext(userId: string): EnqueueContext {
+  return { supabase: asRenderDbClient(createAdminServiceClient()), userId };
+}
+
+/**
+ * Refuses to render a product the token's owner does not own.
+ *
+ * This is the guard that replaces RLS on the /api/v1 path. Phrased as "not
+ * found" rather than "not yours" so a token cannot be used to probe which
+ * product ids exist.
+ */
+export async function assertProductsOwnedBy(
+  ctx: EnqueueContext,
+  productIds: string[]
+): Promise<void> {
+  const { data, error } = await ctx.supabase
+    .from("products")
+    .select<{ id: string }>("id")
+    .in("id", productIds)
+    .eq("user_id", ctx.userId);
+
+  if (error) {
+    throw new RenderPayloadError(`Failed to verify products: ${error.message}`, 500);
+  }
+
+  const owned = new Set((data ?? []).map((row) => row.id));
+  const missing = productIds.filter((id) => !owned.has(id));
+  if (missing.length > 0) {
+    throw new RenderPayloadError(`Product not found: ${missing.join(", ")}`, 404);
+  }
+}
+
+/**
  * Normalizes the product list: the URL's product plus any extras from the body,
  * de-duplicated, order preserved. Lets one endpoint serve both "render this
  * product" and the multi-select batch.

@@ -8,6 +8,7 @@ import {
   configToSettingsJson,
   isLeatherLikeType,
 } from "@/types/product";
+import type { ProductType } from "@/types/product";
 import type { ApiCreatedProduct } from "@/types/api-token";
 import type { ApiTokenContext } from "@/types/api-token";
 
@@ -20,12 +21,16 @@ import type { ApiTokenContext } from "@/types/api-token";
  *
  *   curl -X POST https://app/api/v1/products \
  *        -H "Authorization: Bearer cue_live_..." \
- *        -F file=@dragon-gold.jpg
+ *        -F file=@dragon-gold.jpg \
+ *        -F type=leather
  *
- * The token supplies the cue type and the name prefix, so the body carries
- * nothing but the file. `name` may be sent to override the filename; there is
- * deliberately nothing else to send, because every additional field is another
- * thing a prompt-driven caller can get wrong.
+ * The token is identity only (plus a default name prefix). `type` travels in
+ * the body so ONE token covers every cue type — see migration 037 for why that
+ * beat the original per-type token. It is required rather than defaulted: a
+ * caller that forgot the field gets a 400 naming the allowed values, which is
+ * recoverable, where a silent default would quietly build the wrong cue.
+ *
+ * Optional: `name` overrides the filename, `name_prefix` overrides the token's.
  *
  * Versioned under /api/v1 because this is the one route in the app with
  * callers we do not deploy: the dashboard's own routes can change shape with
@@ -46,6 +51,50 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 /** The storage bucket product assets live in, same as the dashboard's upload. */
 const ASSET_BUCKET = "product-assets";
+
+/**
+ * Cue types a caller may ask for, and the aliases accepted for each.
+ *
+ * The aliases exist because the caller is often an AI or a non-developer
+ * filling in an n8n field, and "da"/"tron" is what they call these in the shop.
+ * Accepting the words people actually use costs one lookup table and removes
+ * the most likely 400.
+ */
+const TYPE_ALIASES: Record<string, ProductType> = {
+  leather: "leather",
+  da: "leather",
+  "gay-da": "leather",
+  smooth: "smooth",
+  tron: "smooth",
+  "gay-tron": "smooth",
+  plain: "smooth",
+  lizard: "lizard",
+  "da-lizard": "lizard",
+  "gay-da-lizard": "lizard",
+};
+
+/** Canonical values, for error messages and the docs. */
+const TYPE_VALUES: readonly ProductType[] = ["leather", "smooth", "lizard"];
+
+/** Same rule the settings route enforces, so an override cannot be worse. */
+const NAME_PREFIX_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+/**
+ * Resolves a requested cue type.
+ *
+ * Diacritics are stripped before lookup ("gậy da" -> "gay-da") so a caller
+ * pasting Vietnamese is not punished for spelling it correctly.
+ */
+function parseProductType(raw: string): ProductType | null {
+  const key = raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return TYPE_ALIASES[key] ?? null;
+}
 
 interface CreatedProductRow {
   id: string;
@@ -74,14 +123,24 @@ function editorUrl(request: Request, productId: string): string {
   return new URL(`/dashboard/products/${productId}`, request.url).toString();
 }
 
+/** Everything the request itself supplies, once validated. */
+interface UploadRequest {
+  file: File;
+  productType: ProductType;
+  /** Explicit product name, overriding the filename. */
+  name: string | null;
+  /** Prefix override; null means "use the token's". */
+  namePrefix: string | null;
+}
+
 /**
  * Reads and validates the multipart body.
  *
- * Returns the file plus the optional name override, or a response to send back.
+ * Returns the file and the requested configuration, or a response to send back.
  */
 async function readUpload(
   request: Request
-): Promise<{ ok: true; file: File; name: string | null } | { ok: false; response: NextResponse }> {
+): Promise<{ ok: true; upload: UploadRequest } | { ok: false; response: NextResponse }> {
   const contentType = request.headers.get("content-type") ?? "";
   if (!contentType.includes("multipart/form-data")) {
     return {
@@ -131,11 +190,56 @@ async function readUpload(
     };
   }
 
+  // Required, and checked AFTER the file so a caller missing both is told
+  // about the file first — that is the harder half to get right.
+  const rawType = form.get("type");
+  if (typeof rawType !== "string" || rawType.trim().length === 0) {
+    return {
+      ok: false,
+      response: badRequest(
+        `Missing \`type\` field. Allowed: ${TYPE_VALUES.join(", ")}.`
+      ),
+    };
+  }
+
+  const productType = parseProductType(rawType);
+  if (!productType) {
+    return {
+      ok: false,
+      response: badRequest(
+        `Unknown type "${rawType}". Allowed: ${TYPE_VALUES.join(", ")}.`
+      ),
+    };
+  }
+
   const rawName = form.get("name");
+  const name =
+    typeof rawName === "string" && rawName.trim().length > 0 ? rawName : null;
+
+  // An empty string is treated as "not sent" rather than "no prefix": a form
+  // builder that always includes the field would otherwise silently strip the
+  // token's prefix. Clearing a prefix is a token setting, not a per-call one.
+  const rawPrefix = form.get("name_prefix");
+  const trimmedPrefix =
+    typeof rawPrefix === "string" ? rawPrefix.trim().toLowerCase() : "";
+  if (trimmedPrefix.length > 0 && !NAME_PREFIX_PATTERN.test(trimmedPrefix)) {
+    return {
+      ok: false,
+      response: badRequest(
+        "`name_prefix` may contain only lowercase letters, digits and hyphens, " +
+          "must start with a letter or digit, and be at most 32 characters."
+      ),
+    };
+  }
+
   return {
     ok: true,
-    file,
-    name: typeof rawName === "string" && rawName.trim().length > 0 ? rawName : null,
+    upload: {
+      file,
+      productType,
+      name,
+      namePrefix: trimmedPrefix.length > 0 ? trimmedPrefix : null,
+    },
   };
 }
 
@@ -149,13 +253,14 @@ async function readUpload(
 async function createProductRow(
   db: ReturnType<typeof asRenderStorageClient>,
   ctx: ApiTokenContext,
+  productType: ProductType,
   name: string
 ): Promise<
   | { ok: true; product: CreatedProductRow; settingsId: string }
   | { ok: false; response: NextResponse }
 > {
   const defaultConfig =
-    DEFAULT_CONFIG_BY_TYPE[ctx.productType] ?? DEFAULT_CONFIG_BY_TYPE.smooth;
+    DEFAULT_CONFIG_BY_TYPE[productType] ?? DEFAULT_CONFIG_BY_TYPE.smooth;
 
   const { data: settings, error: settingsError } = await db
     .from("threejs_settings")
@@ -184,11 +289,11 @@ async function createProductRow(
     .insert({
       user_id: ctx.userId,
       name,
-      type: ctx.productType,
+      type: productType,
       // Leather-like types need these columns populated to render; smooth
       // leaves them null. Same defaults the dashboard's create form applies.
-      texture_type: isLeatherLikeType(ctx.productType) ? "crocodile" : null,
-      color: isLeatherLikeType(ctx.productType) ? "black" : null,
+      texture_type: isLeatherLikeType(productType) ? "crocodile" : null,
+      color: isLeatherLikeType(productType) ? "black" : null,
       threejs_settings_id: settings.id,
     })
     .select<CreatedProductRow>("id, name, type, surface_url, created_at")
@@ -216,12 +321,15 @@ export async function POST(request: Request) {
     const auth = await requireApiToken(request);
     if (!auth.ok) return auth.response;
 
-    const upload = await readUpload(request);
-    if (!upload.ok) return upload.response;
+    const parsed = await readUpload(request);
+    if (!parsed.ok) return parsed.response;
 
     const { ctx } = auth;
+    const { upload } = parsed;
     const name = resolveProductName({
-      namePrefix: ctx.namePrefix,
+      // Request wins; the token's prefix is the default for callers that do
+      // not set one.
+      namePrefix: upload.namePrefix ?? ctx.namePrefix,
       fileName: upload.file.name,
       requestedName: upload.name,
     });
@@ -230,7 +338,7 @@ export async function POST(request: Request) {
     // evaluate. Every write below is scoped to ctx.userId by hand.
     const db = asRenderStorageClient(createAdminServiceClient());
 
-    const created = await createProductRow(db, ctx, name);
+    const created = await createProductRow(db, ctx, upload.productType, name);
     if (!created.ok) return created.response;
     const { product, settingsId } = created;
 
@@ -287,7 +395,7 @@ export async function POST(request: Request) {
     const body: ApiCreatedProduct = {
       id: product.id,
       name: product.name,
-      type: ctx.productType,
+      type: upload.productType,
       surface_url: surfaceUrl,
       created_at: product.created_at,
       editor_url: editorUrl(request, product.id),

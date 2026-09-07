@@ -3,9 +3,9 @@
  *
  * These requests come from outside the app — an AI tool, a script, curl — and
  * carry no Supabase session, so nothing here can rely on cookies or RLS. The
- * token IS the credential: it names the user and, unusually, also names the
- * configuration to build (see migration 036 for why config belongs on the
- * token rather than in the request).
+ * token IS the credential: it names the user, and nothing else that matters.
+ * The cue type is a request field (migration 037); the token carries only an
+ * optional default name prefix.
  *
  * Two rules make that safe:
  *   1. Only a hash is stored. The plaintext exists once, in the creation
@@ -19,7 +19,6 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { createAdminServiceClient } from "@/lib/supabase/server";
 import type { ApiTokenContext } from "@/types/api-token";
-import type { ProductType } from "@/types/product";
 
 /**
  * Prefix on every token. Makes a leaked string recognisable in a log or a
@@ -100,7 +99,6 @@ interface ApiTokenRow {
   id: string;
   user_id: string;
   token_hash: string;
-  product_type: ProductType;
   name_prefix: string | null;
   revoked_at: string | null;
 }
@@ -129,7 +127,7 @@ export async function requireApiToken(request: Request): Promise<ApiTokenAuthRes
   // application code.
   const { data, error } = await admin
     .from("api_tokens")
-    .select("id, user_id, token_hash, product_type, name_prefix, revoked_at")
+    .select("id, user_id, token_hash, name_prefix, revoked_at")
     .eq("token_hash", hashToken(presented))
     .maybeSingle<ApiTokenRow>();
 
@@ -174,7 +172,6 @@ export async function requireApiToken(request: Request): Promise<ApiTokenAuthRes
     ctx: {
       tokenId: data.id,
       userId: data.user_id,
-      productType: data.product_type,
       namePrefix: data.name_prefix,
     },
   };

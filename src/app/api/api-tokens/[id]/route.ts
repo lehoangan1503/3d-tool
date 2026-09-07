@@ -11,7 +11,7 @@ import type { ApiTokenSummary, UpdateApiTokenInput } from "@/types/api-token";
  */
 
 const TOKEN_COLUMNS =
-  "id, label, token_prefix, product_type, name_prefix, revoked_at, last_used_at, created_at";
+  "id, label, token_prefix, name_prefix, revoked_at, last_used_at, created_at";
 
 const NAME_PREFIX_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
 

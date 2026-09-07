@@ -39,6 +39,11 @@ export interface ApiGroup {
  *
  * `curl` is given for the multipart route because a JSON body cannot express a
  * file upload — showing JSON there would be actively misleading.
+ *
+ * The allowed `type` values get a block of their own rather than a line of
+ * prose: it is the one field the caller must fill in per template, and the
+ * people wiring up n8n copy a block far more reliably than they read a
+ * sentence.
  */
 export interface ApiSample {
   readonly id: string;
@@ -54,12 +59,33 @@ export const API_GROUPS: readonly ApiGroup[] = [
     title: "Gọi được từ bên ngoài (API token)",
     note:
       "Chỉ nhóm này nhận header Authorization: Bearer. Dùng cho AI, script, n8n, " +
-      "hoặc bất cứ thứ gì không chạy trong browser.",
+      "hoặc bất cứ thứ gì không chạy trong browser. Token chỉ để xác thực — loại " +
+      "gậy khai trong field type của request.",
     endpoints: [
       {
         methods: ["POST"],
         path: "/api/v1/products",
-        summary: "Gửi 1 file template → tạo sản phẩm mới (loại gậy + tiền tố lấy từ token)",
+        summary:
+          "Gửi file ảnh + type (leather / smooth / lizard) → tạo sản phẩm mới. " +
+          "Một token dùng cho mọi loại gậy.",
+      },
+      {
+        methods: ["GET"],
+        path: "/api/v1/render-targets",
+        summary:
+          "Danh sách nhóm ảnh 2D, reference 2D lẻ và template video 3D — kèm tên để gọi render",
+      },
+      {
+        methods: ["POST"],
+        path: "/api/v1/renders",
+        summary:
+          "Đặt render mockup / video. Chỉ cần ĐỀ CẬP TÊN — trộn nhiều nhóm + " +
+          "reference lẻ + template video trong 1 request",
+      },
+      {
+        methods: ["GET"],
+        path: "/api/v1/renders/[jobId]",
+        summary: "Hỏi tiến độ + lấy link file khi render xong",
       },
     ],
   },
@@ -152,16 +178,30 @@ export const API_SAMPLES: readonly ApiSample[] = [
     language: "bash",
     body: `curl -X POST __ORIGIN__/api/v1/products \\
   -H "Authorization: Bearer __TOKEN__" \\
-  -F file=@surface.jpg`,
+  -F file=@surface.jpg \\
+  -F type=leather`,
+  },
+  {
+    id: "type-values",
+    title: "Giá trị của field type — chỉ cần đổi đúng dòng này",
+    language: "json",
+    body: `{
+  "leather": "Gậy da        — gửi: leather | da | gay da",
+  "smooth":  "Gậy trơn      — gửi: smooth  | tron | gay tron",
+  "lizard":  "Gậy da lizard — gửi: lizard  | da lizard | gay da lizard",
+  "_ghi_chú": "Không phân biệt chữ hoa/thường, có dấu hay không dấu đều nhận. Thiếu type → lỗi 400."
+}`,
   },
   {
     id: "curl-create-product-named",
-    title: "Tạo sản phẩm, tự đặt tên (curl)",
+    title: "Tạo sản phẩm, tự đặt tên + tiền tố riêng (curl)",
     language: "bash",
     body: `curl -X POST __ORIGIN__/api/v1/products \\
   -H "Authorization: Bearer __TOKEN__" \\
   -F file=@surface.jpg \\
-  -F name="Dragon Gold"`,
+  -F type=smooth \\
+  -F name="Dragon Gold" \\
+  -F name_prefix=n02`,
   },
   {
     id: "json-request-spec",
@@ -177,9 +217,159 @@ export const API_SAMPLES: readonly ApiSample[] = [
     "type": "multipart/form-data",
     "fields": {
       "file": "<đường dẫn file ảnh: .jpg / .png / .webp, tối đa 25MB>",
-      "name": "<tuỳ chọn — bỏ trống thì lấy tên file>"
+      "type": "<BẮT BUỘC — leather (gậy da) | smooth (gậy trơn) | lizard (gậy da lizard)>",
+      "name": "<tuỳ chọn — bỏ trống thì lấy tên file>",
+      "name_prefix": "<tuỳ chọn — bỏ trống thì lấy tiền tố mặc định của token>"
     }
   }
+}`,
+  },
+  {
+    id: "curl-render-targets",
+    title: "Xem có những gì để render (curl)",
+    language: "bash",
+    body: `curl __ORIGIN__/api/v1/render-targets \\
+  -H "Authorization: Bearer __TOKEN__"`,
+  },
+  {
+    id: "curl-render-group",
+    title: "Render nhóm ảnh 2D — chỉ cần tên nhóm (curl)",
+    language: "bash",
+    body: `curl -X POST __ORIGIN__/api/v1/renders \\
+  -H "Authorization: Bearer __TOKEN__" \\
+  -H "Content-Type: application/json" \\
+  -d '{"product": "n02-dragon-gold", "groups": ["NOVERA-D"]}'`,
+  },
+  {
+    id: "curl-render-mixed",
+    title: "Trộn tất cả trong 1 request — nhiều nhóm + reference lẻ + video (curl)",
+    language: "bash",
+    body: `curl -X POST __ORIGIN__/api/v1/renders \\
+  -H "Authorization: Bearer __TOKEN__" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "product": "n02-dragon-gold",
+    "groups": ["NOVERA-D", "Ebay 1"],
+    "references": ["BAN1", "banner1"],
+    "video_templates": ["Studio quay tròn"]
+  }'`,
+  },
+  {
+    id: "json-render-fanout",
+    title: "Trộn target thì ra bao nhiêu job?",
+    language: "json",
+    body: `{
+  "_quy_tắc": "Mỗi nhóm = 1 job. Mỗi template video = 1 job. TẤT CẢ reference lẻ gộp thành 1 job.",
+  "_nhân_với_sản_phẩm": "Gửi thêm products[] thì mỗi target render cho từng sản phẩm (tối đa 60 job / request).",
+  "_ví_dụ": {
+    "request": {
+      "product": "n02-dragon-gold",
+      "products": ["n02-tiger-blue"],
+      "groups": ["NOVERA-D", "Ebay 1"],
+      "references": ["BAN1", "banner1"],
+      "video_templates": ["Studio quay tròn"]
+    },
+    "ra": "4 target x 2 sản phẩm = 8 job",
+    "chi_tiết": [
+      "NOVERA-D          → n02-dragon-gold, n02-tiger-blue",
+      "Ebay 1            → n02-dragon-gold, n02-tiger-blue",
+      "BAN1 + banner1    → n02-dragon-gold, n02-tiger-blue  (1 job/sản phẩm, 2 ảnh)",
+      "Studio quay tròn  → n02-dragon-gold, n02-tiger-blue"
+    ]
+  }
+}`,
+  },
+  {
+    id: "json-render-spec",
+    title: "Mô tả request render (JSON) — đưa cho AI/n8n",
+    language: "json",
+    body: `{
+  "method": "POST",
+  "url": "__ORIGIN__/api/v1/renders",
+  "headers": {
+    "Authorization": "Bearer __TOKEN__",
+    "Content-Type": "application/json"
+  },
+  "body": {
+    "product": "<BẮT BUỘC — tên hoặc id sản phẩm vừa tạo>",
+    "products": "<tuỳ chọn — thêm sản phẩm khác, mọi target render cho từng cái>",
+
+    "_ba_dòng_dưới_dùng_được_CÙNG_LÚC": "khai cái nào có, bỏ trống cái không cần",
+    "groups": ["<tên nhóm ảnh 2D>", "<...>"],
+    "references": ["<tên reference 2D lẻ>", "<...>"],
+    "video_templates": ["<tên template video 3D>", "<...>"],
+
+    "format": "<ảnh: png (mặc định) | jpeg>",
+    "quality": "<ảnh jpeg: 0.1-1, mặc định 0.95>",
+    "width": "<video: mặc định 1920>",
+    "height": "<video: mặc định 1080>",
+    "fps": "<video: mặc định 60>"
+  },
+  "_ghi_chú": "Tên lấy từ GET /api/v1/render-targets. Không phân biệt hoa/thường, có dấu hay không dấu. Tên trùng nhau → lỗi 400 kèm danh sách id để chọn."
+}`,
+  },
+  {
+    id: "json-render-response",
+    title: "Response khi đặt render (202) — mỗi target 1 job, rồi poll status_url",
+    language: "json",
+    body: `{
+  "jobs": [
+    {
+      "id": "9c1b7e40-2a55-4f10-8b3d-6e2f1a4c9d70",
+      "kind": "image",
+      "status": "queued",
+      "product_id": "3f9a1c22-7b41-4e8d-9c05-1a2b3c4d5e6f",
+      "product_name": "n02-dragon-gold",
+      "target": "NOVERA-D",
+      "expected_files": 6,
+      "created_at": "2026-09-07T10:24:02.104Z",
+      "status_url": "__ORIGIN__/api/v1/renders/9c1b7e40-2a55-4f10-8b3d-6e2f1a4c9d70"
+    },
+    {
+      "id": "a4d2f118-7c93-4a6e-b201-58ff3c9e1d24",
+      "kind": "image",
+      "status": "queued",
+      "product_id": "3f9a1c22-7b41-4e8d-9c05-1a2b3c4d5e6f",
+      "product_name": "n02-dragon-gold",
+      "target": "BAN1, banner1",
+      "expected_files": 2,
+      "created_at": "2026-09-07T10:24:02.104Z",
+      "status_url": "__ORIGIN__/api/v1/renders/a4d2f118-7c93-4a6e-b201-58ff3c9e1d24"
+    },
+    {
+      "id": "c7e01a83-6b24-4d95-9f38-2ab5e14c7d60",
+      "kind": "video",
+      "status": "queued",
+      "product_id": "3f9a1c22-7b41-4e8d-9c05-1a2b3c4d5e6f",
+      "product_name": "n02-dragon-gold",
+      "target": "Studio quay tròn",
+      "expected_files": 1,
+      "created_at": "2026-09-07T10:24:02.312Z",
+      "status_url": "__ORIGIN__/api/v1/renders/c7e01a83-6b24-4d95-9f38-2ab5e14c7d60"
+    }
+  ]
+}`,
+  },
+  {
+    id: "json-render-status",
+    title: "Poll status_url — xong thì có link file",
+    language: "json",
+    body: `{
+  "id": "9c1b7e40-2a55-4f10-8b3d-6e2f1a4c9d70",
+  "kind": "image",
+  "status": "succeeded",
+  "percent": 100,
+  "product_id": "3f9a1c22-7b41-4e8d-9c05-1a2b3c4d5e6f",
+  "product_name": "n02-dragon-gold",
+  "target": "NOVERA-D",
+  "error": null,
+  "created_at": "2026-09-07T10:24:02.104Z",
+  "finished_at": "2026-09-07T10:25:47.882Z",
+  "files": [
+    { "name": "Mockup-Web-1", "url": "https://…/Mockup-Web-1.png", "width": 2048, "height": 2048, "bytes": 3814912 }
+  ],
+  "expires_at": "2026-09-08T10:25:47.882Z",
+  "expired": false
 }`,
   },
   {
@@ -200,12 +390,21 @@ export const API_SAMPLES: readonly ApiSample[] = [
     title: "Các mã lỗi",
     language: "json",
     body: `{
-  "400": "Thiếu field file, sai định dạng ảnh, hoặc body không phải multipart",
-  "401": "Token sai, đã thu hồi, hoặc thiếu header Authorization",
-  "413": "File lớn hơn 25MB",
-  "500": "Lỗi phía server",
-  "502": "Không lưu được ảnh lên Storage (sản phẩm đã được rollback, gọi lại được)",
-  "503": "Không kiểm tra được token (database)"
+  "_tạo_sản_phẩm": {
+    "400": "Thiếu field file hoặc type, type không hợp lệ, sai định dạng ảnh, hoặc body không phải multipart",
+    "413": "File lớn hơn 25MB",
+    "502": "Không lưu được ảnh lên Storage (sản phẩm đã được rollback, gọi lại được)"
+  },
+  "_đặt_render": {
+    "400": "Không khai target nào, tên bị trùng (kèm danh sách id), hoặc quá nhiều job (>60 = target x sản phẩm)",
+    "404": "Không tìm thấy sản phẩm / nhóm / reference / template — response liệt kê các tên có sẵn",
+    "202": "Đã vào hàng đợi (không phải lỗi) — poll status_url để lấy file"
+  },
+  "_chung": {
+    "401": "Token sai, đã thu hồi, hoặc thiếu header Authorization",
+    "500": "Lỗi phía server",
+    "503": "Không kiểm tra được token (database)"
+  }
 }`,
   },
 ];

@@ -52,8 +52,14 @@ export interface RenderJobProduct {
 export interface RenderImagePayload {
   kind: "image";
   product: RenderJobProduct;
-  groupId: string;
-  groupName: string;
+  /**
+   * The group the references came from, or null when the caller named
+   * references directly (the /api/v1 ad-hoc path). Metadata only — the worker
+   * renders `references` and never resolves the group itself — so a null here
+   * costs nothing but a generic label on the card.
+   */
+  groupId: string | null;
+  groupName: string | null;
   /** Fully resolved references — the worker does no DB reads of its own. */
   references: ExtractorReference[];
   /** PNG unless the caller asked for JPEG to shrink Shopify uploads. */

@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ArrowLeft, Check, Copy, KeyRound, Loader2, Plus, Trash2, TriangleAlert } from "lucide-react";
 import {
   API_GROUPS,
@@ -15,7 +14,6 @@ import {
   fillSample,
 } from "@/lib/api-tokens/api-catalog";
 import type { ApiTokenCreated, ApiTokenSummary, CreateApiTokenInput } from "@/types/api-token";
-import type { ProductType } from "@/types/product";
 
 /**
  * Manages API tokens.
@@ -26,11 +24,18 @@ import type { ProductType } from "@/types/product";
  * making another one.
  */
 
-const TYPE_LABELS: Record<ProductType, string> = {
-  leather: "Gậy da",
-  smooth: "Gậy trơn",
-  lizard: "Gậy da lizard",
-};
+/**
+ * The `type` field's values, shown as a reference table.
+ *
+ * On this screen since 037: the type left the token and became a request
+ * field, so the thing a user needs from this page is no longer "pick one" but
+ * "what do I type into my flow" — hence a list to read, not a control.
+ */
+const TYPE_FIELD_VALUES: readonly { value: string; label: string; also: string }[] = [
+  { value: "leather", label: "Gậy da", also: "da, gậy da" },
+  { value: "smooth", label: "Gậy trơn", also: "tron, gậy trơn, plain" },
+  { value: "lizard", label: "Gậy da lizard", also: "da lizard, gậy da lizard" },
+];
 
 /**
  * A copyable sample.
@@ -87,7 +92,6 @@ export function ApiTokensClient() {
   const [error, setError] = useState<string | null>(null);
 
   const [label, setLabel] = useState("");
-  const [productType, setProductType] = useState<ProductType>("leather");
   const [namePrefix, setNamePrefix] = useState("");
   const [creating, setCreating] = useState(false);
 
@@ -140,7 +144,6 @@ export function ApiTokensClient() {
     try {
       const body: CreateApiTokenInput = {
         label: label.trim(),
-        product_type: productType,
         name_prefix: namePrefix.trim() || null,
       };
       const res = await fetch("/api/api-tokens", {
@@ -228,9 +231,37 @@ export function ApiTokensClient() {
 
       <main className="max-w-4xl mx-auto px-4 sm:px-6 py-8 flex flex-col gap-8">
         <p className="text-sm text-muted-foreground">
-          Token cho phép gửi template từ bên ngoài vào và tự tạo sản phẩm. Mỗi token mang sẵn <strong>loại gậy</strong> và <strong>tiền tố tên</strong>, nên khi gọi API chỉ cần gửi
-          file ảnh — không cần khai gì thêm. Tạo mỗi loại gậy một token riêng để không bao giờ gửi sai loại.
+          Token cho phép gửi template từ bên ngoài vào, tạo sản phẩm rồi đặt render
+          luôn — không cần mở dashboard.{" "}
+          <strong>Một token dùng cho tất cả các loại gậy</strong> và cho cả 3 API.
+          Loại gậy khai trong field <code className="font-mono">type</code> khi tạo
+          sản phẩm; khi render thì chỉ cần <strong>đề cập tên</strong> nhóm ảnh,
+          reference hoặc template video — trộn nhiều loại trong một request cũng
+          được.
         </p>
+
+        <div className="rounded-lg border bg-card p-4">
+          <p className="text-xs font-medium mb-2">Luồng cho AI agent — 3 bước</p>
+          <ol className="text-xs text-muted-foreground flex flex-col gap-1.5 list-decimal pl-4">
+            <li>
+              <code className="font-mono">POST /api/v1/products</code> — gửi file
+              template + <code className="font-mono">type</code> → nhận{" "}
+              <code className="font-mono">id</code> và{" "}
+              <code className="font-mono">name</code> của sản phẩm
+            </li>
+            <li>
+              <code className="font-mono">GET /api/v1/render-targets</code> — xem có
+              những nhóm / reference / template nào (gọi 1 lần, nhớ tên là đủ)
+            </li>
+            <li>
+              <code className="font-mono">POST /api/v1/renders</code> — đặt render
+              bằng tên. Trộn được nhiều nhóm + reference lẻ + template video trong
+              cùng 1 request; mỗi target thành 1 job. Rồi poll{" "}
+              <code className="font-mono">status_url</code> của từng job để lấy link
+              file
+            </li>
+          </ol>
+        </div>
 
         {error && <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</div>}
 
@@ -258,7 +289,8 @@ export function ApiTokensClient() {
                 curl -X POST {typeof window !== "undefined" ? window.location.origin : ""}
                 /api/v1/products \<br />
                 &nbsp;&nbsp;-H &quot;Authorization: Bearer {freshToken.token}&quot; \<br />
-                &nbsp;&nbsp;-F file=@surface.jpg
+                &nbsp;&nbsp;-F file=@surface.jpg \<br />
+                &nbsp;&nbsp;-F type=leather
               </code>
             </div>
 
@@ -272,33 +304,17 @@ export function ApiTokensClient() {
         <section className="rounded-lg border bg-card p-4 flex flex-col gap-4">
           <h2 className="font-semibold text-sm">Tạo token mới</h2>
 
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="token-label" className="text-xs">
                 Token name
               </Label>
-              <Input id="token-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="AI tạo gậy da" maxLength={80} />
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <Label className="text-xs">Loại gậy</Label>
-              <Select value={productType} onValueChange={(v) => setProductType(v as ProductType)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {(Object.keys(TYPE_LABELS) as ProductType[]).map((type) => (
-                    <SelectItem key={type} value={type}>
-                      {TYPE_LABELS[type]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Input id="token-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="AI tạo sản phẩm" maxLength={80} />
             </div>
 
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="token-prefix" className="text-xs">
-                Tiền tố tên (tuỳ chọn)
+                Tiền tố tên mặc định (tuỳ chọn)
               </Label>
               <Input id="token-prefix" value={namePrefix} onChange={(e) => setNamePrefix(e.target.value)} placeholder="n02" maxLength={32} />
             </div>
@@ -306,7 +322,9 @@ export function ApiTokensClient() {
 
           <p className="text-xs text-muted-foreground">
             Tiền tố <code className="font-mono">n02</code> + file <code className="font-mono">dragon-gold.jpg</code> → sản phẩm <code className="font-mono">n02-dragon-gold</code>.
-            Chỉ dùng chữ thường, số và dấu gạch ngang.
+            Chỉ dùng chữ thường, số và dấu gạch ngang. Request có thể gửi{" "}
+            <code className="font-mono">name_prefix</code> để dùng tiền tố khác cho
+            riêng lần đó.
           </p>
 
           <div>
@@ -337,7 +355,6 @@ export function ApiTokensClient() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-medium text-sm truncate">{token.label}</span>
-                        <Badge variant="default">{TYPE_LABELS[token.product_type]}</Badge>
                         {token.name_prefix && (
                           <Badge variant="outline" className="font-mono">
                             {token.name_prefix}-
@@ -364,6 +381,37 @@ export function ApiTokensClient() {
               })}
             </div>
           )}
+        </section>
+
+        {/* The one field a caller must fill in per template. */}
+        <section className="flex flex-col gap-3">
+          <div>
+            <h2 className="font-semibold text-sm">
+              Field <code className="font-mono">type</code> — khai loại gậy trong request
+            </h2>
+            <p className="text-xs text-muted-foreground mt-1">
+              Bắt buộc. Không phân biệt chữ hoa/thường, có dấu hay không dấu.
+              Thiếu hoặc sai giá trị thì API trả lỗi 400 kèm danh sách này — không
+              bao giờ tự tạo sai loại.
+            </p>
+          </div>
+
+          <div className="rounded-lg border bg-card divide-y">
+            {TYPE_FIELD_VALUES.map((entry) => (
+              <div
+                key={entry.value}
+                className="px-4 py-2.5 flex flex-wrap items-baseline gap-x-3 gap-y-1"
+              >
+                <code className="font-mono text-xs shrink-0 w-24">
+                  type={entry.value}
+                </code>
+                <span className="text-xs font-medium shrink-0 w-28">{entry.label}</span>
+                <span className="text-xs text-muted-foreground">
+                  cũng nhận: {entry.also}
+                </span>
+              </div>
+            ))}
+          </div>
         </section>
 
         {/* Copyable request samples, then the full endpoint catalogue. */}

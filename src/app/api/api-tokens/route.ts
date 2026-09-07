@@ -6,7 +6,6 @@ import type {
   ApiTokenSummary,
   CreateApiTokenInput,
 } from "@/types/api-token";
-import type { ProductType } from "@/types/product";
 
 /**
  * Manages the caller's own API tokens.
@@ -17,15 +16,13 @@ import type { ProductType } from "@/types/product";
  * what a bug could reach.
  */
 
-const VALID_PRODUCT_TYPES: ProductType[] = ["smooth", "leather", "lizard"];
-
 /** Never selects token_hash: nothing here needs it, so nothing can leak it. */
 const TOKEN_COLUMNS =
-  "id, label, token_prefix, product_type, name_prefix, revoked_at, last_used_at, created_at";
+  "id, label, token_prefix, name_prefix, revoked_at, last_used_at, created_at";
 
 /**
- * Cap per user. High enough for one token per cue type per store, low enough
- * that a runaway script cannot fill the table.
+ * Cap per user. Since 037 a single token covers every cue type, so most people
+ * need one or two; the ceiling only stops a runaway script filling the table.
  */
 const MAX_TOKENS_PER_USER = 25;
 
@@ -98,13 +95,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Label is too long (max 80)" }, { status: 400 });
     }
 
-    if (!VALID_PRODUCT_TYPES.includes(body.product_type)) {
-      return NextResponse.json(
-        { error: "product_type must be 'smooth', 'leather' or 'lizard'" },
-        { status: 400 }
-      );
-    }
-
     // Normalised here rather than at use time so the stored value is exactly
     // what will appear in product names — a user who typed "N02" sees "n02"
     // in the list and knows what to expect.
@@ -149,7 +139,6 @@ export async function POST(request: Request) {
         label,
         token_hash: generated.hash,
         token_prefix: generated.displayPrefix,
-        product_type: body.product_type,
         name_prefix: namePrefix,
       })
       .select(TOKEN_COLUMNS)

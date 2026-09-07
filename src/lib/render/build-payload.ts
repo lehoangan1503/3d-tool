@@ -200,10 +200,63 @@ export async function loadGroupReferences(
   return { groupName: group.name, references };
 }
 
+/**
+ * Loads references by id, with no group to order or vet them.
+ *
+ * The group path (loadGroupReferences) intersects the caller's ids with the
+ * group precisely because the group is the authority on membership and slot
+ * order. Here there is no group, so the CALLER's order is the order — which is
+ * the point of the ad-hoc path: /api/v1 lets an agent name two layouts that
+ * were never grouped together.
+ *
+ * A missing id is an error rather than a silent drop, unlike the group path: a
+ * group legitimately outlives a deleted reference, but a caller that asked for
+ * three layouts and would get two has a mistake worth hearing about.
+ */
+export async function loadReferencesByIds(
+  supabase: RenderDbClient,
+  referenceIds: string[]
+): Promise<ExtractorReference[]> {
+  const ids = [...new Set(referenceIds.filter(Boolean))];
+  if (ids.length === 0) {
+    throw new RenderPayloadError("No references given");
+  }
+
+  const { data: refRows, error } = await supabase
+    .from("extractor_references")
+    .select<ReferenceRow>(REFERENCE_WITH_FRAMES_COLUMNS)
+    .in("id", ids);
+
+  if (error) {
+    throw new RenderPayloadError(`Failed to load references: ${error.message}`, 500);
+  }
+
+  const byId = new Map<string, ExtractorReference>();
+  for (const row of refRows ?? []) {
+    const ref = mapReferenceRow(row);
+    byId.set(ref.id, ref);
+  }
+
+  const missing = ids.filter((id) => !byId.has(id));
+  if (missing.length > 0) {
+    throw new RenderPayloadError(
+      `Reference not found: ${missing.join(", ")}`,
+      404
+    );
+  }
+
+  return ids.map((id) => byId.get(id)!);
+}
+
+/**
+ * `groupId`/`groupName` are null for an ad-hoc set of references picked by
+ * name — see /api/v1/renders. Everything the worker actually renders is in
+ * `references`, so the group is a label, not an input.
+ */
 export function buildImagePayload(
   product: RenderJobProduct,
-  groupId: string,
-  groupName: string,
+  groupId: string | null,
+  groupName: string | null,
   references: ExtractorReference[],
   format: "png" | "jpeg",
   quality: number

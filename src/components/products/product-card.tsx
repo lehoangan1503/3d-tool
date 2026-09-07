@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Trash2, ArrowRight, ImageOff, ShoppingBag } from "lucide-react";
 import type { Product } from "@/types/product";
 import { LEATHER_COLORS, isLeatherLikeType } from "@/types/product";
+import { CopyIdButton } from "@/components/ui/copy-id-button";
 import { ProductPreviewDialog } from "./product-preview-dialog";
 import { useStoreOptional } from "@/components/shopify/store-switcher";
 
@@ -96,10 +97,13 @@ export function ProductCard({ product, currentUserId, onDeleted, selected, onTog
             <div className="flex flex-col min-w-0 gap-0.5 flex-1">
               <p className="font-semibold text-sm leading-tight text-foreground break-words">{product.name}</p>
 
-              <p className="text-xs text-muted-foreground capitalize">
-                {product.type} cue
-                {isLeatherLikeType(product.type) && product.color && <span className="ml-1">· {LEATHER_COLORS[product.color]?.name || product.color}</span>}
-              </p>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <p className="text-xs text-muted-foreground capitalize truncate">
+                  {product.type} cue
+                  {isLeatherLikeType(product.type) && product.color && <span className="ml-1">· {LEATHER_COLORS[product.color]?.name || product.color}</span>}
+                </p>
+                <CopyIdButton id={product.id} label="sản phẩm" />
+              </div>
             </div>
             {isOwner && (
               <Button

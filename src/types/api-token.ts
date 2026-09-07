@@ -48,6 +48,15 @@ export interface ApiTokenContext {
   userId: string;
   /** Default name prefix, overridable per request. The cue type is not here — see migration 037. */
   namePrefix: string | null;
+  /**
+   * True when the owner is a tool admin or superadmin, and so may render
+   * products belonging to other users — the same reach they have in the
+   * dashboard (canEditAnyProduct). Resolved at authentication time.
+   *
+   * What it does NOT change: the job still belongs to the token's owner, and
+   * the rendered files land in their account.
+   */
+  canActOnAnyProduct: boolean;
 }
 
 /**

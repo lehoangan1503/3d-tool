@@ -27,6 +27,13 @@ import type { RenderJob, RenderJobPayload } from "@/types/render-job";
 export interface EnqueueContext {
   supabase: RenderDbClient;
   userId: string;
+  /**
+   * Set only on the API-token path, when the token's owner is an admin: the
+   * ownership checks below then accept another user's products, matching what
+   * that person can already do in the dashboard. Absent (false) on the session
+   * path, where RLS decides instead.
+   */
+  canActOnAnyProduct?: boolean;
 }
 
 /** Resolves the session, or returns the 401 to hand straight back. */
@@ -63,8 +70,15 @@ export async function requireUser(): Promise<
  * GET /api/extractor-references), so a token reaching them is the same access
  * its owner has in the dashboard.
  */
-export function apiTokenContext(userId: string): EnqueueContext {
-  return { supabase: asRenderDbClient(createAdminServiceClient()), userId };
+export function apiTokenContext(
+  userId: string,
+  canActOnAnyProduct = false
+): EnqueueContext {
+  return {
+    supabase: asRenderDbClient(createAdminServiceClient()),
+    userId,
+    canActOnAnyProduct,
+  };
 }
 
 /**
@@ -78,11 +92,19 @@ export async function assertProductsOwnedBy(
   ctx: EnqueueContext,
   productIds: string[]
 ): Promise<void> {
-  const { data, error } = await ctx.supabase
+  // An admin's token still has to prove the products EXIST — dropping the
+  // check entirely would turn a typo'd id into a job that renders nothing.
+  // Only the user_id filter is lifted.
+  let query = ctx.supabase
     .from("products")
     .select<{ id: string }>("id")
-    .in("id", productIds)
-    .eq("user_id", ctx.userId);
+    .in("id", productIds);
+
+  if (!ctx.canActOnAnyProduct) {
+    query = query.eq("user_id", ctx.userId);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     throw new RenderPayloadError(`Failed to verify products: ${error.message}`, 500);

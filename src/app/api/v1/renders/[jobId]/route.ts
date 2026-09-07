@@ -51,6 +51,10 @@ export async function GET(request: Request, { params }: RouteParams) {
     const auth = await requireApiToken(request);
     if (!auth.ok) return auth.response;
 
+    // Deliberately NOT passing the admin flag: reading a job is scoped to the
+    // token's owner even for an admin. A render queued through this API always
+    // belongs to the token's owner, so there is no case where a token needs
+    // someone else's job — and returning one would hand over its file URLs.
     const ctx = apiTokenContext(auth.ctx.userId);
 
     // Scoped to the token's owner by hand: this runs on the service key, so

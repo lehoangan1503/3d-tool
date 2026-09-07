@@ -7,6 +7,11 @@
  * The cue type is a request field (migration 037); the token carries only an
  * optional default name prefix.
  *
+ * A token also inherits its owner's ADMIN standing (see resolveTokenRole): an
+ * admin's token may act on products it does not own, exactly as that person
+ * can in the dashboard. Resolved here rather than per-route so there is one
+ * answer to "what may this credential touch".
+ *
  * Two rules make that safe:
  *   1. Only a hash is stored. The plaintext exists once, in the creation
  *      response, and is unrecoverable afterwards.
@@ -109,6 +114,46 @@ interface ApiTokenRow {
  * Every failure returns the same message. Distinguishing "no such token" from
  * "revoked" would tell someone probing tokens which guesses were once real.
  */
+/**
+ * Whether the token's owner may act on OTHER users' products.
+ *
+ * Mirrors `canEditAnyProduct` in lib/auth/roles.ts, and must keep mirroring it:
+ * a token is meant to carry the same reach its owner has in the dashboard, so
+ * the two definitions of "admin" being allowed to drift apart is the bug to
+ * avoid. Two independent sources, same as there:
+ *   - auth.users.app_metadata.role === 'admin'  (superadmin, set via SQL)
+ *   - user_profiles.role === 'admin'            (tool admin, assigned in the UI)
+ *
+ * Runs on the service key because a bearer request has no session. A failure
+ * to read either source resolves to `false`: an admin losing their extra reach
+ * shows up as a clear 404 they can act on, while wrongly granting it would let
+ * a token write to another user's products.
+ */
+async function resolveTokenRole(
+  admin: ReturnType<typeof createAdminServiceClient>,
+  userId: string
+): Promise<boolean> {
+  const [authUser, profile] = await Promise.all([
+    admin.auth.admin.getUserById(userId),
+    admin
+      .from("user_profiles")
+      .select("role")
+      .eq("user_id", userId)
+      .maybeSingle<{ role: string | null }>(),
+  ]);
+
+  if (authUser.error) {
+    console.warn("api token role lookup failed:", authUser.error.message);
+  }
+  if (profile.error) {
+    console.warn("api token profile lookup failed:", profile.error.message);
+  }
+
+  const isSuperAdmin = authUser.data?.user?.app_metadata?.role === "admin";
+  const isToolAdmin = profile.data?.role === "admin";
+  return isSuperAdmin || isToolAdmin;
+}
+
 export async function requireApiToken(request: Request): Promise<ApiTokenAuthResult> {
   const presented = readBearer(request);
   if (!presented) {
@@ -167,12 +212,15 @@ export async function requireApiToken(request: Request): Promise<ApiTokenAuthRes
       }
     });
 
+  const canActOnAnyProduct = await resolveTokenRole(admin, data.user_id);
+
   return {
     ok: true,
     ctx: {
       tokenId: data.id,
       userId: data.user_id,
       namePrefix: data.name_prefix,
+      canActOnAnyProduct,
     },
   };
 }

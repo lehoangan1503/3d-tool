@@ -315,9 +315,12 @@ That would queue 80 jobs (8 targets x 10 products); the limit is 60. Split it in
 
 ## Lưu ý quan trọng
 
-- **Token chỉ render được sản phẩm của chính chủ token.** Sản phẩm của người khác
-  trả `404 Product not found` — kể cả khi gửi đúng id. Nếu gặp lỗi này mà chắc
-  chắn id đúng, nghĩa là đang dùng sai token.
+- **Token thường chỉ render được sản phẩm của chính chủ token.** Sản phẩm của
+  người khác trả `404 Product not found` — kể cả khi gửi đúng id. Nếu gặp lỗi này
+  mà chắc chắn id đúng, nghĩa là đang dùng sai token.
+- **Token của admin render được sản phẩm của cả team** (giống quyền admin trong
+  dashboard). Nhưng job và file render **vẫn thuộc về chủ token**, không thuộc chủ
+  sản phẩm — nên chỉ token đó đọc được `status_url` của job đó.
 - **Nhóm ảnh, bố cục lẻ và template video là dùng chung cả team** — mọi token đều
   thấy và render được. Chỉ *sản phẩm* mới thuộc riêng từng người.
 - **Không có webhook.** Agent phải tự poll `status_url`.

@@ -258,7 +258,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
 
-    const ctx = apiTokenContext(auth.ctx.userId);
+    // An admin's token may render other users' products, matching the reach
+    // that person already has in the dashboard. The job and its files still
+    // belong to the token's owner.
+    const ctx = apiTokenContext(auth.ctx.userId, auth.ctx.canActOnAnyProduct);
 
     const productIds = await resolveProductIdsByName(ctx, [
       body.product,

@@ -10,6 +10,8 @@ services:
       - "3002:3000"
     environment:
       - NODE_ENV=production
+      - RENDER_GPU_PROVIDER=local
+      - LOCAL_RENDER_WORKER_URL=https://render.next.lc/5600d1495483559ed88630080b8b8a040265542c0199e70b
       - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
       - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
 
@@ -17,7 +19,8 @@ services:
       - VIRTUAL_PORT=3000
       - LETSENCRYPT_HOST=3d.next.lc
       - LETSENCRYPT_EMAIL=trong.bach053@gmail.com
-
+    volumes:
+      - ./public/hdri:/app/public/hdri
     restart: unless-stopped
     networks:
       - b_nginx_network

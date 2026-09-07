@@ -38,6 +38,7 @@ import {
 import type { SceneManager } from "@/lib/three/scene-manager";
 import { ExtractorSceneManager, HDRI_OPTIONS_FALLBACK, RecordingCanceledError } from "@/lib/three/extractor-scene-manager";
 import type { VideoStudioConfig, CameraKeyframe, CameraPathConfig, CameraShapeParams, CameraWaypoint, CueHdriConfig, VideoRatio, CornerFillConfig, LogoBackdropConfig, SceneBackgroundConfig } from "@/types/video-studio";
+import { isPerPointLookMode } from "@/types/video-studio";
 import { DEFAULT_CORNER_FILL, DEFAULT_LOGO_BACKDROP, DEFAULT_SCENE_BACKGROUND, WALL_WIDTH, WALL_HEIGHT, loadGlobalLogoBackdrop, saveGlobalLogoBackdrop } from "@/types/video-studio";
 import type { StudioEnvironmentAsset, StudioEnvironmentConfig } from "@/types/studio-environment";
 import { normalizeEnvironmentConfig } from "@/types/studio-environment";
@@ -59,6 +60,7 @@ import {
 import { createDefaultHdriLayer, STUDIO_WHITE_HDRI } from "@/types/extractor";
 import {
   applyWaypointsEuler,
+  seedWaypointRotations,
   cameraKeyframeLookingAt,
   getWaypointsCenter,
   getWaypointsRadius,
@@ -310,6 +312,14 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   // The SceneViewControls drag callback is created once at mount, so it must read
   // select-all through a ref — a captured state value would always be stale.
   const selectAllActiveRef = useRef(false);
+  /**
+   * Latest placeCameraAtWaypoint. The scene-view controls are constructed once in an
+   * effect, so its callbacks close over the first render's values; routing through a ref
+   * lets a 3D click reach the current handler instead of a stale one.
+   */
+  const placeCameraAtWaypointRef = useRef<
+    ((path: CameraPathConfig, index: number, commitAsStart?: boolean) => void) | null
+  >(null);
   useEffect(() => {
     selectAllActiveRef.current = selectAllActive;
   }, [selectAllActive]);
@@ -726,6 +736,23 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
           // Selection change → update selection info + auto-expand transform + matching section
           (info) => {
             setSelectionInfo(info);
+            // Clicking a waypoint marker in the 3D view previews that point's shot, exactly
+            // like clicking its row in the panel. Deselecting hands the preview back to the
+            // span's start point so the viewport agrees with what will be recorded.
+            const extractor = extractorRef.current;
+            if (extractor) {
+              const path = configRef.current.cameraPath;
+              if (
+                info.type === "cameraWaypoint" &&
+                info.waypointIndex !== undefined &&
+                !selectAllActiveRef.current &&
+                path
+              ) {
+                placeCameraAtWaypointRef.current?.(path, info.waypointIndex);
+              } else if (extractor.getPreviewWaypointIndex() !== null) {
+                extractor.setPreviewWaypointIndex(null);
+              }
+            }
             // In whole-curve mode the panel shows curve-level values, set by
             // handleToggleSelectAll. Overwriting them with the marker's own transform would
             // put the marker's emphasis scale and stale rotation into the fields.
@@ -851,6 +878,17 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                     x: position.x,
                     y: position.y,
                     z: position.z,
+                    // Per-point mode records each waypoint's own angle, so a rotate drag
+                    // has to persist it. In the cue-facing modes the sampler recomputes
+                    // the angle anyway, and storing one here would leave the marker's
+                    // arrow pointing somewhere the recording never goes.
+                    ...(isPerPointLookMode(path.lookMode)
+                      ? {
+                          rotationX: rotation.x,
+                          rotationY: rotation.y,
+                          rotationZ: rotation.z,
+                        }
+                      : {}),
                   };
                   return { ...prev, cameraPath: { ...path, waypoints } };
                 });
@@ -996,6 +1034,28 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               extractor.syncCameraWaypointGroupDrag(configRef.current, draggedIndex);
             }
             extractor.refreshCameraPathLineFromGizmos(configRef.current);
+            // Per-point mode: mirror the dragged marker's live transform onto the recording
+            // camera, so the camera-view preview tracks a rotate drag frame by frame. Read
+            // from the gizmo rather than config — the React round-trip is debounced and
+            // would lag a full drag behind.
+            if (
+              draggedIndex !== undefined &&
+              !selectAllActiveRef.current &&
+              isPerPointLookMode(configRef.current.cameraPath?.lookMode)
+            ) {
+              const gizmo = extractor.getCameraWaypointGizmos()[draggedIndex];
+              if (gizmo) {
+                extractor.invalidateCameraStartKey();
+                extractor.setCameraFromKeyframe({
+                  x: gizmo.position.x,
+                  y: gizmo.position.y,
+                  z: gizmo.position.z,
+                  rotationX: gizmo.rotation.x,
+                  rotationY: gizmo.rotation.y,
+                  rotationZ: gizmo.rotation.z,
+                });
+              }
+            }
           },
           // Rotate the whole curve around its centroid (R + optional X/Y/Z while
           // "select all" is on).
@@ -1028,7 +1088,8 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
               cameraPath: { ...path, waypoints },
             });
           },
-          () => selectAllActiveRef.current
+          () => selectAllActiveRef.current,
+          () => isPerPointLookMode(configRef.current.cameraPath?.lookMode)
         );
         localSceneViewControls = controls;
         sceneViewControlsRef.current = controls;
@@ -1385,18 +1446,49 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
    * Move the recording camera onto a waypoint and aim it per the path's lookMode.
    * This is what makes picking a start point feel direct — the viewport immediately shows
    * the frame the recording will open on.
+   *
+   * `commitAsStart` distinguishes the two reasons to do this. Picking the span's start
+   * point genuinely changes where the recording opens, so it writes `cameraStart`. Merely
+   * inspecting a point must NOT: overwriting `cameraStart` with point 3's framing would
+   * make the recording open there, and every later config sync would fight the override
+   * because the preview keyframe is derived from the path, not from `cameraStart`.
    */
   const placeCameraAtWaypoint = useCallback(
-    (path: CameraPathConfig, index: number) => {
+    (path: CameraPathConfig, index: number, commitAsStart = false) => {
       const extractor = extractorRef.current;
       const wp = path.waypoints[index];
       if (!extractor || !wp) return;
       const kf = cameraKeyframeLookingAt(wp, path.lookMode, getCueCenter());
+      // Park the preview on this point so the debounced config sync stops pulling the
+      // camera back to the span's start.
+      extractor.setPreviewWaypointIndex(index);
       extractor.invalidateCameraStartKey();
       extractor.setCameraFromKeyframe(kf);
-      setConfig((prev) => ({ ...prev, cameraStart: kf }));
-      setCapturedStart(kf);
+      if (commitAsStart) {
+        setConfig((prev) => ({ ...prev, cameraStart: kf }));
+        setCapturedStart(kf);
+      }
     },
+    [getCueCenter]
+  );
+
+  useEffect(() => {
+    placeCameraAtWaypointRef.current = placeCameraAtWaypoint;
+  }, [placeCameraAtWaypoint]);
+
+  /**
+   * Rotations for a freshly generated curve.
+   *
+   * Shape presets emit positions only, so in per-point mode the new points would all carry
+   * rotation 0 — every camera facing -Z at the backdrop. Seeding them cue-facing keeps a
+   * regenerated or resized curve looking like the shot the user had. Outside per-point mode
+   * the angles are recomputed at sample time, so the points are returned untouched.
+   */
+  const applyLookModeSeed = useCallback(
+    (path: CameraPathConfig): CameraWaypoint[] =>
+      isPerPointLookMode(path.lookMode)
+        ? seedWaypointRotations(path.waypoints, "level", getCueCenter())
+        : path.waypoints,
     [getCueCenter]
   );
 
@@ -1405,6 +1497,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     (enabled: boolean) => {
       if (!enabled) {
         extractorRef.current?.setCameraPathSelectAll(false);
+        extractorRef.current?.setPreviewWaypointIndex(null);
         setSelectAllActive(false);
         setConfig((prev) => ({
           ...prev,
@@ -1413,14 +1506,19 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         return;
       }
       const prevPath = configRef.current.cameraPath ?? DEFAULT_CAMERA_PATH;
-      const shaped = regenerateShape(prevPath.shapeId, getCueCenter(), prevPath.shapeParams);
+      const center = getCueCenter();
+      const shaped = regenerateShape(prevPath.shapeId, center, prevPath.shapeParams);
       if (!shaped) return;
       const next: CameraPathConfig = { ...prevPath, ...shaped, enabled: true, mode: "spline" };
+      // A preset generates bare positions with rotation 0 — a camera staring at the back
+      // wall. In per-point mode that is the recorded angle, so seed the fresh points with
+      // a cue-facing aim instead of handing the user a black frame to fix.
+      next.waypoints = applyLookModeSeed(next);
       setConfig((prev) => ({ ...prev, cameraPath: next }));
       rebaseCurveTransform(next.waypoints);
-      placeCameraAtWaypoint(next, next.startIndex);
+      placeCameraAtWaypoint(next, next.startIndex, true);
     },
-    [getCueCenter, placeCameraAtWaypoint, rebaseCurveTransform]
+    [applyLookModeSeed, getCueCenter, placeCameraAtWaypoint, rebaseCurveTransform]
   );
 
   /** Switch shape. Regenerates the whole curve around the cue at the current size. */
@@ -1438,20 +1536,57 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         // A new shape invalidates the old picks — record the whole thing by default.
         startIndex: 0,
         endIndex: Math.max(0, shaped.waypoints.length - 1),
+        // A preset carries its own lookMode; keep the user's per-point choice rather than
+        // silently dropping them back to a cue-locked shot when they switch shape.
+        lookMode: isPerPointLookMode(prevPath.lookMode) ? prevPath.lookMode : shaped.lookMode,
       };
+      next.waypoints = applyLookModeSeed(next);
       setConfig((prev) => ({ ...prev, cameraPath: next }));
       rebaseCurveTransform(next.waypoints);
-      placeCameraAtWaypoint(next, next.startIndex);
+      placeCameraAtWaypoint(next, next.startIndex, true);
     },
-    [getCueCenter, placeCameraAtWaypoint, rebaseCurveTransform]
+    [applyLookModeSeed, getCueCenter, placeCameraAtWaypoint, rebaseCurveTransform]
   );
 
-  const handlePathChange = useCallback((patch: Partial<CameraPathConfig>) => {
-    setConfig((prev) => ({
-      ...prev,
-      cameraPath: { ...(prev.cameraPath ?? DEFAULT_CAMERA_PATH), ...patch },
-    }));
-  }, []);
+  const handlePathChange = useCallback(
+    (patch: Partial<CameraPathConfig>) => {
+      setConfig((prev) => {
+        const path = prev.cameraPath ?? DEFAULT_CAMERA_PATH;
+        const next: CameraPathConfig = { ...path, ...patch };
+        // Entering per-point mode: bake the angles the outgoing mode was producing into
+        // the waypoints, so the shot does not jump and the user has something to edit.
+        if (
+          patch.lookMode !== undefined &&
+          isPerPointLookMode(next.lookMode) &&
+          !isPerPointLookMode(path.lookMode)
+        ) {
+          next.waypoints = seedWaypointRotations(path.waypoints, path.lookMode, getCueCenter());
+        }
+        return { ...prev, cameraPath: next };
+      });
+    },
+    [getCueCenter]
+  );
+
+  /**
+   * Re-aim every waypoint at the cue, discarding hand-set angles.
+   *
+   * The escape hatch for a per-point path whose angles have been edited into a mess:
+   * rather than deleting the curve and losing its shape, reset just the orientations.
+   */
+  const handleResetWaypointAngles = useCallback(() => {
+    const center = getCueCenter();
+    setConfig((prev) => {
+      const path = prev.cameraPath ?? DEFAULT_CAMERA_PATH;
+      return {
+        ...prev,
+        cameraPath: {
+          ...path,
+          waypoints: seedWaypointRotations(path.waypoints, "perPoint", center),
+        },
+      };
+    });
+  }, [getCueCenter]);
 
   /** Resize the shape — regenerates the curve so sliders reshape it live. */
   const handleShapeParamChange = useCallback(
@@ -1466,13 +1601,22 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
         prevPath.endIndex
       );
       if (!shaped) return;
-      setConfig((prev) => ({
-        ...prev,
-        cameraPath: { ...prevPath, ...shaped, shapeParams },
-      }));
-      rebaseCurveTransform(shaped.waypoints);
+      const next: CameraPathConfig = {
+        ...prevPath,
+        ...shaped,
+        shapeParams,
+        lookMode: isPerPointLookMode(prevPath.lookMode) ? prevPath.lookMode : shaped.lookMode,
+      };
+      next.waypoints = applyLookModeSeed(next);
+      setConfig((prev) => ({ ...prev, cameraPath: next }));
+      rebaseCurveTransform(next.waypoints);
+      // Resizing regenerates the points, so a parked preview index may now name a point at
+      // a completely different place on the curve.
+      if (next.waypoints.length !== prevPath.waypoints.length) {
+        extractorRef.current?.setPreviewWaypointIndex(null);
+      }
     },
-    [getCueCenter, rebaseCurveTransform]
+    [applyLookModeSeed, getCueCenter, rebaseCurveTransform]
   );
 
   /** Pick the span start, and move the camera there so the opening frame is visible. */
@@ -1481,7 +1625,7 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       const prevPath = configRef.current.cameraPath ?? DEFAULT_CAMERA_PATH;
       const next: CameraPathConfig = { ...prevPath, startIndex: index };
       setConfig((prev) => ({ ...prev, cameraPath: next }));
-      placeCameraAtWaypoint(next, index);
+      placeCameraAtWaypoint(next, index, true);
     },
     [placeCameraAtWaypoint]
   );
@@ -1501,6 +1645,29 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
       setCapturedEnd(kf);
     },
     [getCueCenter]
+  );
+
+  /**
+   * Set one waypoint's camera angle from the panel's degree sliders.
+   *
+   * Writes into the config AND onto the gizmo, then re-previews the point when it is the
+   * one currently being looked through, so the sliders steer the actual shot rather than
+   * only the arrow in the scene view.
+   */
+  const handleWaypointRotationChange = useCallback(
+    (index: number, axis: "x" | "y" | "z", degrees: number) => {
+      const path = configRef.current.cameraPath ?? DEFAULT_CAMERA_PATH;
+      if (!path.waypoints[index]) return;
+      const field = axis === "x" ? "rotationX" : axis === "y" ? "rotationY" : "rotationZ";
+      const waypoints = [...path.waypoints];
+      waypoints[index] = { ...waypoints[index], [field]: THREE.MathUtils.degToRad(degrees) };
+      const next: CameraPathConfig = { ...path, waypoints };
+      setConfig((prev) => ({ ...prev, cameraPath: next }));
+      // Aim the preview at the point being edited so the slider steers the actual shot,
+      // not just the arrow in the scene view.
+      placeCameraAtWaypoint(next, index);
+    },
+    [placeCameraAtWaypoint]
   );
 
   /** Delete every waypoint outside the picked span. */
@@ -1530,6 +1697,9 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
   }, []);
 
   const handleRemoveWaypoint = useCallback((id: string) => {
+    // Indices shift when a point is removed, so a parked preview index would silently
+    // start pointing at a different point. Release it and fall back to the span's start.
+    extractorRef.current?.setPreviewWaypointIndex(null);
     setConfig((prev) => {
       const path = prev.cameraPath ?? DEFAULT_CAMERA_PATH;
       const waypoints = path.waypoints.filter((w) => w.id !== id);
@@ -1548,11 +1718,27 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
     });
   }, []);
 
-  /** Select a waypoint's gizmo in the 3D scene so it can be dragged immediately. */
-  const handleFocusWaypoint = useCallback((index: number) => {
-    const gizmo = extractorRef.current?.getCameraWaypointGizmos()[index];
-    if (gizmo) sceneViewControlsRef.current?.selectObject(gizmo);
-  }, []);
+  /**
+   * Select a waypoint's gizmo in the 3D scene so it can be dragged immediately, and put
+   * the recording camera on that point so the preview shows its shot.
+   *
+   * In per-point mode this is the whole workflow: pick a point, see its frame, aim it.
+   */
+  const handleFocusWaypoint = useCallback(
+    (index: number) => {
+      const gizmo = extractorRef.current?.getCameraWaypointGizmos()[index];
+      // Selecting the gizmo fires the selection callback, which previews the point. Doing
+      // it here as well would double up, so only drive the preview when there is no gizmo
+      // to select (waypoint overlays are scene-view only).
+      if (gizmo) {
+        sceneViewControlsRef.current?.selectObject(gizmo);
+        return;
+      }
+      const path = configRef.current.cameraPath;
+      if (path) placeCameraAtWaypoint(path, index);
+    },
+    [placeCameraAtWaypoint]
+  );
 
   /** Toggle whole-curve selection: green highlight, and drags move every point together. */
   const handleToggleSelectAll = useCallback((active: boolean) => {
@@ -2163,6 +2349,13 @@ export function VideoStudio({ sceneManager, productName, productId, onClose, ope
                                   onAddWaypoint={handleAddWaypoint}
                                   onRemoveWaypoint={handleRemoveWaypoint}
                                   onFocusWaypoint={handleFocusWaypoint}
+                                  onWaypointRotationChange={handleWaypointRotationChange}
+                                  onResetWaypointAngles={handleResetWaypointAngles}
+                                  activeWaypointIndex={
+                                    selectionInfo.type === "cameraWaypoint"
+                                      ? selectionInfo.waypointIndex ?? null
+                                      : null
+                                  }
                                   onToggleSelectAll={handleToggleSelectAll}
                                   selectAllActive={selectAllActive}
                                   startPositionSet={capturedStart !== null}

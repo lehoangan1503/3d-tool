@@ -120,7 +120,12 @@ export class SceneViewControls {
      */
     private onCameraPathRotate?: (axis: "x" | "y" | "z", angle: number) => void,
     /** Whether whole-curve selection is on — gates the rotate-all behaviour. */
-    private isCameraPathSelectAll?: () => boolean
+    private isCameraPathSelectAll?: () => boolean,
+    /**
+     * Whether the path stores a camera angle per waypoint. Gates rotating a single
+     * marker, which is only meaningful when the recording reads those angles back.
+     */
+    private isPerPointLookMode?: () => boolean
   ) {
     const godCam = esm.getGodCamera();
     if (godCam) {
@@ -445,12 +450,14 @@ export class SceneViewControls {
     // G/R/S hotkey — activate immediate drag mode
     if ((key === "g" || key === "r" || key === "s") && this.currentSelection.object) {
       if (key === "s" && this.currentSelection.type === "camera") return;
-      // A waypoint is a bare position — rotating or scaling one marker means nothing.
-      // The exception is R while the whole curve is selected: that rotates the curve about
-      // its centroid, which is a real operation.
+      // A waypoint has no size, so scaling one is meaningless. R has two distinct
+      // meanings: with the whole curve selected it spins every point's POSITION about the
+      // centroid; on a single marker it aims that point's own camera angle, which only
+      // matters in per-point look mode — the cue-facing modes recompute the angle at
+      // sample time and would throw the edit away.
       if (this.currentSelection.type === "cameraWaypoint") {
         if (key === "s") return;
-        if (key === "r" && !this.isCameraPathSelectAll?.()) return;
+        if (key === "r" && !this.isCameraPathSelectAll?.() && !this.isPerPointLookMode?.()) return;
       }
       // Wall and table are click-to-select only — no transforms
       if (this.currentSelection.type && NON_TRANSFORMABLE_TYPES.has(this.currentSelection.type)) return;

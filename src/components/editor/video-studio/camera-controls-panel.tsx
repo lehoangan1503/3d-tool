@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Gauge, Crosshair, Route, Plus, Trash2, Scissors, BoxSelect } from "lucide-react";
+import { Gauge, Crosshair, Route, Plus, Trash2, Scissors, BoxSelect, RotateCcw } from "lucide-react";
 import type {
   CameraKeyframe,
   CameraPathConfig,
@@ -22,6 +22,7 @@ import {
   isCameraFixed,
   getCameraPathSpan,
   normalizeLookMode,
+  isPerPointLookMode,
   CAMERA_LOOK_MODES,
 } from "@/types/video-studio";
 import {
@@ -52,8 +53,14 @@ interface CameraControlsPanelProps {
   /** Insert a point at the midpoint of the longest segment. */
   onAddWaypoint: () => void;
   onRemoveWaypoint: (id: string) => void;
-  /** Focus/select a waypoint's gizmo in the 3D scene view. */
+  /** Focus/select a waypoint's gizmo in the 3D scene view, and preview its shot. */
   onFocusWaypoint?: (index: number) => void;
+  /** Per-point mode: set one waypoint's camera angle, in degrees. */
+  onWaypointRotationChange?: (index: number, axis: "x" | "y" | "z", degrees: number) => void;
+  /** Per-point mode: re-aim every waypoint at the cue, discarding hand-set angles. */
+  onResetWaypointAngles?: () => void;
+  /** Index of the waypoint currently selected in the 3D view, if any. */
+  activeWaypointIndex?: number | null;
   /** Select the whole curve so dragging moves every point together. */
   onToggleSelectAll: (active: boolean) => void;
   selectAllActive?: boolean;
@@ -66,6 +73,31 @@ interface CameraControlsPanelProps {
   onSetEnd: () => void;
   startPositionSet?: boolean;
   endPositionSet?: boolean;
+}
+
+/**
+ * The three angle sliders, labelled by what they DO to the shot rather than by axis name —
+ * "rotationY" means nothing to someone framing a video, "quay ngang" does.
+ */
+const WAYPOINT_ANGLE_AXES: readonly {
+  axis: "x" | "y" | "z";
+  label: string;
+  field: "rotationX" | "rotationY" | "rotationZ";
+}[] = [
+  { axis: "y", label: "Quay ngang", field: "rotationY" },
+  { axis: "x", label: "Chếch lên/xuống", field: "rotationX" },
+  { axis: "z", label: "Nghiêng", field: "rotationZ" },
+];
+
+/**
+ * Radians → degrees folded into [-180, 180].
+ *
+ * Euler angles read back from a quaternion can land outside that range, and a slider whose
+ * value exceeds its max renders pinned at the end and then jumps when touched.
+ */
+function radToDegClamped(rad: number | undefined): number {
+  const deg = ((rad ?? 0) * 180) / Math.PI;
+  return ((((deg + 180) % 360) + 360) % 360) - 180;
 }
 
 function KeyframeDisplay({ title, keyframe, onSet, positionSet = false }: { title: string; keyframe: CameraKeyframe; onSet: () => void; positionSet?: boolean }) {
@@ -112,6 +144,9 @@ export function CameraControlsPanel({
   onAddWaypoint,
   onRemoveWaypoint,
   onFocusWaypoint,
+  onWaypointRotationChange,
+  onResetWaypointAngles,
+  activeWaypointIndex = null,
   onToggleSelectAll,
   selectAllActive = false,
   onSpeedChange,
@@ -134,6 +169,7 @@ export function CameraControlsPanel({
   const activePreset = getCameraPathPreset(cameraPath.shapeId);
   const spanLength = getCameraPathSpan(cameraPath).length;
   const canTrim = pathEnabled && spanLength >= 2 && spanLength < cameraPath.waypoints.length;
+  const perPoint = isPerPointLookMode(cameraPath.lookMode);
 
   // Which waypoint indices fall inside the recorded span — drives the dimming of rows
   // outside it. Mirrors the wrap-around logic used for the 3D overlay.
@@ -276,59 +312,96 @@ export function CameraControlsPanel({
                 const isStart = index === cameraPath.startIndex;
                 const isEnd = index === cameraPath.endIndex;
                 const inSpan = spanIndices.has(index);
+                // The angle editor is only opened for the point the 3D view has selected,
+                // so the list stays scannable instead of showing 24 sets of sliders.
+                const isActive = perPoint && activeWaypointIndex === index;
                 return (
-                  <div
-                    key={wp.id}
-                    className={`flex items-center gap-1 rounded px-1.5 py-1 text-[11px] tabular-nums transition-opacity ${
-                      inSpan ? "bg-muted/60" : "bg-muted/20 opacity-50"
-                    }`}
-                  >
-                    <button
-                      type="button"
+                  <div key={wp.id} className="space-y-1">
+                    {/* The whole row selects the point and previews its shot; the Đầu/Cuối/
+                        delete buttons stop propagation so they keep their own meaning. */}
+                    <div
+                      role="button"
+                      tabIndex={0}
                       onClick={() => onFocusWaypoint?.(index)}
-                      className="w-4 shrink-0 text-center font-medium text-muted-foreground hover:text-foreground"
-                      title="Chọn điểm này trong khung 3D"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onFocusWaypoint?.(index);
+                        }
+                      }}
+                      title="Chọn điểm này và xem góc camera của nó"
+                      className={`flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-[11px] tabular-nums transition-opacity hover:bg-muted ${
+                        inSpan ? "bg-muted/60" : "bg-muted/20 opacity-50"
+                      } ${isActive ? "ring-1 ring-[#22cc66]" : ""}`}
                     >
-                      {index + 1}
-                    </button>
-                    <span className="flex-1 truncate text-muted-foreground">
-                      <span className="text-foreground">{wp.x.toFixed(1)}</span>
-                      {" / "}
-                      <span className="text-foreground">{wp.y.toFixed(1)}</span>
-                      {" / "}
-                      <span className="text-foreground">{wp.z.toFixed(1)}</span>
-                    </span>
-                    <Button
-                      variant={isStart ? "default" : "ghost"}
-                      size="sm"
-                      className={`h-5 px-1.5 text-[10px] shrink-0 ${
-                        isStart ? "bg-[#22cc66] hover:bg-[#22cc66]/90 text-black" : ""
-                      }`}
-                      title="Đặt làm điểm bắt đầu"
-                      onClick={() => onSetStartIndex(index)}
-                    >
-                      Đầu
-                    </Button>
-                    <Button
-                      variant={isEnd ? "default" : "ghost"}
-                      size="sm"
-                      className={`h-5 px-1.5 text-[10px] shrink-0 ${
-                        isEnd ? "bg-[#ff3355] hover:bg-[#ff3355]/90 text-white" : ""
-                      }`}
-                      title="Đặt làm điểm kết thúc"
-                      onClick={() => onSetEndIndex(index)}
-                    >
-                      Cuối
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-5 w-5 p-0 shrink-0 text-destructive hover:text-destructive"
-                      title="Xoá điểm"
-                      onClick={() => onRemoveWaypoint(wp.id)}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
+                      <span className="w-4 shrink-0 text-center font-medium text-muted-foreground">
+                        {index + 1}
+                      </span>
+                      <span className="flex-1 truncate text-muted-foreground">
+                        <span className="text-foreground">{wp.x.toFixed(1)}</span>
+                        {" / "}
+                        <span className="text-foreground">{wp.y.toFixed(1)}</span>
+                        {" / "}
+                        <span className="text-foreground">{wp.z.toFixed(1)}</span>
+                      </span>
+                      <Button
+                        variant={isStart ? "default" : "ghost"}
+                        size="sm"
+                        className={`h-5 px-1.5 text-[10px] shrink-0 ${
+                          isStart ? "bg-[#22cc66] hover:bg-[#22cc66]/90 text-black" : ""
+                        }`}
+                        title="Đặt làm điểm bắt đầu"
+                        onClick={(e) => { e.stopPropagation(); onSetStartIndex(index); }}
+                      >
+                        Đầu
+                      </Button>
+                      <Button
+                        variant={isEnd ? "default" : "ghost"}
+                        size="sm"
+                        className={`h-5 px-1.5 text-[10px] shrink-0 ${
+                          isEnd ? "bg-[#ff3355] hover:bg-[#ff3355]/90 text-white" : ""
+                        }`}
+                        title="Đặt làm điểm kết thúc"
+                        onClick={(e) => { e.stopPropagation(); onSetEndIndex(index); }}
+                      >
+                        Cuối
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-5 w-5 p-0 shrink-0 text-destructive hover:text-destructive"
+                        title="Xoá điểm"
+                        onClick={(e) => { e.stopPropagation(); onRemoveWaypoint(wp.id); }}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+
+                    {isActive && (
+                      <div className="space-y-1.5 rounded bg-muted/40 px-2 py-1.5">
+                        <Label className="text-[10px] text-muted-foreground">
+                          Góc camera điểm {index + 1}
+                        </Label>
+                        {WAYPOINT_ANGLE_AXES.map(({ axis, label, field }) => (
+                          <div key={axis} className="flex items-center gap-1.5">
+                            <span className="w-14 shrink-0 text-[10px] text-muted-foreground">
+                              {label}
+                            </span>
+                            <Slider
+                              className="flex-1"
+                              value={[radToDegClamped(wp[field])]}
+                              onValueChange={([v]) => onWaypointRotationChange?.(index, axis, v)}
+                              min={-180}
+                              max={180}
+                              step={1}
+                            />
+                            <span className="w-9 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+                              {Math.round(radToDegClamped(wp[field]))}°
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -413,6 +486,27 @@ export function CameraControlsPanel({
                   ))}
                 </SelectContent>
               </Select>
+
+              {perPoint && (
+                <>
+                  <p className="text-[10px] text-muted-foreground bg-muted rounded px-2 py-1.5 leading-relaxed">
+                    Mỗi điểm có <span className="font-semibold text-foreground">góc camera riêng</span>.
+                    Nhấn vào hàng của điểm để preview hiện đúng góc của điểm đó, rồi chỉnh bằng slider
+                    hoặc nhấn <span className="font-semibold text-foreground">R</span> trong khung 3D
+                    để xoay trực tiếp. Khi chạy video camera sẽ chuyển góc mượt giữa các điểm.
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-full text-[11px]"
+                    title="Đặt lại tất cả góc để hướng về cây cue"
+                    onClick={onResetWaypointAngles}
+                  >
+                    <RotateCcw className="h-3 w-3 mr-1" />
+                    Đặt lại góc — hướng về cue
+                  </Button>
+                </>
+              )}
             </div>
           </>
         )}

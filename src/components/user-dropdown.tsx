@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ChevronDown, User, Check, Loader2, Pencil } from "lucide-react";
+import { ChevronDown, User, Check, KeyRound, Loader2, Pencil } from "lucide-react";
 import type { UserProfile } from "@/types/product";
 
 interface UserDropdownProps {
@@ -131,6 +132,15 @@ export function UserDropdown({ profile: initialProfile }: UserDropdownProps) {
               </p>
             )}
           </div>
+
+          <div className="h-px bg-border" />
+
+          <Button variant="ghost" size="sm" className="justify-start -mx-1" asChild>
+            <Link href="/settings/api-tokens">
+              <KeyRound className="h-4 w-4" />
+              API Token
+            </Link>
+          </Button>
         </div>
       )}
     </div>

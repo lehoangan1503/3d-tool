@@ -493,6 +493,16 @@ Ba chi tiết dễ sai, cả ba đều làm build vô dụng:
 Lần đầu ~15-30 phút (cross-build qua QEMU chậm hơn native). Lần sau nhanh hơn
 nhiều nhờ cache layer.
 
+> **Bump tag mỗi lần build**, đừng đẩy lại cùng một tag. RunPod cache image theo
+> tag, nên push `:v3` lần thứ hai thì pod đang chạy vẫn dùng bản cũ và không có
+> lỗi nào báo. Build mới → `:v4` → đổi tên image trong endpoint settings.
+>
+> **Đổi Dockerfile là phải rebuild.** Bình thường sửa code render chỉ cần deploy
+> app (xem phần kiến trúc: pod mở trang `/render-worker` của app), nhưng
+> `NVIDIA_DRIVER_CAPABILITIES` và các flag Chrome nằm trong image — deploy app
+> không chạm tới chúng. Lần thêm `video` cho NVENC là một trong những lần cần
+> **cả hai**.
+
 **B5. Kiểm tra image đã lên hub**
 
 ```bash
@@ -626,7 +636,7 @@ phút — thoải mái.
 ```
 APP_BASE_URL              = https://app-cua-anh.com
 RENDER_WORKER_SECRET      = <secret ở Bước 2>
-NVIDIA_DRIVER_CAPABILITIES = compute,utility,graphics,display
+NVIDIA_DRIVER_CAPABILITIES = compute,utility,graphics,display,video
 RENDER_ANGLE_BACKEND      = gl
 WORKER_MODE               = serve      # xem ghi chú bên dưới
 PORT                      = 8080
@@ -654,6 +664,12 @@ RENDER_JOB_TIMEOUT_MS     = 1200000    # trần cho MỘT job
 > `compute,utility` → thư viện GL/EGL không được mount vào container → WebGL
 > không có driver nào để nói chuyện. Dockerfile đã set, nhưng set lại ở đây cho
 > chắc vì một số nền tảng ghi đè.
+>
+> `video` là **mount riêng** (NVENC/`libnvidia-encode`), không đi kèm
+> `graphics`. Thiếu nó thì Chrome không thấy encoder H.264 hardware và
+> WebCodecs encode bằng CPU — **im lặng**, vì video vẫn ra đúng, chỉ chậm.
+> Kiểm tra bằng log pod: `H.264 encode: hardware` là đúng, `software` là
+> thiếu `video` (hoặc card không có NVENC).
 
 Tạo xong, copy **Endpoint ID** (dạng `abc123xyz`) và tạo **API Key** ở
 Settings → API Keys.

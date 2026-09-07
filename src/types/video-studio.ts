@@ -46,28 +46,42 @@ export type CameraPathMode = "linear" | "spline";
 export type CameraCurveType = "centripetal" | "chordal" | "catmullrom" | "linear";
 
 /**
- * How the camera is oriented while travelling the path. Both modes aim at the cue; they
- * differ only in whether the camera is allowed to tilt.
+ * How the camera is oriented while travelling the path.
  *
- *   level  — the camera stays perfectly horizontal (no pitch/roll) and yaws toward the cue
- *            axis at its OWN height, so the shot's horizon never tips. On a vertical curve
- *            the camera rises alongside the shaft looking straight at it.
- *   center — aim at the cue's center point, tilting up or down as needed.
+ *   level    — the camera stays perfectly horizontal (no pitch/roll) and yaws toward the
+ *              cue axis at its OWN height, so the shot's horizon never tips. On a vertical
+ *              curve the camera rises alongside the shaft looking straight at it.
+ *   center   — aim at the cue's center point, tilting up or down as needed.
+ *   perPoint — each waypoint stores its own rotation and the move slerps between them, so
+ *              the camera can look wherever the user aimed it at each point rather than
+ *              being locked onto the cue.
  *
  * "interpolate" and "path" are retained only so templates saved with them keep loading;
  * both migrate to "level".
  */
-export type CameraLookMode = "level" | "center" | "interpolate" | "path";
+export type CameraLookMode = "level" | "center" | "perPoint" | "interpolate" | "path";
 
 /** Look modes offered in the UI. The other two exist only for backward compatibility. */
 export const CAMERA_LOOK_MODES: readonly { id: CameraLookMode; label: string }[] = [
-  { id: "level",  label: "Theo từng góc điểm (luôn ngang)" },
-  { id: "center", label: "Luôn hướng center cue" },
+  { id: "level",    label: "Luôn ngang, hướng cue" },
+  { id: "center",   label: "Luôn hướng center cue" },
+  { id: "perPoint", label: "Góc riêng từng điểm" },
 ];
 
-/** Collapse legacy look modes onto the two supported ones. */
+/** Collapse legacy look modes onto the three supported ones. */
 export function normalizeLookMode(mode: CameraLookMode | undefined): CameraLookMode {
-  return mode === "center" ? "center" : "level";
+  if (mode === "center") return "center";
+  if (mode === "perPoint") return "perPoint";
+  return "level";
+}
+
+/**
+ * True when each waypoint carries its OWN camera orientation, rather than every point
+ * deriving its aim from the cue. The recorded move slerps between consecutive waypoints'
+ * rotations, so the shot can turn away from the cue mid-move.
+ */
+export function isPerPointLookMode(mode: CameraLookMode | undefined): boolean {
+  return normalizeLookMode(mode) === "perPoint";
 }
 
 /**

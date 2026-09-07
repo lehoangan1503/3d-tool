@@ -7,7 +7,11 @@ import { ExtractorSceneManager } from "@/lib/three/extractor-scene-manager";
 import { renderReferenceToBlob } from "@/components/editor/image-extractor";
 import { MODEL_PATHS } from "@/types/product";
 import { ensureFullConfig } from "@/types/video-studio";
-import type { DeterministicFrameSink } from "@/types/video-studio";
+import {
+  createStudioFrameSink,
+  isWebCodecsSupported,
+} from "@/lib/video/webcodecs-frame-sink";
+import type { DeterministicFrameSink, VideoStudioConfig } from "@/types/video-studio";
 import type { ExtractorReference } from "@/types/extractor";
 import type {
   ClaimedRenderJob,
@@ -62,14 +66,14 @@ declare global {
 }
 
 /**
- * Builds the frame sink that writes through to the pod's disk.
+ * Builds the frame sink that writes PNGs through to the pod's disk.
  *
  * Throws when the Node bridges are absent. There is no longer a real-time path
  * to fall back to, so a pod running RENDER_DETERMINISTIC_VIDEO=0 or a worker
  * image predating deterministic recording must fail the job loudly rather than
  * silently producing a stuttering file.
  */
-function createWorkerFrameSink(): DeterministicFrameSink {
+function createFfmpegFrameSink(): DeterministicFrameSink {
   const writeFrame = window.__writeFrame;
   const muxFrames = window.__muxFrames;
   if (!writeFrame || !muxFrames) {
@@ -108,6 +112,64 @@ function createWorkerFrameSink(): DeterministicFrameSink {
       return new Blob([bytes], { type: result.mimeType });
     },
   };
+}
+
+/** Which sink recorded a take, so the pod log says how the file was produced. */
+interface ChosenFrameSink {
+  readonly sink: DeterministicFrameSink;
+  readonly mode: "webcodecs" | "ffmpeg";
+}
+
+/**
+ * Forces the encoder choice, read from the URL the pod navigated to.
+ *
+ * A query parameter rather than NEXT_PUBLIC_*: the pod sets it from its own
+ * environment, so pinning a pod back to ffmpeg takes a RunPod env-var change
+ * and no app rebuild. Absent (a plain browser, or an older worker image) means
+ * "choose automatically", which is what keeps both sides deployable
+ * independently.
+ */
+function readEncoderOverride(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("encoder");
+}
+
+/**
+ * Picks the fastest frame sink this pod can actually run.
+ *
+ * WebCodecs wins by a wide margin and for a structural reason: it encodes in
+ * the same process as the canvas, so a frame never becomes a PNG and never
+ * crosses into Node. The ffmpeg path pays for three extra stages per frame —
+ * single-threaded PNG compression at 2K, a base64 round-trip over CDP (binary
+ * cannot travel as JSON), and a disk write — and then encodes everything
+ * afterwards with x264 veryslow, overlapping nothing. Measured on 60 real
+ * studio frames the two are equal in quality (PSNR 30.60 vs 30.53 dB against a
+ * lossless reference), so the slower path buys nothing but wall-clock.
+ *
+ * ffmpeg stays as the fallback rather than being deleted: WebCodecs needs a
+ * hardware H.264 encoder Chrome is willing to expose, and whether the pod's
+ * card and driver provide one is a property of the rented host, not of this
+ * code. A pod that cannot encode still renders — just slowly.
+ */
+async function chooseFrameSink(config: VideoStudioConfig): Promise<ChosenFrameSink> {
+  if (readEncoderOverride() !== "ffmpeg" && isWebCodecsSupported()) {
+    try {
+      // Probing here, before the scene is built, means an unusable encoder
+      // costs a few milliseconds instead of surfacing a thousand frames in.
+      // createStudioFrameSink configures a real encoder — `isConfigSupported`
+      // alone has been observed lying about configs whose configure() throws.
+      const sink = await createStudioFrameSink(config);
+      return { sink, mode: "webcodecs" };
+    } catch (error) {
+      // Not fatal: ffmpeg produces the same quality, just slower.
+      log(
+        `WebCodecs unavailable on this pod (${error instanceof Error ? error.message : String(error)}) ` +
+        `— falling back to PNG + ffmpeg`
+      );
+    }
+  }
+
+  return { sink: createFfmpegFrameSink(), mode: "ffmpeg" };
 }
 
 function log(message: string): void {
@@ -379,13 +441,27 @@ export default function RenderWorkerClient() {
         // take it from, only the frozen payload.
         esm.setProductLogoId(product.config?.logoId ?? null);
 
-        // Throws if the pod did not install its bridges, which fails the job
-        // before a single frame is rendered rather than after all of them.
-        const sink = createWorkerFrameSink();
-        log("recording mode: deterministic (frame-by-frame -> ffmpeg, no dropped frames)");
+        // Resolved before the scene is touched so an unusable encoder costs
+        // milliseconds, not a thousand rendered frames. Either branch renders
+        // every frame with full backpressure — the choice is only about how
+        // each frame reaches the encoder.
+        //
+        // Supersampling stays at the recorder's default of 1 here, unlike every
+        // browser call site: it exists to buy back detail that ANGLE/Metal's
+        // MAX_SAMPLES = 4 cap smears away, and the pod's NVIDIA stack is not
+        // subject to that cap. Rendering 4x the pixels on the pod would cost
+        // fill rate for detail it already has — and would change the output
+        // pixels, which must stay identical to earlier renders.
+        const fullConfig = ensureFullConfig(config);
+        const { sink, mode } = await chooseFrameSink(fullConfig);
+        log(
+          mode === "webcodecs"
+            ? "recording mode: deterministic (canvas -> WebCodecs H.264, no dropped frames)"
+            : "recording mode: deterministic (frame-by-frame PNG -> ffmpeg, no dropped frames)"
+        );
 
         let lastBeat = 0;
-        const blob = await esm.startStudioRecording(ensureFullConfig(config), (pct: number) => {
+        const blob = await esm.startStudioRecording(fullConfig, (pct: number) => {
           // The recorder callback cannot await, so cancellation is checked on a
           // throttled beat and the error surfaces on the next one.
           const now = performance.now();

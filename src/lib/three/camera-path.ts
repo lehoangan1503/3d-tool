@@ -10,6 +10,7 @@ import {
   createCameraWaypoint,
   getCameraPathSpan,
   isCameraPathActive,
+  isPerPointLookMode,
   normalizeLookMode,
 } from '@/types/video-studio';
 
@@ -123,6 +124,98 @@ function buildCurve(
 }
 
 /**
+ * Orientation track for "per point" look mode.
+ *
+ * Each control point carries its own camera rotation, and the recorded move blends between
+ * consecutive points. Two details make it line up with the motion:
+ *
+ *  1. **Same parameterisation as the position.** The position is sampled by arc length
+ *     (`getPointAt`), so a rotation keyed on the control-point INDEX would drift ahead of
+ *     or behind the camera whenever the points are unevenly spaced. The track therefore
+ *     stores each control point's own arc-length `u` — obtained by walking the curve's
+ *     cumulative-length table — and looks the segment up by that same `u`.
+ *
+ *  2. **Quaternion slerp, not Euler lerp.** Interpolating Euler angles through a large yaw
+ *     change swings the camera the wrong way round and can gimbal-flip near ±90° pitch.
+ *     Slerp takes the short arc between two orientations, which is the turn a camera
+ *     operator would make.
+ */
+class PerPointOrientationTrack {
+  private readonly quats: THREE.Quaternion[];
+  /** Arc-length position (0–1) of each control point, ascending. */
+  private readonly us: number[];
+
+  constructor(controlPoints: CameraKeyframe[], curve: THREE.CatmullRomCurve3, closed: boolean) {
+    this.quats = controlPoints.map(p => {
+      const e = new THREE.Euler(p.rotationX ?? 0, p.rotationY ?? 0, p.rotationZ ?? 0, 'XYZ');
+      return new THREE.Quaternion().setFromEuler(e);
+    });
+    // On a closed loop the curve continues from the last point back to the first, so the
+    // wrap-around segment needs the first orientation appended as its endpoint.
+    if (closed && this.quats.length > 0) {
+      this.quats.push(this.quats[0].clone());
+    }
+    this.us = PerPointOrientationTrack.controlPointArcLengths(curve, this.quats.length);
+  }
+
+  /**
+   * Arc-length parameter of each control point.
+   *
+   * A Catmull-Rom's segment i spans raw parameter [i/segments, (i+1)/segments], so
+   * `getUtoTmapping` inverted at those raw values would give the wrong answer — it maps the
+   * other direction. Instead we walk the cumulative-length table: segment i's end sits at
+   * cumulative length index i * (divisions / segments), and dividing by the total gives u.
+   */
+  private static controlPointArcLengths(
+    curve: THREE.CatmullRomCurve3,
+    count: number
+  ): number[] {
+    const segments = Math.max(1, count - 1);
+    const lengths = curve.getLengths(curve.arcLengthDivisions);
+    const total = lengths[lengths.length - 1] || 1;
+    const perSegment = (lengths.length - 1) / segments;
+    const us: number[] = [];
+    for (let i = 0; i < count; i++) {
+      const idx = Math.min(lengths.length - 1, Math.round(i * perSegment));
+      us.push(lengths[idx] / total);
+    }
+    // Guard against a zero-length segment producing a non-ascending table, which would
+    // make the binary-free scan below pick a segment with u1 === u0 and divide by zero.
+    for (let i = 1; i < us.length; i++) {
+      if (us[i] <= us[i - 1]) us[i] = Math.min(1, us[i - 1] + 1e-6);
+    }
+    return us;
+  }
+
+  /** Blend the two orientations bracketing `u` into `out`. */
+  sample(u: number, out: THREE.Quaternion): void {
+    const n = this.quats.length;
+    if (n === 0) {
+      out.identity();
+      return;
+    }
+    if (n === 1) {
+      out.copy(this.quats[0]);
+      return;
+    }
+    if (u <= this.us[0]) {
+      out.copy(this.quats[0]);
+      return;
+    }
+    if (u >= this.us[n - 1]) {
+      out.copy(this.quats[n - 1]);
+      return;
+    }
+    let i = 1;
+    while (i < n - 1 && this.us[i] < u) i++;
+    const u0 = this.us[i - 1];
+    const u1 = this.us[i];
+    const f = (u - u0) / (u1 - u0);
+    out.copy(this.quats[i - 1]).slerp(this.quats[i], f);
+  }
+}
+
+/**
  * Spline sampler over start → waypoints → end.
  *
  * `lookMode` controls orientation. Both modes face the cue:
@@ -139,9 +232,12 @@ function createSplineSampler(
   // Force the arc-length LUT to build now rather than on the first recorded frame.
   const length = curve.getLength();
 
-  // Both modes aim at the cue; fall back to the origin when it is unknown.
+  // The cue-facing modes aim at the cue; fall back to the origin when it is unknown.
   const target = lookTarget ? lookTarget.clone() : new THREE.Vector3(0, 0, 0);
   const mode = normalizeLookMode(path.lookMode);
+  // Per-point mode reads the orientations stored on the waypoints instead of deriving one.
+  const orientation =
+    mode === 'perPoint' ? new PerPointOrientationTrack(controlPoints, curve, closed) : null;
 
   return {
     length,
@@ -151,6 +247,12 @@ function createSplineSampler(
       out.x = _pos.x;
       out.y = _pos.y;
       out.z = _pos.z;
+
+      if (orientation) {
+        orientation.sample(clamped, _quat);
+        writeEuler(_quat, out);
+        return;
+      }
 
       if (mode === 'level') {
         // Aim at the cue's vertical axis at the CAMERA's own height. Using the camera's y
@@ -229,6 +331,19 @@ export function cameraKeyframeLookingAt(
   lookMode: CameraLookMode,
   target: THREE.Vector3
 ): CameraKeyframe {
+  // Per-point mode: the waypoint already carries the angle the user aimed it at, so the
+  // preview must use that verbatim rather than re-deriving an aim at the cue — otherwise
+  // selecting a point would silently snap the shot back onto the cue.
+  if (isPerPointLookMode(lookMode)) {
+    return {
+      x: point.x,
+      y: point.y,
+      z: point.z,
+      rotationX: point.rotationX ?? 0,
+      rotationY: point.rotationY ?? 0,
+      rotationZ: point.rotationZ ?? 0,
+    };
+  }
   const pos = new THREE.Vector3(point.x, point.y, point.z);
   // Mirror the sampler exactly, so the preview frame matches what gets recorded.
   const lookAt =
@@ -544,6 +659,29 @@ export function applyWaypointsEuler(
       x: v.x, y: v.y, z: v.z,
       rotationX: we.x, rotationY: we.y, rotationZ: we.z,
     };
+  });
+}
+
+/**
+ * Give every waypoint an explicit rotation aimed at `target`, using `fromMode`'s framing.
+ *
+ * Called when the user switches into per-point mode. Without it the points would all carry
+ * rotation 0 — every camera staring down -Z at the back wall — and the shot would jump
+ * somewhere unrecognisable the moment the mode changed. Seeding from the outgoing mode
+ * means the first frame after the switch looks identical to the last frame before it, and
+ * the user edits away from a sane starting point.
+ */
+export function seedWaypointRotations(
+  waypoints: CameraWaypoint[],
+  fromMode: CameraLookMode,
+  target: THREE.Vector3
+): CameraWaypoint[] {
+  // "level" is the sensible framing to inherit when the outgoing mode was already
+  // per-point (a re-seed / "reset angles" action), since there is nothing to copy.
+  const mode: CameraLookMode = isPerPointLookMode(fromMode) ? 'level' : fromMode;
+  return waypoints.map(w => {
+    const kf = cameraKeyframeLookingAt(w, mode, target);
+    return { ...w, rotationX: kf.rotationX, rotationY: kf.rotationY, rotationZ: kf.rotationZ };
   });
 }
 

@@ -1,7 +1,13 @@
 import * as THREE from 'three';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { createCameraPathSampler, getCameraPathPoints, getCameraSpanPoints } from './camera-path';
+import {
+  cameraKeyframeLookingAt,
+  createCameraPathSampler,
+  getCameraPathPoints,
+  getCameraSpanPoints,
+} from './camera-path';
+import { isPerPointLookMode } from '@/types/video-studio';
 import type {
   ImageExtractorConfig,
   VideoExtractorConfig,
@@ -482,6 +488,16 @@ export class ExtractorSceneManager {
   private _cameraPlacementMode = false;
   /** Fingerprint of the last cameraStart that was applied via setCameraFromKeyframe in updateStudioPreviewConfig */
   private _lastAppliedCameraStartKey = "";
+  /**
+   * Waypoint the preview is currently looking through, overriding the path's own
+   * startIndex.
+   *
+   * Without this the config sync would keep pulling the camera back to startIndex: the
+   * preview keyframe is derived from the path, so writing it into `cameraStart` is not
+   * enough to hold a different point on screen. Selecting a waypoint parks the index here
+   * and every later sync honours it, so inspecting point 3 stays on point 3.
+   */
+  private _previewWaypointIndex: number | null = null;
   private _cameraOrbit: OrbitControls | null = null;
   /** Timer used to delay clearing _cameraPlacementMode past the config-sync debounce to prevent camera jumps */
   private _placementModeExpiryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -5043,6 +5059,22 @@ export class ExtractorSceneManager {
     this._lastAppliedCameraStartKey = "";
   }
 
+  /**
+   * Look through one waypoint instead of the path's start point, or `null` to go back to
+   * the start. The choice survives config syncs, so it holds until the user picks another
+   * point or deselects.
+   */
+  setPreviewWaypointIndex(index: number | null): void {
+    if (this._previewWaypointIndex === index) return;
+    this._previewWaypointIndex = index;
+    // The camera must move even though nothing in the config changed.
+    this._lastAppliedCameraStartKey = "";
+  }
+
+  getPreviewWaypointIndex(): number | null {
+    return this._previewWaypointIndex;
+  }
+
   getGodCamera(): THREE.PerspectiveCamera | null {
     return this.godCamera;
   }
@@ -5089,10 +5121,21 @@ export class ExtractorSceneManager {
     this.cameraSpanLine = null;
     for (const g of this.cameraWaypointGizmos) {
       this.scene.remove(g);
-      g.geometry.dispose();
-      (g.material as THREE.Material).dispose();
+      this._disposeWaypointGizmo(g);
     }
     this.cameraWaypointGizmos = [];
+  }
+
+  /** Dispose a waypoint marker and its direction-cone child. */
+  private _disposeWaypointGizmo(gizmo: THREE.Mesh): void {
+    gizmo.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      m.geometry?.dispose();
+      const mat = m.material;
+      if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
+      else mat?.dispose();
+    });
   }
 
   /** Create or update one overlay line, reusing its buffer when the vertex count matches. */
@@ -5184,8 +5227,7 @@ export class ExtractorSceneManager {
       }
       for (const g of this.cameraWaypointGizmos) {
         this.scene.remove(g);
-        g.geometry.dispose();
-        (g.material as THREE.Material).dispose();
+        this._disposeWaypointGizmo(g);
       }
       this.cameraWaypointGizmos = waypoints.map((_, index) => {
         const mesh = new THREE.Mesh(
@@ -5195,16 +5237,44 @@ export class ExtractorSceneManager {
         mesh.renderOrder = 1002;
         mesh.userData = { type: "cameraWaypoint", waypointIndex: index };
         mesh.visible = this.isSceneView;
+        // Direction indicator: a cone down the marker's local -Z, which is where a THREE
+        // camera looks. Parented to the sphere so the marker's own rotation aims it, and
+        // named so recolouring can find it without another field on the class.
+        //
+        // Raycast-transparent: a click on the cone must select the WAYPOINT, and the
+        // simplest way to guarantee that is to keep the cone out of the picking set
+        // entirely — otherwise TransformControls would attach to the cone and dragging
+        // would move the arrow off its own marker.
+        const cone = new THREE.Mesh(
+          new THREE.ConeGeometry(0.16, 0.62, 12),
+          new THREE.MeshBasicMaterial({ depthTest: false })
+        );
+        // ConeGeometry points up +Y; rotate it onto -Z and push it out in front.
+        cone.rotation.x = -Math.PI / 2;
+        cone.position.set(0, 0, -0.55);
+        cone.renderOrder = 1002;
+        cone.raycast = () => {};
+        cone.name = "waypointDirection";
+        mesh.add(cone);
         this.scene.add(mesh);
         return mesh;
       });
     }
 
     const spanIndices = this._cameraPathSpanIndices(path);
+    // The direction cones only mean something when each point carries its own angle; in
+    // the cue-facing modes the orientation is derived at sample time, so showing an arrow
+    // would advertise a rotation the recording ignores.
+    const showDirection = isPerPointLookMode(path.lookMode);
     for (let i = 0; i < waypoints.length; i++) {
       const gizmo = this.cameraWaypointGizmos[i];
       if (!gizmo) continue;
       gizmo.position.set(waypoints[i].x, waypoints[i].y, waypoints[i].z);
+      gizmo.rotation.set(
+        waypoints[i].rotationX ?? 0,
+        waypoints[i].rotationY ?? 0,
+        waypoints[i].rotationZ ?? 0
+      );
       // Scene view keeps matrixAutoUpdate on, but recording freezes the graph — set the
       // matrix explicitly so a drag is reflected even on the frame it happens.
       gizmo.updateMatrixWorld(true);
@@ -5229,6 +5299,14 @@ export class ExtractorSceneManager {
       // Start and end read as the important handles, so draw them larger.
       const emphasis = i === path.startIndex || i === path.endIndex ? 1.45 : 1;
       gizmo.scale.setScalar(emphasis);
+      const cone = gizmo.getObjectByName("waypointDirection") as THREE.Mesh | undefined;
+      if (cone) {
+        cone.visible = showDirection;
+        const coneMat = cone.material as THREE.MeshBasicMaterial;
+        coneMat.color.copy(mat.color);
+        coneMat.opacity = mat.opacity;
+        coneMat.transparent = mat.transparent;
+      }
     }
   }
 
@@ -5314,12 +5392,27 @@ export class ExtractorSceneManager {
    * Used by the whole-curve rotate, where all points move at once and there is no single
    * dragged handle to derive a delta from.
    */
-  applyCameraWaypointPositions(waypoints: readonly { x: number; y: number; z: number }[]): void {
+  applyCameraWaypointPositions(
+    waypoints: readonly {
+      x: number;
+      y: number;
+      z: number;
+      rotationX?: number;
+      rotationY?: number;
+      rotationZ?: number;
+    }[]
+  ): void {
     for (let i = 0; i < this.cameraWaypointGizmos.length; i++) {
       const wp = waypoints[i];
       const g = this.cameraWaypointGizmos[i];
       if (!wp || !g) continue;
       g.position.set(wp.x, wp.y, wp.z);
+      // A whole-curve rotate spins each point's stored ANGLE as well as its position, so
+      // the markers' direction cones have to follow or they would keep pointing the way
+      // the curve faced before the rotation.
+      if (wp.rotationX !== undefined || wp.rotationY !== undefined || wp.rotationZ !== undefined) {
+        g.rotation.set(wp.rotationX ?? 0, wp.rotationY ?? 0, wp.rotationZ ?? 0);
+      }
       g.updateMatrixWorld(true);
     }
   }
@@ -5358,6 +5451,18 @@ export class ExtractorSceneManager {
    * still opens on the correct frame. Falls back to cameraStart when there is no path.
    */
   private resolveStartKeyframe(config: VideoStudioConfig): CameraKeyframe {
+    // A waypoint picked for inspection wins over the path's start point. Only the preview
+    // reads this method — the recording builds its own sampler — so parking the camera on
+    // point 3 cannot leak into the rendered video.
+    const previewIndex = this._previewWaypointIndex;
+    const path = config.cameraPath;
+    if (previewIndex !== null && path?.waypoints[previewIndex]) {
+      return cameraKeyframeLookingAt(
+        path.waypoints[previewIndex],
+        path.lookMode,
+        this.getCuePathLookTarget() ?? new THREE.Vector3(0, 0, 0)
+      );
+    }
     const sampler = createCameraPathSampler(
       config.cameraStart,
       config.cameraEnd,

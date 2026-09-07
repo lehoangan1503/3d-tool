@@ -110,6 +110,27 @@ const CHROME_PATH = process.env.PUPPETEER_EXECUTABLE_PATH ?? "/usr/bin/chromium"
  */
 const DETERMINISTIC_VIDEO = process.env.RENDER_DETERMINISTIC_VIDEO !== "0";
 
+/**
+ * Which encoder the render page should use: "webcodecs", "ffmpeg", or "auto".
+ *
+ * "auto" (the default) lets the page prefer WebCodecs and fall back to
+ * PNG + ffmpeg when this pod's Chrome cannot configure a hardware H.264
+ * encoder. WebCodecs is dramatically faster for a structural reason: it encodes
+ * in the same process as the canvas, so a frame never becomes a PNG, never
+ * crosses into Node as base64, and never waits for x264 to run afterwards.
+ * Measured on identical frames the two are equal in quality, so the ffmpeg path
+ * costs wall-clock and buys nothing — it stays only as the fallback.
+ *
+ * Forwarded as a query parameter rather than baked into the app, so pinning a
+ * pod to ffmpeg is a RunPod env-var change with no app rebuild. The PNG bridges
+ * are still installed either way, which is what makes the fallback possible.
+ */
+const VIDEO_ENCODER =
+  process.env.RENDER_VIDEO_ENCODER === "ffmpeg" ||
+  process.env.RENDER_VIDEO_ENCODER === "webcodecs"
+    ? process.env.RENDER_VIDEO_ENCODER
+    : "auto";
+
 /** ffmpeg binary. The image installs one; override for an odd host. */
 const FFMPEG_PATH = process.env.RENDER_FFMPEG_PATH ?? "ffmpeg";
 
@@ -171,7 +192,23 @@ function chromeArgs(angleBackend) {
     "--enable-gpu",
     // Do NOT let Chrome disable the GPU just because there is no display.
     "--ignore-gpu-blocklist",
-    "--enable-features=Vulkan",
+    // Vulkan for WebGL; the rest is what lets WebCodecs reach NVENC.
+    //
+    // Chrome disables hardware VIDEO ENCODING by default on Linux — it is
+    // gated separately from the GPU rasterisation that --enable-gpu turns on,
+    // so without these a pod renders on the card and then encodes on the CPU.
+    // That failure is silent and expensive: VideoEncoder still works, just in
+    // software, which is most of the speed the WebCodecs path exists to gain.
+    //
+    // AcceleratedVideoEncoder is the feature flag; --enable-accelerated-video-encode
+    // is the older switch that some builds still read. Passing both costs
+    // nothing and covers whichever this Chrome respects.
+    "--enable-features=Vulkan,AcceleratedVideoEncoder",
+    "--enable-accelerated-video-encode",
+    // Chrome refuses hardware encode outright when it thinks there is no
+    // usable GPU memory buffer path, which is the default verdict in a
+    // container with no display.
+    "--enable-gpu-memory-buffer-video-frames",
     // A 2048x2048 canvas plus HDRI textures needs real headroom.
     "--js-flags=--max-old-space-size=8192",
     "--window-size=1920,1080",
@@ -216,6 +253,54 @@ async function probeWebGL(browser) {
       const info = gl.getExtension("WEBGL_debug_renderer_info");
       return info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : "unknown";
     });
+  } finally {
+    await page.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Reports whether this pod's Chrome can encode H.264 in hardware.
+ *
+ * Diagnostic only — the render page probes for itself and falls back on its
+ * own, so nothing here gates a job. It exists because a software fallback is
+ * otherwise invisible: VideoEncoder still works, the video still comes out
+ * correct, and the pod quietly loses most of the speed the WebCodecs path was
+ * added to gain. Seeing "software" in the log is the difference between
+ * "encoding is slow" and hours of guessing.
+ *
+ * `isConfigSupported` is trusted here, unlike in the page: this only asks what
+ * Chrome CLAIMS about acceleration, and the page's trial-configure is what
+ * decides whether a take actually uses it.
+ */
+async function probeVideoEncoder(browser) {
+  const page = await browser.newPage();
+  try {
+    return await page.evaluate(async () => {
+      if (typeof VideoEncoder !== "function") return "no WebCodecs";
+      // High profile level 5.2 at 2K60 — what a studio take actually asks for.
+      // Probing a smaller frame would pass on hardware that cannot do 2K.
+      const config = {
+        codec: "avc1.640034",
+        width: 2560,
+        height: 1440,
+        bitrate: 20_000_000,
+        framerate: 60,
+        avc: { format: "avc" },
+      };
+      try {
+        const hw = await VideoEncoder.isConfigSupported({
+          ...config,
+          hardwareAcceleration: "prefer-hardware",
+        });
+        if (hw.supported) return "hardware";
+        const sw = await VideoEncoder.isConfigSupported(config);
+        return sw.supported ? "software" : "unsupported";
+      } catch (error) {
+        return `probe threw: ${String(error)}`;
+      }
+    });
+  } catch (error) {
+    return `probe failed: ${error.message}`;
   } finally {
     await page.close().catch(() => undefined);
   }
@@ -284,6 +369,21 @@ async function launchBrowser() {
     log("WARNING: software rendering — paying GPU rates for CPU speed");
     await logGpuDiagnostics(result.browser);
   }
+
+  // Only where a video can actually land: an image-only pod never encodes, so
+  // the probe would just add a page load to every cold start.
+  if (JOB_KIND !== "image" && VIDEO_ENCODER !== "ffmpeg") {
+    const encoder = await probeVideoEncoder(result.browser);
+    log(`H.264 encode: ${encoder}`);
+    if (encoder === "software") {
+      log(
+        "WARNING: no hardware H.264 encoder — WebCodecs will encode on the CPU. " +
+        "Still faster than PNG + ffmpeg, but check that the host passed a card " +
+        "with NVENC and that NVIDIA_DRIVER_CAPABILITIES includes 'video'."
+      );
+    }
+  }
+
   return result.browser;
 }
 
@@ -312,7 +412,7 @@ async function logGpuDiagnostics(browser) {
         const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
         // The "Graphics Feature Status" block plus any "Problems Detected".
         const wanted = lines.filter((l) =>
-          /^(WebGL|WebGL2|OpenGL|Vulkan|Canvas|Rasterization|Video Decode)[:.]/i.test(l) ||
+          /^(WebGL|WebGL2|OpenGL|Vulkan|Canvas|Rasterization|Video Decode|Video Encode)[:.]/i.test(l) ||
           /disabled|blocklisted|software only|unavailable/i.test(l)
         );
         return wanted.slice(0, 25).join(" | ");
@@ -518,7 +618,10 @@ async function runJob(browser, jobId) {
     `&token=${encodeURIComponent(WORKER_SECRET)}` +
     `&provider=${encodeURIComponent(PROVIDER)}` +
     `&worker=${encodeURIComponent(WORKER_ID)}` +
-    (JOB_KIND ? `&kind=${encodeURIComponent(JOB_KIND)}` : "");
+    (JOB_KIND ? `&kind=${encodeURIComponent(JOB_KIND)}` : "") +
+    // Omitted when "auto" so an older app deploy — which knows no ?encoder —
+    // sees exactly the URL it saw before.
+    (VIDEO_ENCODER !== "auto" ? `&encoder=${encodeURIComponent(VIDEO_ENCODER)}` : "");
 
   try {
     log(`opening job ${jobId ?? "(queue)"}`);

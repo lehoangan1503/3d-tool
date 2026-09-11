@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Search, Loader2, Layers, User, Download, Pencil, Trash2, Plus, FolderOpen } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -75,9 +75,11 @@ export function ReferencesGrid({ tabs, canDelete }: ReferencesGridProps) {
     }
   }, []);
 
+  // Groups load on mount, not just on the groups tab: the singles tab needs the
+  // grouped-id set to hide references that already live in a group.
   useEffect(() => {
-    if (view === "groups") loadGroups();
-  }, [view, loadGroups]);
+    loadGroups();
+  }, [loadGroups]);
 
   async function handleDeleteGroup(group: ExtractorReferenceGroup) {
     if (
@@ -185,6 +187,29 @@ export function ReferencesGrid({ tabs, canDelete }: ReferencesGridProps) {
     if (!isFetchingMore) loadMore();
   }, [isLoadingAll, hasMore, isFetchingMore, loadMore]);
 
+  // Every reference id that already belongs to at least one group. The singles
+  // tab hides these so the two tabs never overlap — this is display-only, the
+  // references themselves are untouched.
+  const groupedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const g of groups) for (const id of g.referenceIds) ids.add(id);
+    return ids;
+  }, [groups]);
+
+  const singles = useMemo(
+    () => references.filter((r) => !groupedIds.has(r.id)),
+    [references, groupedIds]
+  );
+
+  // A page of 40 can be almost entirely grouped, leaving the singles grid too
+  // short for the sentinel to ever scroll into view. Keep pulling pages until
+  // there is enough ungrouped content to fill the first screen.
+  useEffect(() => {
+    if (view !== "singles") return;
+    if (!hasMore || isLoading || isFetchingMore) return;
+    if (singles.length < 12) loadMore();
+  }, [view, hasMore, isLoading, isFetchingMore, singles.length, loadMore]);
+
   const openReference = (reference: ExtractorReference, product: Product) => {
     // Open in a new tab so the dashboard list stays put behind it.
     window.open(
@@ -228,13 +253,13 @@ export function ReferencesGrid({ tabs, canDelete }: ReferencesGridProps) {
             ? groups.length > 0 && <span className="ml-1">({groups.length} nhóm)</span>
             : total > 0 && (
                 <span className="ml-1">
-                  ({hasMore ? `${references.length}/${total}` : total})
+                  ({hasMore ? `${singles.length}/${total}` : singles.length})
                 </span>
               )}
         </p>
 
-        {/* Nhóm vs từng tham chiếu — the same layout can belong to several
-            groups, so the singles tab stays a full list rather than a leftover. */}
+        {/* Nhóm vs tham chiếu lẻ — the two tabs are disjoint: anything already in
+            a group is hidden here, so "lẻ" really means ungrouped. */}
         <div className="inline-flex items-center gap-1 mt-3 rounded-lg bg-muted/50 p-1">
           <button
             type="button"
@@ -406,16 +431,18 @@ export function ReferencesGrid({ tabs, canDelete }: ReferencesGridProps) {
           <div className="flex items-center justify-center py-20 text-muted-foreground">
             <Loader2 className="h-5 w-5 animate-spin" />
           </div>
-        ) : references.length === 0 ? (
+        ) : singles.length === 0 && !hasMore ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <Layers className="h-10 w-10 text-muted-foreground/40 mb-3" />
             <p className="text-muted-foreground">
-              {search ? "Không tìm thấy tham chiếu nào." : "Chưa có tham chiếu nào."}
+              {search
+                ? "Không tìm thấy tham chiếu lẻ nào."
+                : "Mọi tham chiếu đều đã thuộc một nhóm."}
             </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {references.map((r) => (
+            {singles.map((r) => (
               <div
                 key={r.id}
                 className="group rounded-xl border bg-card overflow-hidden flex flex-col"

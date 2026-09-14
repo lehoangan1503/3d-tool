@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   X,
   Sparkles,
@@ -183,6 +183,7 @@ function SortableImageTile({
   url,
   position,
   expanded,
+  editUrl,
   onReplace,
   onRemove,
 }: {
@@ -191,6 +192,9 @@ function SortableImageTile({
   url: string;
   position: number | null;
   expanded: boolean;
+  /** Deep link to the extractor layout that produced this image, or null when
+   *  the image is a user upload / a saved image whose layout can't be resolved. */
+  editUrl: string | null;
   onReplace: () => void;
   onRemove: () => void;
 }) {
@@ -204,8 +208,23 @@ function SortableImageTile({
     >
       {position !== null && <OrderBadge position={position} />}
       <img src={url} alt={refName} className="w-full h-full object-cover pointer-events-none" />
-      <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
-        <p className="text-[10px] text-white/70 truncate">{refName}</p>
+      {/* Name strip — doubles as the link to the layout that rendered this image
+          so a bad frame can be fixed without hunting for it in Tham Chiếu 2D. */}
+      <div className="absolute bottom-0 left-0 right-0 z-10 bg-black/60 px-1 py-0.5">
+        {editUrl ? (
+          <a
+            href={editUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Mở template "${refName}" để chỉnh`}
+            className="flex items-center gap-1 text-[10px] text-blue-300 hover:text-blue-200 hover:underline"
+          >
+            <span className="truncate">{refName}</span>
+            <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+          </a>
+        ) : (
+          <p className="text-[10px] text-white/70 truncate">{refName}</p>
+        )}
       </div>
       {/* Drag handle */}
       <button
@@ -217,8 +236,20 @@ function SortableImageTile({
       >
         <GripVertical className="h-3 w-3" />
       </button>
-      {/* Hover actions */}
-      <div className="absolute inset-x-0 bottom-0 top-7 flex items-center justify-center gap-1.5 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity">
+      {/* Hover actions. Stops above the name strip (bottom-5) so the layout link
+          in it stays clickable. */}
+      <div className="absolute inset-x-0 bottom-5 top-7 flex items-center justify-center gap-1.5 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity">
+        {editUrl && (
+          <a
+            href={editUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Mở template "${refName}" để chỉnh`}
+            className="flex h-7 w-7 items-center justify-center rounded-md bg-blue-500/70 text-white hover:bg-blue-500"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        )}
         <button
           type="button"
           onClick={onReplace}
@@ -736,6 +767,33 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
       .then((results) => setGroupRefs(results.filter(Boolean) as ExtractorReference[]))
       .finally(() => setLoadingRefs(false));
   }, [selectedGroupId, groups]);
+
+  // ── Layout ("template") deep links per image ──────────────────────────────
+  // Each gallery image is rendered from one extractor layout. Linking the tile
+  // back to that layout lets a bad frame be fixed in place instead of hunting
+  // for it in Tham Chiếu 2D.
+  //
+  // A freshly rendered image carries the layout's real id in `refId`. Images
+  // restored from a saved deploy carry a synthetic `saved-N` id instead, so they
+  // are resolved by NAME against the group's layouts (the saved deploy's group
+  // is restored above, so the map is populated for them too). User uploads match
+  // neither and get no link.
+  const refIdByName = useMemo(() => {
+    const map = new Map<string, string>();
+    groupRefs.forEach((ref) => map.set(ref.name, ref.id));
+    return map;
+  }, [groupRefs]);
+
+  const refIds = useMemo(() => new Set(groupRefs.map((ref) => ref.id)), [groupRefs]);
+
+  const layoutEditUrl = useCallback(
+    (image: RenderedImage): string | null => {
+      const refId = refIds.has(image.refId) ? image.refId : refIdByName.get(image.refName);
+      if (!refId) return null;
+      return `/dashboard/products/${product.id}?tool=extractor&ref=${refId}`;
+    },
+    [refIds, refIdByName, product.id],
+  );
 
   // Cleanup rendered image/video object URLs on unmount
   useEffect(() => {
@@ -1678,6 +1736,7 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
                           url={ri.url}
                           position={imagePosition(idx)}
                           expanded={imageGridExpanded}
+                          editUrl={layoutEditUrl(ri)}
                           onReplace={() => startReplaceImage(ri.refId)}
                           onRemove={() => removeImage(ri.refId)}
                         />
@@ -1747,6 +1806,7 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
                                 url={ri.url}
                                 position={imagePosition(idx)}
                                 expanded={imageGridExpanded}
+                                editUrl={layoutEditUrl(ri)}
                                 onReplace={() => startReplaceImage(ri.refId)}
                                 onRemove={() => removeImage(ri.refId)}
                               />
@@ -1784,7 +1844,16 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
                               <span className="text-[10px] text-white/40">Chưa render</span>
                             </div>
                             <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
-                              <p className="text-[10px] text-white/60 truncate">{ref.name}</p>
+                              <a
+                                href={`/dashboard/products/${product.id}?tool=extractor&ref=${ref.id}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={`Mở template "${ref.name}" để chỉnh`}
+                                className="flex items-center gap-1 text-[10px] text-blue-300 hover:text-blue-200 hover:underline"
+                              >
+                                <span className="truncate">{ref.name}</span>
+                                <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+                              </a>
                             </div>
                           </div>
                         ))}
@@ -1822,6 +1891,7 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
                           url={ri.url}
                           position={imagePosition(idx)}
                           expanded={imageGridExpanded}
+                          editUrl={layoutEditUrl(ri)}
                           onReplace={() => startReplaceImage(ri.refId)}
                           onRemove={() => removeImage(ri.refId)}
                         />

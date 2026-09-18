@@ -34,6 +34,17 @@
       "displacementScale": 0
     },
     {
+      "id": "dark_leather",
+      "name": "Dark Leather",
+      "folder": "wall/dark_leather",
+      "maps": ["diff"],
+      "fileExt": "jpg",
+      "tiling": [1, 1],
+      "roughnessValue": 0.6,
+      "metalnessValue": 0,
+      "displacementScale": 0
+    },
+    {
       "id": "plastered_wall_05",
       "name": "Plastered Wall",
       "folder": "wall/plastered_wall_05",

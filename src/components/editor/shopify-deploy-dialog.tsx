@@ -492,6 +492,13 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
   const [connected, setConnected] = useState(isConnected);
   const isUpdateMode = connected;
 
+  // True once the mockup group is known for the current store — either read
+  // from the deployment/draft, or inferred from the saved image names further
+  // below. Stops the inference from re-running and from overriding a user pick.
+  const inferredGroupRef = useRef(false);
+  /** Store the guard above refers to, so switching stores re-runs inference. */
+  const guardStoreRef = useRef<string | null>(null);
+
   // When the selected store changes, load THIS product's deployment on that store
   // (or null → shows as not deployed for this store).
   useEffect(() => {
@@ -509,8 +516,24 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
         // setup instead of the previously-viewed store's.
         const storeTemplateId = dep?.deploy_template_id ?? dep?.form_data?.deployTemplateId ?? null;
         if (storeTemplateId) setDeployTemplateId(storeTemplateId);
-        if (dep?.image_group_id) setSelectedGroupId(dep.image_group_id);
-        if (dep?.video_template_id) setSelectedTemplateId(dep.video_template_id);
+        // Per-store value first, shared draft second (a store never deployed to
+        // has no row of its own). When neither knows the set, the selection is
+        // cleared and the name-matching effect below infers it from the saved
+        // image names — so the guard is released for this store.
+        const knownGroup = dep?.image_group_id ?? dep?.form_data?.imageGroupId ?? "";
+        // A store with no recorded group leaves the picker to the name-matching
+        // effect below. Clearing the selection here would race that effect (the
+        // deployment fetch can land after it), so an empty answer only releases
+        // the guard — it never wipes a group already resolved for this store.
+        if (knownGroup) {
+          setSelectedGroupId(knownGroup);
+          inferredGroupRef.current = true;
+        } else if (inferredGroupRef.current !== true || guardStoreRef.current !== storeId) {
+          setSelectedGroupId("");
+          inferredGroupRef.current = false;
+        }
+        guardStoreRef.current = storeId;
+        setSelectedTemplateId(dep?.video_template_id ?? dep?.form_data?.videoTemplateId ?? "");
       })
       .catch(() => {});
     return () => { active = false; };
@@ -539,8 +562,14 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
   const [priceEditorOpen, setPriceEditorOpen] = useState(false);
 
   // ── Selection ──
-  const [selectedGroupId, setSelectedGroupId] = useState("");
-  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  // Seeded from the deployment the dialog opened with so the pickers show the
+  // set the saved images came from before the per-store refetch lands.
+  const [selectedGroupId, setSelectedGroupId] = useState(
+    () => initialDeployment?.image_group_id ?? initialDeployment?.form_data?.imageGroupId ?? "",
+  );
+  const [selectedTemplateId, setSelectedTemplateId] = useState(
+    () => initialDeployment?.video_template_id ?? initialDeployment?.form_data?.videoTemplateId ?? "",
+  );
   const [groupRefs, setGroupRefs] = useState<ExtractorReference[]>([]);
   const [loadingRefs, setLoadingRefs] = useState(false);
 
@@ -740,6 +769,80 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
       .finally(() => setLoadingGroups(false));
   }, []);
 
+  // ── Infer the mockup group from the saved image names ────────────────────
+  // Neither the per-store deployment row nor the shared draft knows the group
+  // for products deployed before those fields were recorded, so the picker
+  // would sit on its placeholder next to a full gallery of saved images.
+  //
+  // The layout names ARE the link: a saved image keeps the name of the layout
+  // that produced it, so the group whose layouts cover the most saved names is
+  // the one the images came from. Runs only while nothing else has resolved a
+  // group, and never overrides a user's own pick.
+  useEffect(() => {
+    if (inferredGroupRef.current) return;
+    if (selectedGroupId || loadingGroups || groups.length === 0) return;
+    const savedNames = renderedImages
+      .filter((ri) => ri.saved)
+      .map((ri) => ri.refName.trim().toLowerCase())
+      .filter(Boolean);
+    if (savedNames.length === 0) return;
+    inferredGroupRef.current = true;
+
+    let cancelled = false;
+    // One summary request per batch of ids across ALL groups (deduped), not one
+    // per group — the endpoint caps a request at 200 ids.
+    const allIds = Array.from(new Set(groups.flatMap((g) => g.referenceIds ?? [])));
+    const batches: string[][] = [];
+    for (let i = 0; i < allIds.length; i += 60) batches.push(allIds.slice(i, i + 60));
+
+    Promise.all(
+      batches.map((batch) =>
+        fetch(`/api/extractor-references/summary?ids=${batch.join(",")}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => (data?.items ?? []) as { id: string; name: string }[])
+          .catch(() => [] as { id: string; name: string }[]),
+      ),
+    ).then((results) => {
+      if (cancelled) return;
+      const nameById = new Map<string, string>();
+      results.flat().forEach((ref) => nameById.set(ref.id, ref.name.trim().toLowerCase()));
+
+      const wanted = new Set(savedNames);
+      interface GroupMatch {
+        id: string;
+        /** Saved image names this group's layouts cover. */
+        hits: number;
+        /** How many layouts the group has, used only to break ties. */
+        size: number;
+      }
+      const scored: GroupMatch[] = groups
+        .map((g) => {
+          const names = (g.referenceIds ?? [])
+            .map((id) => nameById.get(id))
+            .filter((n): n is string => Boolean(n));
+          return { id: g.id, hits: names.filter((n) => wanted.has(n)).length, size: names.length };
+        })
+        .filter((m) => m.hits > 0);
+
+      // Most names covered wins; ties break toward the SMALLER group, since a
+      // big catch-all group that happens to contain every name is a worse
+      // answer than the tight group the images were actually rendered from.
+      const best = scored.reduce<GroupMatch | null>(
+        (acc, m) => (!acc || m.hits > acc.hits || (m.hits === acc.hits && m.size < acc.size) ? m : acc),
+        null,
+      );
+
+      // Require most of the saved gallery to match, so an unrelated group that
+      // shares one common layout name isn't picked.
+      if (best && best.hits >= Math.ceil(wanted.size * 0.6)) {
+        setSelectedGroupId(best.id);
+        inferredGroupRef.current = true;
+      }
+    });
+
+    return () => { cancelled = true; };
+  }, [groups, loadingGroups, selectedGroupId, renderedImages]);
+
   // ── Load templates ──
   useEffect(() => {
     fetch("/api/video-studio-templates?limit=100")
@@ -786,13 +889,18 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
 
   const refIds = useMemo(() => new Set(groupRefs.map((ref) => ref.id)), [groupRefs]);
 
+  //
+  // Once the product is live on Shopify the tiles show what was actually
+  // deployed, so the layout links are hidden — editing a layout from here would
+  // suggest the live gallery follows along, which it doesn't.
   const layoutEditUrl = useCallback(
     (image: RenderedImage): string | null => {
+      if (connected) return null;
       const refId = refIds.has(image.refId) ? image.refId : refIdByName.get(image.refName);
       if (!refId) return null;
       return `/dashboard/products/${product.id}?tool=extractor&ref=${refId}`;
     },
-    [refIds, refIdByName, product.id],
+    [connected, refIds, refIdByName, product.id],
   );
 
   // Cleanup rendered image/video object URLs on unmount
@@ -1844,16 +1952,20 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
                               <span className="text-[10px] text-white/40">Chưa render</span>
                             </div>
                             <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
-                              <a
-                                href={`/dashboard/products/${product.id}?tool=extractor&ref=${ref.id}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                title={`Mở template "${ref.name}" để chỉnh`}
-                                className="flex items-center gap-1 text-[10px] text-blue-300 hover:text-blue-200 hover:underline"
-                              >
-                                <span className="truncate">{ref.name}</span>
-                                <ExternalLink className="h-2.5 w-2.5 shrink-0" />
-                              </a>
+                              {connected ? (
+                                <p className="text-[10px] text-white/70 truncate">{ref.name}</p>
+                              ) : (
+                                <a
+                                  href={`/dashboard/products/${product.id}?tool=extractor&ref=${ref.id}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title={`Mở template "${ref.name}" để chỉnh`}
+                                  className="flex items-center gap-1 text-[10px] text-blue-300 hover:text-blue-200 hover:underline"
+                                >
+                                  <span className="truncate">{ref.name}</span>
+                                  <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+                                </a>
+                              )}
                             </div>
                           </div>
                         ))}

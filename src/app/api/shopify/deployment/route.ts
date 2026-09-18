@@ -62,8 +62,14 @@ export async function GET(request: Request) {
   // stores would otherwise reopen on whichever was saved last.
   const deployTemplateId =
     (dep?.deploy_template_id as string | null | undefined) ?? formData?.deployTemplateId ?? null;
-  const imageGroupId = (dep?.image_group_id as string | null | undefined) ?? null;
-  const videoTemplateId = (dep?.video_template_id as string | null | undefined) ?? null;
+  // The mockup group / video template fall back to the shared draft when this
+  // store has no row (or an older row predating these columns). Without the
+  // fallback, switching to a store that was never deployed to resets both
+  // pickers to their placeholder even though the saved images came from a group.
+  const imageGroupId =
+    (dep?.image_group_id as string | null | undefined) ?? formData?.imageGroupId ?? null;
+  const videoTemplateId =
+    (dep?.video_template_id as string | null | undefined) ?? formData?.videoTemplateId ?? null;
 
   // No live deployment on this store: still return the shared draft so the editor
   // can edit/deploy. shopify_product_id stays null → shows as "not deployed here".

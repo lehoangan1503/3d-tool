@@ -75,6 +75,8 @@ export function buildFormData(body: ShopifyDeployRequest): ShopifyFormData {
     shaftConfig = null,
     previewPose = null,
     deployTemplateId = null,
+    imageGroupId = null,
+    videoTemplateId = null,
   } = body;
 
   const collectionList = (collections ?? "")
@@ -124,5 +126,12 @@ export function buildFormData(body: ShopifyDeployRequest): ShopifyFormData {
     // Remembered so reopening the dialog lands on the brand this product was
     // last deployed/saved with, instead of silently repricing it.
     deployTemplateId: deployTemplateId?.trim() || null,
+    // Mockup group / video template of the last save. The per-store deployment
+    // row keeps its own copy (that's what a re-deploy on that store restores),
+    // but a store that was never deployed to has no row — so the shared draft
+    // carries these as the fallback, keeping the pickers on the set the saved
+    // images actually came from instead of resetting to "-- Chọn nhóm ảnh --".
+    imageGroupId: imageGroupId?.trim() || null,
+    videoTemplateId: videoTemplateId?.trim() || null,
   };
 }

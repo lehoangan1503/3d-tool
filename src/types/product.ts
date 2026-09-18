@@ -261,6 +261,11 @@ export interface ShopifyFormData {
   // Which price template this product was last priced with. null = the built-in
   // default price table. See src/types/deploy-template.ts.
   deployTemplateId?: string | null;
+  // Mockup image group / video template behind the saved images. Store-agnostic
+  // fallback for the per-store shopify_deployments columns of the same name, so
+  // a store with no deployment row still reopens on the right set.
+  imageGroupId?: string | null;
+  videoTemplateId?: string | null;
 }
 
 // Full Shopify deployment record (shopify_deployments table).

@@ -19,9 +19,19 @@
  *  4. Unrecognised names keep their relative order and go last (user uploads).
  */
 
-/** Strip a file extension from an image name → its stem ("Mockup-Web-1.png" → "Mockup-Web-1"). */
+
+/**
+ * Strip a FILE EXTENSION from an image name → its stem.
+ *
+ * Restricted to known image extensions rather than "anything after the last
+ * dot", because a dot is also legal inside a slot number: the Novera group
+ * names a second shot of slot 1 `Mockup-Web-Novera1.1`, and a generic
+ * `\.[^.]+$` turned that into `Mockup-Web-Novera1` — silently collapsing two
+ * distinct layouts onto one slot, so one of them vanished from the gallery.
+ * The same bug truncated `Details-1.1` to the `details_1` metafield key.
+ */
 export function imageStem(name: string): string {
-  return name.replace(/\.[^.]+$/, "");
+  return name.replace(/\.(png|jpe?g|webp|gif|avif|tiff?|bmp)$/i, "");
 }
 
 /** Slots that show exactly one version image instead of one per version. */
@@ -41,11 +51,37 @@ export interface ParsedImageName {
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 
+/**
+ * The gallery-image name pattern.
+ *
+ * `Mockup-Web-` then an OPTIONAL word, then the slot number. The optional word
+ * is what lets a per-brand naming scheme through: the "Novera chính thức" group
+ * names its layouts `Mockup-Web-Novera4`, and under the original
+ * `^Mockup-Web-(\d+)` those classified as nothing at all — dropped silently on
+ * the name-sorted deploy path, so the products they built went live with empty
+ * Details/Package metafields and nobody was told. 22 live products came from
+ * that one group.
+ *
+ * The number may be decimal (`Mockup-Web-Novera1.1`): the group uses `1.1` for
+ * a second shot of slot 1, and `Number()` sorts it between 1 and 2, which is
+ * where it belongs.
+ *
+ * What it still refuses, deliberately: `Mockup-Web-3D` (a preview pose, not a
+ * gallery image — the word is not followed by a number), `Mockup-Ads`,
+ * `Mockup-Etsy-4`. Widening this to "anything after the prefix" would sweep
+ * those in.
+ *
+ * NOT applied to Details/Package: those names become metafield KEYS, and a
+ * label or a decimal there would produce `custom.details_novera1` or
+ * `custom.details_1.1` — keys the theme does not read. Those stay strict.
+ */
+export const MOCKUP_WEB_PATTERN = /^Mockup-Web-(?:[A-Za-z]+)?(\d+(?:\.\d+)?)(?:-(.+))?$/i;
+
 /** Classify one image name without needing the whole set. */
 export function parseImageName(name: string): ParsedImageName {
   const stem = imageStem(name);
 
-  const mockup = stem.match(/^Mockup-Web-(\d+)(?:-(.+))?$/i);
+  const mockup = stem.match(MOCKUP_WEB_PATTERN);
   if (mockup) {
     return {
       kind: "mockup",

@@ -4,6 +4,7 @@
  */
 
 import { DEFAULT_PRICING, priceVariants } from "./pricing";
+import { MOCKUP_WEB_PATTERN } from "./image-order";
 import { activeStore } from "./store-context";
 import type { SpecMetafieldMap } from "./stores";
 import type { ResolvedPricing } from "@/types/deploy-template";
@@ -66,9 +67,18 @@ function slugify(text: string): string {
     .replace(/-+/g, "-");
 }
 
-/** Strip a file extension from an image name → its stem (e.g. "Mockup-Web-1.png" → "Mockup-Web-1"). */
+/**
+ * Strip a FILE EXTENSION from an image name → its stem.
+ *
+ * Restricted to known image extensions rather than "anything after the last
+ * dot", because a dot is also legal inside a slot number: the Novera group
+ * names a second shot of slot 1 `Mockup-Web-Novera1.1`, and a generic
+ * `\.[^.]+$` turned that into `Mockup-Web-Novera1` — silently collapsing two
+ * distinct layouts onto one slot, so one of them vanished from the gallery.
+ * The same bug truncated `Details-1.1` to the `details_1` metafield key.
+ */
 function imageStem(name: string): string {
-  return name.replace(/\.[^.]+$/, "");
+  return name.replace(/\.(png|jpe?g|webp|gif|avif|tiff?|bmp)$/i, "");
 }
 
 interface Cue3dMetafieldConfig {
@@ -191,6 +201,7 @@ export interface ClassifiedImages {
  *
  * - Details-N[-Version]   → metafield custom.details_N[_version]
  * - Mockup-Web-N          → gallery image (base, always)
+ * - Mockup-Web-<Label>N   → same, for per-brand names like Mockup-Web-Novera4
  * - Mockup-Web-N-Version  → gallery image selected by available versions
  *                           (N=2,5 pick one by Pro>Premium>Standard)
  * - Package-1-Standard    → metafield custom.package_product_standard
@@ -288,8 +299,8 @@ export function classifyImages(images: NamedImage[], versions: string[]): Classi
       continue;
     }
 
-    // Mockup-Web-N or Mockup-Web-N-Version
-    m = stem.match(/^Mockup-Web-(\d+)(?:-(.+))?$/i);
+    // Mockup-Web-N, Mockup-Web-N-Version, or Mockup-Web-<Label>N
+    m = stem.match(MOCKUP_WEB_PATTERN);
     if (m) {
       const num = m[1];
       const verSuffix = m[2];

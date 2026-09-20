@@ -180,6 +180,99 @@ export async function setProductMetafield(productId: number, metafield: Metafiel
   });
 }
 
+/**
+ * Every metafield on a product, with file references resolved.
+ *
+ * The audit endpoints need the opposite of `setProductMetafield`: not "is this
+ * one key set?" but "what is set at all?" — a product missing `custom.details_3`
+ * has no row to ask about, so a key-by-key read would need the answer before it
+ * could pose the question. Hence a bulk list.
+ *
+ * `file_reference` values are GIDs, and a GID alone does not prove the image
+ * still exists: deleting a file in Shopify's Files admin leaves the metafield
+ * pointing at nothing, which is exactly the "ảnh biến mất" case this is here to
+ * catch. So each file reference is resolved to its URL in the same round trip,
+ * and a reference that resolves to nothing is reported with `url: null` —
+ * present as a row, broken as an image.
+ *
+ * GraphQL rather than REST because REST's metafields.json returns the raw GID
+ * with no way to follow it, which would need one extra call per image.
+ */
+export interface ProductMetafieldRecord {
+  namespace: string;
+  key: string;
+  /** `custom.details_1` — the form the audit and the docs both speak. */
+  qualifiedKey: string;
+  type: string;
+  value: string;
+  /** Resolved image/file URL for a file_reference, null when it is broken or not a file. */
+  url: string | null;
+}
+
+export async function getProductMetafields(productId: number): Promise<ProductMetafieldRecord[]> {
+  const records: ProductMetafieldRecord[] = [];
+  let cursor: string | null = null;
+
+  // Paginated: a cue carries ~15 metafields today, but a page cap that silently
+  // truncates would report a present metafield as missing — the one error this
+  // whole feature must not make.
+  for (let page = 0; page < 10; page++) {
+    const data: {
+      product: {
+        metafields: {
+          nodes: Array<{
+            namespace: string;
+            key: string;
+            type: string;
+            value: string;
+            reference: { __typename?: string; image?: { url: string } | null; url?: string } | null;
+          }>;
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        };
+      } | null;
+    } = await shopifyGraphQL(
+      `query($id: ID!, $after: String) {
+        product(id: $id) {
+          metafields(first: 100, after: $after) {
+            nodes {
+              namespace
+              key
+              type
+              value
+              reference {
+                __typename
+                ... on MediaImage { image { url } }
+                ... on GenericFile { url }
+              }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }`,
+      { id: `gid://shopify/Product/${productId}`, after: cursor }
+    );
+
+    const metafields = data.product?.metafields;
+    if (!metafields) break;
+
+    for (const node of metafields.nodes) {
+      records.push({
+        namespace: node.namespace,
+        key: node.key,
+        qualifiedKey: `${node.namespace}.${node.key}`,
+        type: node.type,
+        value: node.value,
+        url: node.reference?.image?.url ?? node.reference?.url ?? null,
+      });
+    }
+
+    if (!metafields.pageInfo.hasNextPage) break;
+    cursor = metafields.pageInfo.endCursor;
+  }
+
+  return records;
+}
+
 export async function setVariantMetafield(variantId: number, metafield: MetafieldInput): Promise<void> {
   await shopifyRequest("POST", `/variants/${variantId}/metafields.json`, {
     metafield: { ...metafield, value: normalizeGid(metafield.value) },

@@ -170,3 +170,165 @@ export interface ApiRenderFile {
   height: number;
   bytes: number;
 }
+
+// ── Shopify media audit / repair ──────────────────────────────────────────────
+
+/**
+ * POST /api/v1/shopify/media-audit — body.
+ *
+ * Every field is optional, and that shapes the two ways it gets called: with a
+ * `product` it answers "what is this one missing?", with nothing at all it
+ * sweeps the store. An agent handed a screenshot and "sản phẩm này thiếu ảnh"
+ * sends the first; an agent asked to review the catalogue sends the second.
+ */
+export interface ApiMediaAuditRequest {
+  /**
+   * One product. Omit to sweep the store.
+   *
+   * Accepts any identifier a person can actually copy: the internal name
+   * (`n05-26-Skull`), the product id, the Shopify TITLE as shown on the
+   * storefront, the handle, the numeric `shopify_product_id`, or a pasted
+   * product URL. Matching ignores case and accents. A value that matches more
+   * than one product is refused with the candidates listed — never guessed.
+   */
+  product?: string;
+  /** Extra products audited alongside `product`. */
+  products?: string[];
+  /** Store id (`main`, `store2`…). Defaults to the default store. */
+  store?: string;
+  /** Restrict a sweep to one mockup group, by id. */
+  image_group?: string;
+  /** Sweep size. Defaults to 50, capped at 1000. */
+  limit?: number;
+  /**
+   * `false` returns every audited product, including the complete ones.
+   * Default (`true`) returns only products with findings — the shape an agent
+   * wants, since a clean product needs no action.
+   */
+  only_issues?: boolean;
+}
+
+/** One missing (or broken) media slot. */
+export interface ApiMissingMedia {
+  /** `custom.package_box`, or `Mockup-Web-4` for a gallery slot. */
+  key: string;
+  kind: "metafield" | "gallery";
+  /** `absent` = nothing set. `broken` = set, but the file it points at is gone. */
+  reason: "absent" | "broken";
+  /** The render reference that produces this slot — feed straight to POST /api/v1/renders. */
+  reference_name: string | null;
+  /**
+   * How the expectation was established. See media-audit.ts.
+   *
+   * `version-rule` is the one to act on without asking: it means the storefront
+   * cannot render this slot for the versions the product sells today — e.g. a
+   * Premium cue carrying only `package_product_pro`, where the before/after
+   * block emits `src=""` and the showcase half comes out blank.
+   */
+  source: "version-rule" | "deploy" | "group" | "cohort";
+  /** 1 for version-rule/deploy/group; the peer ratio for cohort findings. */
+  confidence: number;
+}
+
+export interface ApiMediaAuditResult {
+  product_id: string;
+  product_name: string | null;
+  shopify_product_id: number;
+  title: string | null;
+  admin_url: string | null;
+  store: string;
+  image_group_id: string | null;
+  image_group_name: string | null;
+  versions: string[];
+  /** How many media slots this product was expected to have. */
+  expected_count: number;
+  missing: ApiMissingMedia[];
+}
+
+export interface ApiMediaAuditResponse {
+  store: string;
+  audited: number;
+  products_with_issues: number;
+  results: ApiMediaAuditResult[];
+  note?: string;
+  usage?: {
+    next_steps: string[];
+    note: string;
+  };
+}
+
+/** One image to write back onto a live product. */
+export interface ApiMediaRepairItem {
+  /** Target metafield, e.g. `custom.package_box`. */
+  key: string;
+  /** Public http(s) URL Shopify can fetch — typically a render output. */
+  url: string;
+}
+
+export interface ApiMediaRepairRequest {
+  /**
+   * Product name, id, Shopify title, handle, shopify_product_id, or a pasted
+   * product URL — same matching as media-audit. Ambiguous input is refused.
+   */
+  product?: string;
+  store?: string;
+  media?: ApiMediaRepairItem[];
+  /**
+   * Replace a slot that already has a working image. Off by default: repair
+   * fills gaps, and a live product's good image is not ours to overwrite
+   * without being told.
+   */
+  overwrite?: boolean;
+}
+
+export interface ApiMediaRepairResult {
+  key: string;
+  /**
+   * `filled`   — the slot was empty and now has the image.
+   * `replaced` — the slot pointed at a dead file, or overwrite was requested.
+   * `skipped`  — already had a working image; nothing written.
+   * `failed`   — see `detail`.
+   */
+  status: "filled" | "replaced" | "skipped" | "failed";
+  detail?: string | null;
+  file_gid?: string;
+  reference_name?: string | null;
+}
+
+export interface ApiMediaRepairResponse {
+  product_id: string;
+  shopify_product_id: number;
+  store: string;
+  admin_url: string | null;
+  filled: number;
+  replaced: number;
+  skipped: number;
+  failed: number;
+  results: ApiMediaRepairResult[];
+  note: string;
+}
+
+/** GET /api/v1/shopify/products — one deployed product in the listing. */
+export interface ApiDeployedProduct {
+  product_id: string;
+  product_name: string | null;
+  shopify_product_id: number;
+  title: string | null;
+  /** Shopify handle — the last path segment of the storefront URL. */
+  handle: string | null;
+  store: string;
+  admin_url: string | null;
+  storefront_url: string | null;
+  image_group_id: string | null;
+  image_group_name: string | null;
+  deployed_at: string | null;
+}
+
+export interface ApiDeployedProductsResponse {
+  store: string;
+  count: number;
+  products: ApiDeployedProduct[];
+  usage: {
+    note: string;
+  };
+}

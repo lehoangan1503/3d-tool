@@ -3,15 +3,15 @@
  *
  * Written for the API-token settings page, where the question being answered is
  * "what can I call, and with what?" — so the grouping is by AUTHENTICATION, not
- * by feature. That distinction is the whole point of the list: of ~49 routes,
- * exactly one accepts an API token. The rest need a browser session or the GPU
- * worker's shared secret, and pasting one of those into an external tool
- * produces a 401 that looks like a broken token.
+ * by feature. That distinction is the whole point of the list: of ~52 routes,
+ * only the /api/v1 handful accept an API token. The rest need a browser session
+ * or the GPU worker's shared secret, and pasting one of those into an external
+ * tool produces a 401 that looks like a broken token.
  *
  * Kept as data rather than prose so the page can render copyable request
  * samples from it. Hand-maintained: it is documentation, and a generated list
  * would lose the "what is this for" column that makes it worth reading.
- * Verified against `src/app/api/**\/route.ts` on 2026-09-07.
+ * Verified against `src/app/api/**\/route.ts` on 2026-09-20.
  */
 
 /** How a caller proves who they are. */
@@ -86,6 +86,29 @@ export const API_GROUPS: readonly ApiGroup[] = [
         methods: ["GET"],
         path: "/api/v1/renders/[jobId]",
         summary: "Hỏi tiến độ + lấy link file khi render xong",
+      },
+      {
+        methods: ["GET"],
+        path: "/api/v1/shopify/products",
+        summary:
+          "Danh sách sản phẩm ĐANG LIVE trên store + nhóm ảnh đã render ra nó. " +
+          "?q= tìm theo tiêu đề, mã sản phẩm, handle, tên nhóm, hoặc link dán vào",
+      },
+      {
+        methods: ["POST"],
+        path: "/api/v1/shopify/media-audit",
+        summary:
+          "Soát ảnh thiếu. `product` nhận TIÊU ĐỀ dán từ store, mã sản phẩm, id, " +
+          "handle hoặc link — bỏ trống để quét cả store. Trả về metafield nào " +
+          "thiếu + tên reference để render bù",
+      },
+      {
+        methods: ["POST"],
+        path: "/api/v1/shopify/media-repair",
+        summary:
+          "Up ảnh bù vào metafield đang trống của sản phẩm live. `product` nhận " +
+          "tiêu đề/mã/id/handle/link. Chỉ điền chỗ trống, không ghi đè ảnh đang " +
+          "có (trừ khi gửi overwrite: true)",
       },
     ],
   },
@@ -386,6 +409,125 @@ export const API_SAMPLES: readonly ApiSample[] = [
 }`,
   },
   {
+    id: "curl-media-audit-one",
+    title: "Soát 1 sản phẩm — dán thẳng tiêu đề từ store (curl)",
+    language: "bash",
+    body: `curl -X POST __ORIGIN__/api/v1/shopify/media-audit \\
+  -H "Authorization: Bearer __TOKEN__" \\
+  -H "Content-Type: application/json" \\
+  -d '{"product": "Novera Dragon Skull Wings Gothic Carbon Fiber Pool Cue"}'`,
+  },
+  {
+    id: "json-product-identifiers",
+    title: "Chỉ định sản phẩm bằng gì cũng được",
+    language: "json",
+    body: `{
+  "tiêu_đề_Shopify": "Novera Dragon Skull Wings Gothic Carbon Fiber Pool Cue",
+  "một_phần_tiêu_đề": "Dragon Skull Wings",
+  "mã_sản_phẩm": "n05-26-Skull",
+  "product_id": "0605c2d2-bbbf-4031-ae7e-fa9f63434279",
+  "shopify_product_id": "8746028531849",
+  "handle": "novera-dragon-skull-wings",
+  "link_sản_phẩm": "https://prime-cues.com/products/novera-dragon-skull-wings",
+  "link_admin": "https://admin.shopify.com/store/xxx/products/8746028531849",
+  "_ghi_chú": "Cả 8 dạng đều dùng được cho field product của media-audit và media-repair. Không phân biệt hoa thường / dấu tiếng Việt. Khớp nhiều sản phẩm → 409 kèm danh sách ứng viên, KHÔNG tự chọn."
+}`,
+  },
+  {
+    id: "curl-media-audit-sweep",
+    title: "Quét CẢ STORE — không cần nhập sản phẩm nào (curl)",
+    language: "bash",
+    body: `curl -X POST __ORIGIN__/api/v1/shopify/media-audit \\
+  -H "Authorization: Bearer __TOKEN__" \\
+  -H "Content-Type: application/json" \\
+  -d '{"limit": 1000}'`,
+  },
+  {
+    id: "json-media-audit-response",
+    title: "Kết quả soát ảnh — đọc phần missing[]",
+    language: "json",
+    body: `{
+  "store": "main",
+  "audited": 200,
+  "products_with_issues": 9,
+  "results": [
+    {
+      "product_name": "n05-26-skull",
+      "shopify_product_id": 8812345678901,
+      "title": "Novera Dragon Skull Wings Gothic Carbon Fiber Pool Cue",
+      "admin_url": "https://admin.shopify.com/store/…/products/8812345678901",
+      "image_group_name": "Novera chính thức (7 ảnh)",
+      "versions": ["Premium"],
+      "expected_count": 11,
+      "missing": [
+        {
+          "key": "custom.package_box",
+          "kind": "metafield",
+          "reason": "absent",
+          "reference_name": "Package-2",
+          "source": "deploy",
+          "confidence": 1
+        }
+      ]
+    }
+  ],
+  "_đọc_thế_nào": {
+    "key": "metafield đang trống trên Shopify",
+    "reference_name": "tên ảnh cần render — ném thẳng vào POST /api/v1/renders",
+    "reason": "absent = chưa có gì | broken = có metafield nhưng file đã bị xoá",
+    "source": "deploy = chắc chắn (tên ảnh của chính lần deploy đó) | group = suy từ nhóm ảnh | cohort = suy từ các sản phẩm cùng nhóm",
+    "confidence": "cohort thì đây là tỉ lệ sản phẩm cùng nhóm có ảnh này — nên hỏi người dùng trước khi sửa hàng loạt"
+  }
+}`,
+  },
+  {
+    id: "json-add-media-offgroup",
+    title: "Thêm ảnh cho sản phẩm dù nhóm ảnh không có ảnh đó",
+    language: "json",
+    body: `{
+  "_tình_huống": "Sản phẩm dùng nhóm 'Novera chính thức' — nhóm này KHÔNG có Package-* nào. Vẫn thêm được ảnh package/showcase.",
+  "1_render_ảnh_lẻ": "POST /api/v1/renders  →  {\"product\": \"n05-26-Skull\", \"references\": [\"Package-1-Standard\", \"Package-2\"]}",
+  "_vì_sao_được": "field references nhận TÊN ẢNH LẺ, độc lập hoàn toàn với nhóm đang gắn. Nhóm chỉ là bộ ảnh gợi ý lúc deploy, không giới hạn việc render.",
+  "2_up_bù": "POST /api/v1/shopify/media-repair  →  media: [{key: custom.package_product_standard, url: ...}, {key: custom.package_box, url: ...}]",
+  "_chọn_ảnh_theo_version": {
+    "Standard": "Package-1-Standard → custom.package_product_standard",
+    "Premium": "Package-1-Standard (Premium dùng chung ảnh Standard) → custom.package_product_standard",
+    "Pro": "Package-1-Pro → custom.package_product_pro",
+    "Standard+Pro / Premium+Pro": "cần CẢ HAI ảnh",
+    "Package-2": "→ custom.package_box, không phụ thuộc version"
+  },
+  "_agent_lưu_ý": "Lấy versions từ response media-audit. Nếu user đòi ảnh bản Pro mà sản phẩm chưa có variant Pro → BÁO LẠI và đề xuất thêm variant, đừng render ảnh chết. Agent KHÔNG tự đổi variant — đó là quyết định về giá/SKU, phải người bấm trong trang deploy."
+}`,
+  },
+  {
+    id: "curl-media-repair",
+    title: "Up ảnh bù vào metafield đang trống (curl)",
+    language: "bash",
+    body: `curl -X POST __ORIGIN__/api/v1/shopify/media-repair \\
+  -H "Authorization: Bearer __TOKEN__" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+        "product": "n05-26-skull",
+        "media": [
+          { "key": "custom.package_box", "url": "https://…/Package-2.png" }
+        ]
+      }'`,
+  },
+  {
+    id: "json-agent-flow",
+    title: "Luồng 3 bước cho agent tự sửa ảnh thiếu",
+    language: "json",
+    body: `{
+  "1_soát": "POST /api/v1/shopify/media-audit  →  {\"product\": \"n05-26-skull\"}",
+  "2_render": "POST /api/v1/renders  →  {\"product\": \"n05-26-skull\", \"references\": [\"Package-1-Standard\"]}   (lấy reference_name từ bước 1)",
+  "2b_chờ": "GET /api/v1/renders/<job_id>  →  đợi status = succeeded, lấy files[].url",
+  "3_up_bù": "POST /api/v1/shopify/media-repair  →  {\"product\": \"n05-26-skull\", \"media\": [{\"key\": \"custom.package_product_standard\", \"url\": \"<files[].url>\"}]}",
+  "4_xác_nhận": "Chạy lại bước 1 — missing[] phải rỗng",
+  "_lưu_ý": "media-repair chỉ điền chỗ trống. Ảnh đang có sẽ trả status 'skipped' chứ không bị ghi đè.",
+  "_docs": "Hướng dẫn đầy đủ + quy ước đặt tên ảnh: docs/shopify-media-standard.md"
+}`,
+  },
+  {
     id: "json-errors",
     title: "Các mã lỗi",
     language: "json",
@@ -399,6 +541,13 @@ export const API_SAMPLES: readonly ApiSample[] = [
     "400": "Không khai target nào, tên bị trùng (kèm danh sách id), hoặc quá nhiều job (>60 = target x sản phẩm)",
     "404": "Không tìm thấy sản phẩm / nhóm / reference / template — response liệt kê các tên có sẵn",
     "202": "Đã vào hàng đợi (không phải lỗi) — poll status_url để lấy file"
+  },
+  "_soát_và_sửa_ảnh": {
+    "400": "media-repair: thiếu product/media, URL không phải http(s), key không phải metafield ảnh, hoặc gửi quá 20 ảnh",
+    "404": "Không tìm thấy sản phẩm, hoặc sản phẩm chưa deploy lên store đó",
+    "409_trùng": "Field product khớp NHIỀU sản phẩm — response liệt kê ứng viên, gửi lại bằng mã sản phẩm hoặc product_id",
+    "409": "Sản phẩm mới chỉ là bản nháp trên store này (chưa có shopify_product_id)",
+    "502": "Tất cả ảnh đều ghi thất bại — xem results[].detail"
   },
   "_chung": {
     "401": "Token sai, đã thu hồi, hoặc thiếu header Authorization",

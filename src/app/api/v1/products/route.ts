@@ -12,6 +12,11 @@ import {
 import type { ProductType } from "@/types/product";
 import type { ApiCreatedProduct } from "@/types/api-token";
 import type { ApiTokenContext } from "@/types/api-token";
+import {
+  PRODUCT_ASSET_BUCKET,
+  readSurfaceFile,
+  surfaceExtension,
+} from "@/lib/api-tokens/surface-file";
 
 /**
  * POST /api/v1/products — create a product from a surface template.
@@ -37,21 +42,6 @@ import type { ApiTokenContext } from "@/types/api-token";
  * callers we do not deploy: the dashboard's own routes can change shape with
  * the code that calls them, and this one cannot.
  */
-
-/** Matches /api/upload — the formats the surface pipeline can read. */
-const ALLOWED_MIME = ["image/jpeg", "image/png", "image/webp"] as const;
-
-/**
- * Ceiling on an upload.
- *
- * Surface templates are 2K-4K textures, comfortably inside this; the limit is
- * here so a malformed or hostile request cannot buffer something enormous into
- * the route's memory.
- */
-const MAX_FILE_BYTES = 25 * 1024 * 1024;
-
-/** The storage bucket product assets live in, same as the dashboard's upload. */
-const ASSET_BUCKET = "product-assets";
 
 /**
  * Cue types a caller may ask for, and the aliases accepted for each.
@@ -162,37 +152,9 @@ async function readUpload(
     return { ok: false, response: badRequest("Could not parse the multipart body.") };
   }
 
-  const file = form.get("file");
-  if (!(file instanceof File)) {
-    return { ok: false, response: badRequest("Missing `file` field.") };
-  }
-
-  if (!ALLOWED_MIME.includes(file.type as (typeof ALLOWED_MIME)[number])) {
-    return {
-      ok: false,
-      response: badRequest(
-        `Unsupported image type "${file.type || "unknown"}". Allowed: JPEG, PNG, WebP.`
-      ),
-    };
-  }
-
-  if (file.size === 0) {
-    return { ok: false, response: badRequest("The uploaded file is empty.") };
-  }
-
-  if (file.size > MAX_FILE_BYTES) {
-    return {
-      ok: false,
-      response: NextResponse.json(
-        {
-          error: `File is ${Math.round(file.size / 1024 / 1024)}MB; the limit is ${
-            MAX_FILE_BYTES / 1024 / 1024
-          }MB.`,
-        },
-        { status: 413 }
-      ),
-    };
-  }
+  const checked = readSurfaceFile(form);
+  if (!checked.ok) return { ok: false, response: checked.response };
+  const { file } = checked;
 
   // Required, and checked AFTER the file so a caller missing both is told
   // about the file first — that is the harder half to get right.
@@ -349,12 +311,12 @@ export async function POST(request: Request) {
     // Same layout as /api/upload, so a product created here is indistinguishable
     // from one created in the dashboard — the editor, the render worker and the
     // Shopify deploy all resolve surfaces by this path shape.
-    const extension = upload.file.name.split(".").pop()?.toLowerCase() || "jpg";
+    const extension = surfaceExtension(upload.file);
     const storagePath = `${ctx.userId}/${product.id}/surface.${extension}`;
 
     const bytes = new Uint8Array(await upload.file.arrayBuffer());
     const { error: uploadError } = await db.storage
-      .from(ASSET_BUCKET)
+      .from(PRODUCT_ASSET_BUCKET)
       .upload(storagePath, bytes, {
         contentType: upload.file.type,
         upsert: true,
@@ -373,7 +335,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const { data: urlData } = db.storage.from(ASSET_BUCKET).getPublicUrl(storagePath);
+    const { data: urlData } = db.storage.from(PRODUCT_ASSET_BUCKET).getPublicUrl(storagePath);
     const surfaceUrl = urlData.publicUrl;
 
     const { error: linkError } = await db

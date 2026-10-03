@@ -75,6 +75,67 @@ export interface ApiCreatedProduct {
   editor_url: string;
 }
 
+/** PUT /api/v1/products/[product] — the template was replaced. */
+export interface ApiSurfaceReplaced {
+  id: string;
+  name: string;
+  /** New URL, cache-busted so the editor and renders pick up the new image. */
+  surface_url: string;
+  /** The URL it replaced, for the caller's own log. */
+  previous_surface_url: string | null;
+  updated_at: string;
+  editor_url: string;
+  /** Shopify stores the product is deployed to; empty when it is not live. */
+  shopify_stores: string[];
+  /**
+   * Whether the live store shows the new image. The store's metafields point
+   * at the surface file in app storage by URL, so:
+   *   `auto`              same file name was overwritten — the store shows the
+   *                       new image once caches expire (up to ~1 hour);
+   *   `redeploy_required` the format changed (e.g. png -> jpg), so the store
+   *                       still shows the old file until the product is
+   *                       redeployed from the app;
+   *   `not_deployed`      not on Shopify.
+   */
+  shopify_sync: "auto" | "redeploy_required" | "not_deployed";
+}
+
+/** One store a product is live on. */
+export interface ApiShopifyDeployment {
+  store: string;
+  shopify_product_id: number;
+  title: string | null;
+  handle: string | null;
+  admin_url: string | null;
+  storefront_url: string | null;
+  /** When the deployment was last written (deploy or redeploy). */
+  deployed_at: string | null;
+}
+
+/** GET /api/v1/products/[product]/shopify — is this product on Shopify? */
+export interface ApiShopifyStatus {
+  product_id: string;
+  name: string;
+  /**
+   * True when the product is live on Shopify — on `store` when one was asked
+   * for, otherwise on any store. A saved-but-never-deployed draft is false.
+   */
+  deployed: boolean;
+  /** The store asked about, or null when every store was checked. */
+  store: string | null;
+  /** Live deployments (narrowed to `store` when given); empty when false. */
+  deployments: ApiShopifyDeployment[];
+}
+
+/** DELETE /api/v1/products/[product] — the product is gone. */
+export interface ApiProductDeleted {
+  id: string;
+  name: string;
+  deleted: true;
+  /** Storage files removed along with the row. */
+  removed_files: number;
+}
+
 /**
  * POST /api/v1/renders — body.
  *

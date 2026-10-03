@@ -72,6 +72,14 @@ export interface StorageBucketHandle {
    * re-run after a partial failure.
    */
   remove(paths: string[]): PromiseLike<QueryResult<{ name: string }[]>>;
+  /**
+   * One folder level. Sub-folders come back as entries with a null `id` —
+   * that is the only thing distinguishing them from files.
+   */
+  list(
+    path: string,
+    options?: { limit?: number }
+  ): PromiseLike<QueryResult<{ name: string; id: string | null }[]>>;
 }
 
 export interface RenderStorageClient extends RenderDbClient {

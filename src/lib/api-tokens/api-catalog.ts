@@ -70,6 +70,27 @@ export const API_GROUPS: readonly ApiGroup[] = [
           "Một token dùng cho mọi loại gậy.",
       },
       {
+        methods: ["PUT"],
+        path: "/api/v1/products/[product]",
+        summary:
+          "Gửi file ảnh → THAY template trên gậy 3D của sản phẩm có sẵn. " +
+          "[product] nhận tên hoặc id",
+      },
+      {
+        methods: ["GET"],
+        path: "/api/v1/products/[product]/shopify",
+        summary:
+          "Sản phẩm đã deploy lên Shopify chưa → deployed: true/false, kèm store " +
+          "và link. ?store= để hỏi riêng một store",
+      },
+      {
+        methods: ["DELETE"],
+        path: "/api/v1/products/[product]",
+        summary:
+          "Xoá sản phẩm (chủ sản phẩm hoặc admin). Sản phẩm đã deploy lên Shopify " +
+          "KHÔNG xoá được (409) — gỡ khỏi Shopify trước",
+      },
+      {
         methods: ["GET"],
         path: "/api/v1/render-targets",
         summary:
@@ -246,6 +267,28 @@ export const API_SAMPLES: readonly ApiSample[] = [
     }
   }
 }`,
+  },
+  {
+    id: "curl-replace-surface",
+    title: "Thay ảnh template của sản phẩm có sẵn (curl)",
+    language: "bash",
+    body: `curl -X PUT __ORIGIN__/api/v1/products/n02-dragon-gold \\
+  -H "Authorization: Bearer __TOKEN__" \\
+  -F file=@surface-moi.jpg`,
+  },
+  {
+    id: "curl-shopify-status",
+    title: "Sản phẩm đã deploy Shopify chưa? (curl)",
+    language: "bash",
+    body: `curl __ORIGIN__/api/v1/products/n02-dragon-gold/shopify \\
+  -H "Authorization: Bearer __TOKEN__"`,
+  },
+  {
+    id: "curl-delete-product",
+    title: "Xoá sản phẩm (curl) — sản phẩm đã deploy Shopify thì không xoá được",
+    language: "bash",
+    body: `curl -X DELETE __ORIGIN__/api/v1/products/n02-dragon-gold \\
+  -H "Authorization: Bearer __TOKEN__"`,
   },
   {
     id: "curl-render-targets",

@@ -79,6 +79,57 @@ tiền tố token  +  tên file (bỏ đuôi, bỏ dấu, chữ thường)
 | `n02` | `n02-dragon.jpg` | `n02-dragon` (không nhân đôi tiền tố) |
 | *(trống)* | `dragon.jpg` | `dragon` |
 
+### Thay ảnh template của sản phẩm có sẵn
+
+```
+PUT /api/v1/products/<tên hoặc id>
+Authorization: Bearer cue_live_xxxxxxxx
+Content-Type: multipart/form-data   (field: file)
+```
+
+```bash
+curl -X PUT https://app-cua-anh.com/api/v1/products/n02-dragon-gold \
+  -H "Authorization: Bearer cue_live_xxxxxxxx" \
+  -F file=@dragon-gold-v2.jpg
+```
+
+Ghi đè `surface.<đuôi>` của sản phẩm, URL mới có `?t=` để editor/render không
+lấy ảnh cũ trong cache. Tên chỉ khớp sản phẩm của chủ token; token admin sửa
+được sản phẩm người khác nếu gửi **id**. Trả về `200` với `surface_url`,
+`previous_surface_url`, `editor_url`, `shopify_stores`, `shopify_sync`.
+
+Sản phẩm **đã deploy Shopify**: store trỏ thẳng vào file ảnh trong Storage của
+app, nên:
+- Ảnh mới **cùng định dạng** (jpg → jpg) → 3D trên store tự cập nhật sau khi
+  cache hết hạn (tối đa ~1 giờ). `shopify_sync: "auto"`.
+- **Khác định dạng** (png → jpg) → store vẫn hiện ảnh cũ (file cũ được giữ lại
+  để store không bị hỏng) cho tới khi deploy lại. `shopify_sync: "redeploy_required"`.
+- Ảnh mockup 2D trên store không đổi.
+
+### Sản phẩm đã deploy Shopify chưa
+
+```bash
+curl https://app-cua-anh.com/api/v1/products/n02-dragon-gold/shopify \
+  -H "Authorization: Bearer cue_live_xxxxxxxx"
+```
+
+Trả về `deployed: true/false` + `deployments` (store, shopify_product_id, link
+admin/storefront). `?store=main` để hỏi riêng một store. Sản phẩm chỉ mới
+**lưu nháp** trong hộp thoại deploy, hoặc đã gỡ khỏi Shopify → `false`.
+
+### Xoá sản phẩm
+
+```bash
+curl -X DELETE https://app-cua-anh.com/api/v1/products/n02-dragon-gold \
+  -H "Authorization: Bearer cue_live_xxxxxxxx"
+```
+
+- **Chủ sản phẩm hoặc admin** (admin thường lẫn super admin) xoá được. Xoá
+  sản phẩm của người khác thì gửi **id**.
+- Sản phẩm **đã deploy lên Shopify thì KHÔNG xoá được** → `409` kèm danh sách
+  store. Không có cách vượt qua — gỡ khỏi Shopify trước rồi mới xoá.
+- Xoá luôn file trong Storage và cấu hình 3D của sản phẩm.
+
 ---
 
 ## 3. Lỗi
@@ -87,6 +138,8 @@ tiền tố token  +  tên file (bỏ đuôi, bỏ dấu, chữ thường)
 |---|---|
 | `400` | Thiếu field `file`, sai định dạng ảnh, hoặc body không phải multipart |
 | `401` | Token sai, đã thu hồi, hoặc thiếu header `Authorization` |
+| `404` | Không tìm thấy sản phẩm theo tên/id (hoặc không thuộc quyền token) |
+| `409` | Xoá sản phẩm đã deploy lên Shopify — không cho xoá |
 | `413` | File lớn hơn 25MB |
 | `500` | Lỗi phía server — xem log, không phải lỗi request |
 | `502` | Không lưu được ảnh lên Storage. Sản phẩm đã được rollback, gọi lại được |

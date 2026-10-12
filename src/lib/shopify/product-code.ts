@@ -35,7 +35,7 @@ const FORMATS: Record<ProductCodeFormatKey, ProductCodeFormat> = {
   // dash), then the rest as the theme.
   primecues: {
     key: "primecues",
-    label: "nXX-YY (vd: n01-05, n01-100)",
+    label: "nXX-YY hoặc nXX-YYY (vd: n01-05, n01-100)",
     pattern: /^n\d{2}-\d{2,3}$/i,
     titlePattern: /^\s*(n\d{2}-\d{2,3})(?!\d)\s*(?:-\s*)?(.*)$/i,
   },

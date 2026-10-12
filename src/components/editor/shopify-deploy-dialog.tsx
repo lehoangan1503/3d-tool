@@ -748,13 +748,15 @@ export function ShopifyDeployDialog({ product, sceneManager, productLogoId, depl
   // codeFormat starts as the default until the store list loads async, which
   // would otherwise leave the code (and its auto-tag) empty for Wow cue.
   //
-  // The code is back-filled whenever the field is empty (even with a prefill,
-  // since an old draft saved before the right format resolved may have an empty
-  // code). The theme only seeds the AI hint when it isn't already set, and is
-  // never auto-set from a prefilled draft. ──
+  // The code isn't editable here, so the name is its source of truth: a code
+  // parsed from the name always wins over the draft's. A draft can hold a stale
+  // one — empty when saved before the right format resolved, or truncated
+  // (n01-10 for "n01-100") when saved while the pattern only took 2 digits.
+  // The theme only seeds the AI hint when it isn't already set, and is never
+  // auto-set from a prefilled draft. ──
   useEffect(() => {
     const { code, theme } = parseProductTitle(product.name, codeFormat);
-    if (code) setProductCode((cur) => cur.trim() || code);
+    if (code) setProductCode(code);
     if (theme && !prefill) setAiHint((cur) => cur || theme);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [codeFormat]);

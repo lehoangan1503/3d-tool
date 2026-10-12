@@ -2,7 +2,8 @@
  * Product-code formats, keyed per store.
  *
  * Different stores enforce different product-code shapes:
- *  - Prime-cues (default): `nXX-YY`  (e.g. n01-05) — employee/team code + variant.
+ *  - Prime-cues (default): `nXX-YY`  (e.g. n01-05, n01-100) — employee/team code +
+ *                          variant; YY is 2 digits for old codes, 3 once past 99.
  *  - Wow cue:              `W{D}{N}` (e.g. WA1, WA99, WA199) — `W` + designer
  *                          initial + product number.
  *
@@ -34,9 +35,9 @@ const FORMATS: Record<ProductCodeFormatKey, ProductCodeFormat> = {
   // dash), then the rest as the theme.
   primecues: {
     key: "primecues",
-    label: "nXX-YY (vd: n01-05)",
-    pattern: /^n\d{2}-\d{2}$/i,
-    titlePattern: /^\s*(n\d{2}-\d{2})\s*(?:-\s*)?(.*)$/i,
+    label: "nXX-YY (vd: n01-05, n01-100)",
+    pattern: /^n\d{2}-\d{2,3}$/i,
+    titlePattern: /^\s*(n\d{2}-\d{2,3})(?!\d)\s*(?:-\s*)?(.*)$/i,
   },
   // W + 1 or 2 designer-initial letters + a product number (1+ digits):
   // WA1, WVT1, WA99, WA199.

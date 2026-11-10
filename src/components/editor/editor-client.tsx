@@ -537,7 +537,6 @@ export function EditorClient({
         embedLights: true,
         hdriRotationY: config.hdriRotationY,
         camera: sceneManager.getCameraForExport(),
-        maxTextureSize: 4096,
       });
       downloadBlob(result.glb, `${safeFileName(product.name)}.glb`);
     } catch (error) {

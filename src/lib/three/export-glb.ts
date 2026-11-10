@@ -28,6 +28,16 @@ import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import * as WebGLTextureUtils from "three/examples/jsm/utils/WebGLTextureUtils.js";
 import { isRubberMaterial, isTopCapFaceMaterial, isTopCapMaterial } from "./leather-config";
 
+/**
+ * Default texture-size cap for exports: no downsampling in practice.
+ *
+ * GLTFExporter clamps width and height *independently* (`min(w, cap)`, `min(h, cap)`), so a
+ * cue wrap of e.g. 1500x16000 under a 4096 cap was squashed ~4x along the cue's length —
+ * the printed logos/text came out jagged while the site (which uploads the native image)
+ * stayed sharp. 16384 is the common GPU max, i.e. the most any viewer can display anyway.
+ */
+export const FULL_QUALITY_TEXTURE_SIZE = 16384;
+
 /** Texture slots that carry image data we care about preserving. */
 const TEXTURE_SLOTS = [
   "map",
@@ -55,7 +65,7 @@ export interface GlbExportOptions {
   lights?: THREE.Light[];
   /** Camera to embed, so the file opens on the same framing as the editor. */
   camera?: THREE.Camera | null;
-  /** Largest texture edge to write, in pixels. Default 4096 (full quality). */
+  /** Largest texture edge to write, in pixels. Default FULL_QUALITY_TEXTURE_SIZE (native size). */
   maxTextureSize?: number;
   /** Write .gltf + separate resources instead of a single binary .glb. Default false. */
   binary?: boolean;
@@ -368,7 +378,7 @@ export async function exportModelToGlb(
   model: THREE.Object3D,
   options: GlbExportOptions = {}
 ): Promise<Blob> {
-  const { lights = [], camera = null, maxTextureSize = 4096, binary = true } = options;
+  const { lights = [], camera = null, maxTextureSize = FULL_QUALITY_TEXTURE_SIZE, binary = true } = options;
 
   // Export a detached copy: GLTFExporter walks parents for world transforms, and we
   // want the cue centred on its own origin rather than wherever the studio put it.

@@ -15,7 +15,7 @@
 
 import * as THREE from "three";
 import JSZip from "jszip";
-import { exportModelToGlb, safeFileName } from "./export-glb";
+import { exportModelToGlb, FULL_QUALITY_TEXTURE_SIZE, safeFileName } from "./export-glb";
 import { bakeShadowPlane } from "./bake-shadow-plane";
 import { buildLightRigFromHdri } from "./hdri-to-lights";
 
@@ -24,7 +24,7 @@ export interface ProductGlbExportOptions {
   shadow?: boolean;
   /** HDRI filename (as served from /hdri/) to include in the bundle. */
   hdriFile?: string | null;
-  /** Largest texture edge to write. Default 4096. */
+  /** Largest texture edge to write. Default FULL_QUALITY_TEXTURE_SIZE (native size). */
   maxTextureSize?: number;
   /**
    * Fit a `KHR_lights_punctual` rig to `hdriFile` and embed it in the .glb, so the model
@@ -86,7 +86,7 @@ export async function buildProductGlb(
   const {
     shadow = true,
     hdriFile = null,
-    maxTextureSize = 4096,
+    maxTextureSize = FULL_QUALITY_TEXTURE_SIZE,
     embedLights = false,
     hdriRotationY = 0,
     camera = null,

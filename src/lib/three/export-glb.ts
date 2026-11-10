@@ -14,10 +14,9 @@
  *    source canvas is still alive, so we snapshot every canvas-backed texture into a
  *    detached image first (`bakeCanvasTextures`).
  *
- * 3. **Shader-only effects.** Laser logos and bumper masks are injected through
- *    `onBeforeCompile`, which glTF has no representation for. The underlying
- *    emissiveMap/emissive values are standard PBR and do export; the shader-driven
- *    masking does not. That is a documented limitation, not a bug we can fix here.
+ * 3. **Shader-only effects.** The bumper logo is masked through `onBeforeCompile`, which
+ *    glTF has no representation for. `bakeLogoMasksIntoGeometry` moves that mask into
+ *    the geometry (separate end-face primitive) so the logo lands where it does in-app.
  *
  * `material.envMap` is deliberately NOT exported — glTF has no per-material environment
  * slot, and viewers are expected to supply their own IBL. Callers that want the web
@@ -84,6 +83,7 @@ export interface GlbExportOptions {
  * and reported rather than silently corrupted.
  */
 function collapseToSingleUvChannel(root: THREE.Object3D): void {
+  const channelZeroCopies = new Map<THREE.Texture, THREE.Texture>();
   root.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return;
 
@@ -127,7 +127,18 @@ function collapseToSingleUvChannel(root: THREE.Object3D): void {
       const mat = material as TexturedMaterial;
       for (const slot of TEXTURE_SLOTS) {
         const texture = mat[slot];
-        if (texture) texture.channel = 0;
+        if (!texture) continue;
+        // Textures are still shared with the live scene (only materials were cloned), so
+        // repoint a copy — mutating the original would move the editor's maps onto UV0.
+        // One copy per source texture: the exporter relies on identity (e.g. roughnessMap ===
+        // metalnessMap) to avoid re-packing a merged metal/rough image.
+        let copy = channelZeroCopies.get(texture);
+        if (!copy) {
+          copy = texture.clone();
+          copy.channel = 0;
+          channelZeroCopies.set(texture, copy);
+        }
+        mat[slot] = copy;
       }
       material.needsUpdate = true;
     }
@@ -168,6 +179,112 @@ function reportRemainingUvChannels(root: THREE.Object3D): void {
         `textures in After Effects: ${offenders.join("; ")}`
     );
   }
+}
+
+/**
+ * Mirrors `applyBumperEmissiveShaderMask`: the bumper logo only shows where the object-space
+ * normal points down the cue axis (smoothstep(-0.95, -0.85, normal.y) in the shader). The
+ * midpoint of that ramp is the per-triangle cut-off used here.
+ */
+const BUMPER_FACE_NORMAL_Y = -0.9;
+
+/** Folds `emissiveIntensity` into `emissive` so viewers without KHR_materials_emissive_strength agree. */
+function foldEmissiveIntensity(mat: THREE.MeshStandardMaterial): void {
+  if (mat.emissiveIntensity === 1) return;
+  mat.emissive = mat.emissive.clone().multiplyScalar(mat.emissiveIntensity);
+  mat.emissiveIntensity = 1;
+}
+
+/**
+ * Rewrites a mesh's index so triangles passing `keep` form group 1 and the rest group 0.
+ * Returns the triangle count of group 1 (0 = nothing matched, mesh untouched).
+ */
+function splitTrianglesByNormalY(mesh: THREE.Mesh, keep: (normalY: number) => boolean): number {
+  const geometry = mesh.geometry as THREE.BufferGeometry;
+  const normal = geometry.getAttribute("normal");
+  const position = geometry.getAttribute("position");
+  if (!normal || !position) return 0;
+
+  const index = geometry.getIndex();
+  const indexCount = index ? index.count : position.count;
+  const vertexAt = (i: number): number => (index ? index.getX(i) : i);
+
+  const rest: number[] = [];
+  const kept: number[] = [];
+  for (let i = 0; i + 2 < indexCount; i += 3) {
+    const a = vertexAt(i);
+    const b = vertexAt(i + 1);
+    const c = vertexAt(i + 2);
+    const normalY = (normal.getY(a) + normal.getY(b) + normal.getY(c)) / 3;
+    (keep(normalY) ? kept : rest).push(a, b, c);
+  }
+
+  if (kept.length === 0) return 0;
+
+  const merged = rest.concat(kept);
+  const IndexArray = position.count > 65535 ? Uint32Array : Uint16Array;
+  geometry.setIndex(new THREE.BufferAttribute(new IndexArray(merged), 1));
+  geometry.clearGroups();
+  if (rest.length > 0) geometry.addGroup(0, rest.length, 0);
+  geometry.addGroup(rest.length, kept.length, 1);
+  return kept.length / 3;
+}
+
+/**
+ * Makes the engraved logos survive export.
+ *
+ * In the app the logo is an `emissiveMap`; on the bumper it is additionally masked by an
+ * `onBeforeCompile` shader, because the bumper's UV1 places the logo's square over the side
+ * wall as well as the flat end face (measured on the shipped models: ~34 end-face triangles vs
+ * ~526 wall triangles inside the logo rect). glTF cannot carry that shader, so a naive export
+ * smears the logo across the wall.
+ *
+ * The fix is to move the mask into geometry: the bumper is split into two primitives, the end
+ * face keeping the logo material and the wall getting a logo-free copy. The joint has no shader
+ * mask in the app, so its emissive logo exports as-is. Emissive intensity is folded into the
+ * colour for viewers (After Effects) that ignore KHR_materials_emissive_strength.
+ *
+ * Returns the materials it created so the caller can dispose them.
+ */
+function bakeLogoMasksIntoGeometry(root: THREE.Object3D): THREE.Material[] {
+  const created: THREE.Material[] = [];
+
+  root.traverse((child) => {
+    if (!(child instanceof THREE.Mesh) || Array.isArray(child.material)) return;
+
+    const mat = child.material as THREE.MeshStandardMaterial;
+    if (!mat.emissiveMap) return;
+
+    const isBumper = isRubberMaterial(mat.name, child.name);
+    const isJoint = !isBumper && (isTopCapFaceMaterial(mat.name) || isTopCapMaterial(mat.name, child.name));
+    if (!isBumper && !isJoint) return;
+
+    foldEmissiveIntensity(mat);
+    // The clone has already lost the shader hook; make sure nothing re-installs it.
+    mat.onBeforeCompile = () => {};
+    mat.needsUpdate = true;
+
+    if (!isBumper) return;
+
+    const faceTriangles = splitTrianglesByNormalY(child, (y) => y < BUMPER_FACE_NORMAL_Y);
+    if (faceTriangles === 0) {
+      // No end face found — a logo smeared over the wall is worse than none.
+      console.warn(`[export-glb] Bumper "${child.name}" has no end face; exporting it without a logo.`);
+      mat.emissiveMap = null;
+      mat.emissive = new THREE.Color(0x000000);
+      return;
+    }
+
+    const wall = mat.clone();
+    wall.emissiveMap = null;
+    wall.emissive = new THREE.Color(0x000000);
+    created.push(wall);
+
+    mat.name = `${mat.name} Logo`;
+    child.material = [wall, mat];
+  });
+
+  return created;
 }
 
 /**
@@ -295,33 +412,8 @@ export async function exportModelToGlb(
   collapseToSingleUvChannel(clone);
   reportRemainingUvChannels(clone);
 
-  // Strip the engraved logos. They are drawn as an emissive map masked by an
-  // `onBeforeCompile` shader, and glTF has no way to carry that shader — the mask is lost on
-  // export and the raw emissive map lands on the whole part instead of the flat face it was
-  // meant for, which is why exported logos came out misplaced. Dropping the emissive channel
-  // on those materials is deliberate: an unlogo'd part is correct, a smeared logo is not.
-  clone.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) return;
-
-    const materials: THREE.Material[] = Array.isArray(child.material) ? child.material : [child.material];
-    for (const material of materials) {
-      const mat = material as THREE.MeshPhysicalMaterial;
-      if (!mat.emissiveMap) continue;
-
-      const isLogoCarrier =
-        isRubberMaterial(mat.name, child.name) ||
-        isTopCapFaceMaterial(mat.name) ||
-        isTopCapMaterial(mat.name, child.name);
-      if (!isLogoCarrier) continue;
-
-      mat.emissiveMap = null;
-      mat.emissive = new THREE.Color(0x000000);
-      // The shader mask is re-attached on clone by the scene managers; clear it so the
-      // exporter does not warn about a material it cannot represent.
-      mat.onBeforeCompile = () => {};
-      mat.needsUpdate = true;
-    }
-  });
+  // Carry the engraved logos into the file as plain glTF geometry + emissive maps.
+  clonedMaterials.push(...bakeLogoMasksIntoGeometry(clone));
 
   // Hidden meshes (unselected joint/bumper variants) would otherwise be written out as
   // invisible-but-present geometry and show up in other DCC tools.

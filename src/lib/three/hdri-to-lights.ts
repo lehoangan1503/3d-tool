@@ -68,6 +68,11 @@ function extractLobes(
   rotationYRadians: number
 ): { lobes: Lobe[]; average: THREE.Color } {
   const step = Math.max(1, Math.floor(Math.min(width, height) / 128));
+  // RGBELoader defaults to HalfFloatType, so a Uint16Array holds half-float BITS, not values.
+  // Reading them as numbers made 1.0 come out as 15360 and every light colour ~50-70x too hot.
+  const read = data instanceof Uint16Array
+    ? (i: number): number => THREE.DataUtils.fromHalfFloat(data[i])
+    : (i: number): number => data[i];
   const samples: Lobe[] = [];
 
   let sumR = 0;
@@ -83,9 +88,9 @@ function extractLobes(
 
     for (let x = 0; x < width; x += step) {
       const index = (y * width + x) * 4;
-      const r = Number(data[index]);
-      const g = Number(data[index + 1]);
-      const b = Number(data[index + 2]);
+      const r = read(index);
+      const g = read(index + 1);
+      const b = read(index + 2);
       if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) continue;
 
       const weight = sinTheta;
@@ -131,6 +136,17 @@ function extractLobes(
 }
 
 /**
+ * Hue of an HDR sample with its brightness removed (max channel = 1).
+ *
+ * glTF light colours must be in [0, 1]; the magnitude belongs in `intensity`. Viewers that
+ * honour out-of-range colours (three.js) blew the model out to white, others clamped.
+ */
+function chroma(color: THREE.Color): THREE.Color {
+  const peak = Math.max(color.r, color.g, color.b);
+  return peak > 0 ? color.clone().multiplyScalar(1 / peak) : new THREE.Color(1, 1, 1);
+}
+
+/**
  * Loads `hdriUrl` and returns lights approximating it, ready to add to an export scene.
  * Returns an empty array if the HDRI cannot be loaded — the export should still proceed.
  */
@@ -169,7 +185,7 @@ export async function buildLightRigFromHdri(
   // KHR_lights_punctual only covers directional/point/spot — the exporter warns and drops
   // anything else. A pair of dim opposing directionals in the environment's average colour
   // fills the shadow side instead, which does survive the round-trip.
-  const ambientColor = average.clone().convertLinearToSRGB();
+  const ambientColor = chroma(average);
   for (const [name, dir] of [
     ["HDRI_Sky_Top", new THREE.Vector3(0, 1, 0.35)],
     ["HDRI_Sky_Bottom", new THREE.Vector3(0, -1, -0.35)],
@@ -186,7 +202,7 @@ export async function buildLightRigFromHdri(
     // Normalise against the key light so a very bright sun does not blow out the fills.
     const relative = brightest > 0 ? lobe.luminance / brightest : 1;
     const light = new THREE.DirectionalLight(
-      lobe.color.clone().convertLinearToSRGB(),
+      chroma(lobe.color),
       (index === 0 ? 2.2 : 1.1 * relative) * intensity
     );
     light.name = index === 0 ? "HDRI_Key" : `HDRI_Fill_${index}`;
